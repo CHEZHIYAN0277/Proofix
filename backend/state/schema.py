@@ -29,6 +29,7 @@ class RunStateModel(BaseModel):
     fix_dag: dict | None = None
     patch_bundle: dict | None = None
     retry_brief: dict | None = None
+    validation_failure: dict | None = None
     mutation_result: dict | None = None
     security_result: dict | None = None
     pr_decision: dict | None = None
@@ -63,6 +64,7 @@ class RunState(TypedDict, total=False):
     fix_dag: dict
     patch_bundle: dict
     retry_brief: dict | None
+    validation_failure: dict | None
     mutation_result: dict
     security_result: dict
     pr_decision: dict

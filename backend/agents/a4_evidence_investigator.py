@@ -5,7 +5,10 @@ from pydantic import BaseModel
 from backend.agents.base import AgentBase
 from backend.models.root_cause import Citation, RootCauseBrief
 from backend.orchestrator.trust_gating import MAX_REINVESTIGATIONS
-from backend.services.citation_validator import validate_all_citations
+from backend.services.citation_validator import (
+    coerce_llm_citations,
+    validate_all_citations_with_metrics,
+)
 from backend.services.llm import LLMService
 from backend.services.root_cause_builder import (
     build_runtime_snapshot,
@@ -57,7 +60,11 @@ class A4EvidenceInvestigatorAgent(AgentBase):
         brief.runtime_evidence = runtime_snapshot
         brief.cve_context = cve_context
 
-        validated = validate_all_citations(repo, [c.model_dump() for c in brief.citations])
+        validated, citation_metrics = validate_all_citations_with_metrics(
+            repo,
+            [c.model_dump() for c in brief.citations],
+            sig=state.sig,
+        )
         brief.citations = [Citation(**c) for c in validated]
         verified_count = sum(1 for c in brief.citations if c.verified)
         brief.confidence = compute_confidence(evidence_refs, verified_count, reproduction)
@@ -86,6 +93,7 @@ class A4EvidenceInvestigatorAgent(AgentBase):
                 "reinvestigation": brief.reinvestigation_required,
                 "confidence": brief.confidence,
                 "evidence_refs": len(brief.evidence_refs),
+                "citation_metrics": citation_metrics,
             },
         )
         return state
@@ -155,12 +163,16 @@ Evidence references:
 {[r.model_dump() for r in evidence_refs]}
 
 CVE context IDs: {cve_context}
+
+Return citations as JSON objects with non-null string "file", integer "line" (>=1), and string "claim".
+Omit citations you cannot anchor to a concrete file and line.
 """
         output = await llm.structured(prompt, RootCauseLLMOutput)
+        raw_citations = coerce_llm_citations(output.citations, evidence_refs)
         return RootCauseBrief(
             summary=output.summary,
             root_cause=output.root_cause,
-            citations=[Citation(**c) for c in output.citations],
+            citations=[Citation(**c) for c in raw_citations],
             stack_evidence=stack[:2000],
             affected_modules=output.affected_modules,
         )

@@ -25,9 +25,11 @@ def after_mutation(state: dict) -> Literal["validate_security", "generate_code",
     retry_count = state.get("retry_count", 0)
     max_retries = get_settings().max_retries
 
-    if mutation_validation_failed(mutation):
+    if mutation.get("patch_retry_required"):
         if retry_count < max_retries:
             return "generate_code"
+        return "route_pr"
+    if mutation_validation_failed(mutation):
         return "route_pr"
     return "validate_security"
 

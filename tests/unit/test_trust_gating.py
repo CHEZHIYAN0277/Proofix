@@ -25,10 +25,23 @@ def test_run_state_trust_flags_default_false():
 
 
 def test_after_mutation_retries_then_route_pr():
-    state = {"mutation_result": {"pytest_passed": False}, "retry_count": 0}
+    state = {"mutation_result": {"pytest_passed": False, "patch_retry_required": True}, "retry_count": 0}
     assert after_mutation(state) == "generate_code"
 
     state["retry_count"] = 3
+    assert after_mutation(state) == "route_pr"
+
+
+def test_after_mutation_regression_only_routes_to_pr_without_retry():
+    state = {
+        "mutation_result": {
+            "pytest_passed": False,
+            "patch_retry_required": False,
+            "target_test_passed": True,
+            "new_failures": ["tests/test_other.py::test_broken"],
+        },
+        "retry_count": 0,
+    }
     assert after_mutation(state) == "route_pr"
 
 
@@ -118,7 +131,8 @@ def test_trust_gates_block_auto_merge():
 
 
 def test_a10_route_validation_exhausted_never_auto_mergeable():
-    agent = A10MCIScorerAgent(MagicMock(), Settings())
+    from backend.agents.a10_routing import route_pr_decision
+
     state = RunStateModel(
         run_id="r1",
         repo_path="/tmp",
@@ -126,47 +140,79 @@ def test_a10_route_validation_exhausted_never_auto_mergeable():
         force_draft_pr=True,
     )
     axis = AxisScores(correctness=100, security=100, fidelity=100, scope_risk=100)
-    pr_type, note = agent._route(state, axis, set())
+    pr_type, note = route_pr_decision(state, axis, set())
     assert pr_type == "draft"
     assert "Validation retries exhausted" in (note or "")
 
 
-def test_a10_route_reinvestigation_exhausted_never_auto_mergeable():
-    agent = A10MCIScorerAgent(MagicMock(), Settings())
+def test_a10_route_reinvestigation_exhausted_with_validation_pass_routes_diff_only():
     state = RunStateModel(
         run_id="r1",
         repo_path="/tmp",
         reinvestigation_exhausted=True,
         force_draft_pr=True,
+        reproduction={"status": "CONFIRMED", "reexecution_is_targeted": True},
+        reproduction_confidence="exact_test",
+        mutation_result={
+            "pytest_passed": True,
+            "target_test_passed": True,
+            "regression_tests_passed": True,
+            "patch_retry_required": False,
+            "correctness_score": 80.0,
+        },
+        security_result={"rejected": False, "security_score": 100.0},
+        root_cause={"evidence_incomplete": True},
     )
-    axis = AxisScores(correctness=100, security=100, fidelity=100, scope_risk=100)
-    pr_type, note = agent._route(state, axis, set())
-    assert pr_type == "draft"
-    assert "reinvestigation" in (note or "").lower()
+    axis = AxisScores(correctness=80, security=100, fidelity=70, scope_risk=90)
+    from backend.agents.a10_routing import route_pr_decision
+
+    pr_type, note = route_pr_decision(state, axis, set())
+    assert pr_type == "diff_only"
+    assert "citation review" in (note or "").lower()
 
 
 def test_a10_route_high_scores_without_exhaustion_can_auto_merge():
-    agent = A10MCIScorerAgent(MagicMock(), Settings())
+    from backend.agents.a10_routing import route_pr_decision
+
     state = RunStateModel(
         run_id="r1",
         repo_path="/tmp",
+        reproduction={"status": "CONFIRMED", "reexecution_is_targeted": True},
         reproduction_confidence="exact_test",
+        mutation_result={
+            "pytest_passed": True,
+            "target_test_passed": True,
+            "regression_tests_passed": True,
+            "patch_retry_required": False,
+            "correctness_score": 100.0,
+        },
+        security_result={"rejected": False, "security_score": 100.0},
     )
     axis = AxisScores(correctness=100, security=100, fidelity=100, scope_risk=100)
-    pr_type, _ = agent._route(state, axis, set())
+    pr_type, _ = route_pr_decision(state, axis, set())
     assert pr_type == "auto_mergeable"
 
 
 def test_full_suite_never_auto_mergeable():
     """Regression: full_suite proof must cap at diff_only, never auto_mergeable."""
-    agent = A10MCIScorerAgent(MagicMock(), Settings())
+    from backend.agents.a10_routing import route_pr_decision
+
     state = RunStateModel(
         run_id="r1",
         repo_path="/tmp",
+        reproduction={"status": "CONFIRMED"},
         reproduction_confidence="full_suite",
+        mutation_result={
+            "pytest_passed": True,
+            "target_test_passed": True,
+            "regression_tests_passed": True,
+            "patch_retry_required": False,
+            "correctness_score": 100.0,
+        },
+        security_result={"rejected": False, "security_score": 100.0},
     )
     axis = AxisScores(correctness=100, security=100, fidelity=100, scope_risk=100)
-    pr_type, note = agent._route(state, axis, set())
+    pr_type, note = route_pr_decision(state, axis, set())
     assert pr_type != "auto_mergeable"
     assert pr_type == "diff_only"
     assert note is not None

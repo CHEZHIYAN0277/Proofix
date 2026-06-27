@@ -2,7 +2,8 @@ from pathlib import Path
 
 from backend.agents.base import AgentBase
 from backend.models.findings import Finding
-from backend.models.validation import RetryBrief, SecurityRescanResult
+from backend.models.validation import RetryBrief, SecurityRescanResult, ValidationFailure
+from backend.services.retry_brief_builder import build_retry_brief
 from backend.services.repo_layout import get_scan_targets, resolve_source_roots
 from backend.services.security_rescan_commands import build_security_rescan_command
 from backend.services.subprocess_runner import parse_json_safe, run_command
@@ -47,24 +48,51 @@ class A9SecurityRescanAgent(AgentBase):
         security_score = max(0.0, 100.0 - len(new_findings) * 25)
         reexecution_command, reexecution_timeout = build_security_rescan_command(scan_targets)
         failure_brief = None
+        validation_failure = None
         if rejected:
             nf = new_findings[0]
-            failure_brief = RetryBrief(
-                attempt=state.retry_count + 1,
-                security_constraint=f"must not introduce {nf.message} near {nf.file}:{nf.line}",
+            security_constraint = f"must not introduce {nf.message} near {nf.file}:{nf.line}"
+            validation_failure = ValidationFailure(
+                assertion_message=f"New security finding: {nf.message}",
+                validation_stage="security",
+                pytest_stdout="",
+                pytest_stderr="",
             )
-            state.retry_brief = failure_brief.model_dump(mode="json")
+            failure_brief = build_retry_brief(
+                validation_failure,
+                state.retry_count + 1,
+                patch_bundle=state.patch_bundle,
+                security_constraint=security_constraint,
+            )
 
         result = SecurityRescanResult(
             new_findings=[f.model_dump() for f in new_findings],
             rejected=rejected,
             security_score=security_score,
             failure_brief=failure_brief,
+            validation_failure=validation_failure,
             reexecution_command=reexecution_command,
             reexecution_timeout_seconds=reexecution_timeout,
         )
         result_dict = result.model_dump(mode="json")
+        if validation_failure:
+            validation_failure = validation_failure.model_copy(
+                update={"security_result": result_dict}
+            )
+            result.validation_failure = validation_failure
+            result_dict = result.model_dump(mode="json")
+            if failure_brief:
+                failure_brief = failure_brief.model_copy(
+                    update={"validation_failure": validation_failure}
+                )
+                result.failure_brief = failure_brief
+                result_dict["failure_brief"] = failure_brief.model_dump(mode="json")
+
         state.security_result = result_dict
+        if failure_brief:
+            state.retry_brief = failure_brief.model_dump(mode="json")
+        if validation_failure:
+            state.validation_failure = validation_failure.model_dump(mode="json")
 
         await self.emit_status(
             state,

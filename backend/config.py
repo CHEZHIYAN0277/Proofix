@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-LLMProvider = Literal["anthropic", "gemini"]
+LLMProvider = Literal["anthropic", "mistral"]
 
 
 class Settings(BaseSettings):
@@ -12,8 +12,8 @@ class Settings(BaseSettings):
     llm_provider: LLMProvider = "anthropic"
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-4-20250514"
-    google_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    mistral_api_key: str = ""
+    mistral_model: str = "codestral-latest"
     redis_url: str = "redis://localhost:6379/0"
     github_token: str = ""
     github_repo_owner: str = ""
@@ -33,8 +33,8 @@ class Settings(BaseSettings):
     always_llm_filenames: str = ""
 
     def llm_configured(self) -> bool:
-        if self.llm_provider == "gemini":
-            return bool(self.google_api_key)
+        if self.llm_provider == "mistral":
+            return bool(self.mistral_api_key)
         return bool(self.anthropic_api_key)
 
 

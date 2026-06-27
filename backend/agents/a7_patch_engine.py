@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import BaseModel
 
 from backend.models.blast import BlastGraphResult
 from backend.models.patch import BehavioralContract, PatchPlan
 from backend.models.root_cause import RootCauseBrief
 from backend.models.validation import RetryBrief
+from backend.services.runtime_patch_prompt import (
+    build_runtime_patch_prompt,
+    enrich_patch_plan_from_runtime,
+    uses_runtime_prompt,
+)
 
 
 class PatchLLMOutput(BaseModel):
@@ -21,10 +28,14 @@ def build_patch_plans(
     root_cause: RootCauseBrief,
     blast: BlastGraphResult,
     retry_brief: RetryBrief | None,
+    reproduction: dict | None = None,
+    repo_path: Path | None = None,
+    file_sources: dict[str, str] | None = None,
 ) -> list[PatchPlan]:
     """Build evidence-driven patch plans from upstream agent outputs."""
     plans: list[PatchPlan] = []
     file_citations = {c.file: c for c in root_cause.citations}
+    sources = file_sources or {}
 
     for file_path in scope_files:
         file_citation = file_citations.get(file_path)
@@ -54,22 +65,34 @@ def build_patch_plans(
         if citation_claim:
             required_change = f"{required_change}. File-specific: {citation_claim}"
 
+        plan = PatchPlan(
+            file=file_path,
+            root_cause=root_cause.root_cause or root_cause.summary,
+            required_behavior_change=required_change,
+            security_constraints=security_constraints,
+            validation_goals=validation_goals,
+            stack_evidence=(root_cause.stack_evidence or "")[:2000],
+            blast_context=blast_context,
+        )
+        source = sources.get(file_path, "")
         plans.append(
-            PatchPlan(
-                file=file_path,
-                root_cause=root_cause.root_cause or root_cause.summary,
-                required_behavior_change=required_change,
-                security_constraints=security_constraints,
-                validation_goals=validation_goals,
-                stack_evidence=(root_cause.stack_evidence or "")[:2000],
-                blast_context=blast_context,
+            enrich_patch_plan_from_runtime(
+                plan,
+                root_cause,
+                reproduction,
+                blast,
+                source=source,
+                repo_path=repo_path,
             )
         )
 
     return plans
 
 
-def build_llm_prompt(plan: PatchPlan, original: str, style_exemplar: str) -> str:
+def build_llm_prompt(plan: PatchPlan, original: str, style_exemplar: str, repo_context: str = "") -> str:
+    if uses_runtime_prompt(plan):
+        return build_runtime_patch_prompt(plan, original, style_exemplar, repo_context)
+
     constraints = "\n".join(f"- {c}" for c in plan.security_constraints) or "- None"
     goals = "\n".join(f"- {g}" for g in plan.validation_goals) or "- Patch must resolve root cause without regressions"
 
@@ -101,7 +124,9 @@ Return the complete patched file content and a behavioral contract assertion des
 
 def contract_from_plan(plan: PatchPlan) -> BehavioralContract:
     assertion = plan.validation_goals[0] if plan.validation_goals else (
-        f"After fix, {plan.file} must address: {plan.required_behavior_change}"
+        plan.acceptance_criteria
+        if plan.acceptance_criteria
+        else f"After fix, {plan.file} must address: {plan.required_behavior_change}"
     )
     return BehavioralContract(assertion=assertion, location=plan.file)
 
@@ -117,7 +142,8 @@ def apply_stub_plan(plan: PatchPlan, original: str) -> PatchLLMOutput:
         contract_assertion=(
             plan.validation_goals[0]
             if plan.validation_goals
-            else f"After fix, behavior must change: {plan.required_behavior_change}"
+            else plan.acceptance_criteria
+            or f"After fix, behavior must change: {plan.required_behavior_change}"
         ),
         contract_location=plan.file,
     )

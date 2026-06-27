@@ -27,6 +27,7 @@ class ReproductionResult(BaseModel):
     reexecution_command: str = ""
     reexecution_is_targeted: bool = False
     reexecution_timeout_seconds: int = 120
+    pre_existing_failures: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def sync_legacy_fields(self) -> "ReproductionResult":

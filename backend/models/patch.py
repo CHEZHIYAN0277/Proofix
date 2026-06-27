@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class BehavioralContract(BaseModel):
@@ -18,6 +18,20 @@ class PatchPlan(BaseModel):
     validation_goals: list[str] = Field(default_factory=list)
     stack_evidence: str = ""
     blast_context: str = ""
+    target_file: str = ""
+    target_function: str | None = None
+    current_behavior: str = ""
+    expected_behavior: str = ""
+    acceptance_criteria: str = ""
+    runtime_evidence: str = ""
+    failing_test: str = ""
+    stack_summary: str = ""
+
+    @model_validator(mode="after")
+    def default_target_file(self) -> "PatchPlan":
+        if not self.target_file:
+            self.target_file = self.file
+        return self
 
 
 class PatchCandidate(BaseModel):

@@ -12,32 +12,6 @@ class SampleOutput(BaseModel):
 
 
 @pytest.mark.asyncio
-async def test_structured_gemini_uses_json_schema():
-    settings = Settings(
-        stub_mode=False,
-        llm_provider="gemini",
-        google_api_key="test-key",
-        gemini_model="gemini-2.0-flash",
-    )
-    service = LLMService(settings)
-
-    mock_response = MagicMock()
-    mock_response.text = '{"answer": "ok"}'
-
-    mock_aio = MagicMock()
-    mock_aio.models.generate_content = AsyncMock(return_value=mock_response)
-
-    service._gemini = MagicMock(aio=mock_aio)
-    result = await service.structured("prompt", SampleOutput)
-
-    assert result.answer == "ok"
-    mock_aio.models.generate_content.assert_awaited_once()
-    kwargs = mock_aio.models.generate_content.await_args.kwargs
-    assert kwargs["model"] == "gemini-2.0-flash"
-    assert kwargs["config"].response_mime_type == "application/json"
-
-
-@pytest.mark.asyncio
 async def test_structured_anthropic_extracts_json():
     settings = Settings(
         stub_mode=False,
@@ -61,13 +35,44 @@ async def test_structured_anthropic_extracts_json():
 
 
 def test_llm_configured_respects_provider():
-    assert Settings(llm_provider="gemini", google_api_key="x").llm_configured() is True
-    assert Settings(llm_provider="gemini", google_api_key="").llm_configured() is False
     assert Settings(llm_provider="anthropic", anthropic_api_key="x").llm_configured() is True
+    assert Settings(llm_provider="anthropic", anthropic_api_key="").llm_configured() is False
+    assert Settings(llm_provider="mistral", mistral_api_key="x").llm_configured() is True
+    assert Settings(llm_provider="mistral", mistral_api_key="").llm_configured() is False
+
+
+@pytest.mark.asyncio
+async def test_structured_mistral_uses_json_mode():
+    settings = Settings(
+        stub_mode=False,
+        llm_provider="mistral",
+        mistral_api_key="test-key",
+        mistral_model="codestral-latest",
+    )
+    service = LLMService(settings)
+
+    mock_message = MagicMock()
+    mock_message.content = '{"answer": "from-mistral"}'
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_response = MagicMock()
+    mock_response.choices = [mock_choice]
+
+    mock_client = MagicMock()
+    mock_client.chat.complete_async = AsyncMock(return_value=mock_response)
+
+    service._mistral = mock_client
+    result = await service.structured("prompt", SampleOutput)
+
+    assert result.answer == "from-mistral"
+    mock_client.chat.complete_async.assert_awaited_once()
+    kwargs = mock_client.chat.complete_async.await_args.kwargs
+    assert kwargs["model"] == "codestral-latest"
+    assert kwargs["response_format"] == {"type": "json_object"}
 
 
 @pytest.mark.asyncio
 async def test_structured_raises_in_stub_mode():
-    service = LLMService(Settings(stub_mode=True, llm_provider="gemini", google_api_key="x"))
+    service = LLMService(Settings(stub_mode=True, llm_provider="mistral", mistral_api_key="x"))
     with pytest.raises(RuntimeError, match="stub mode"):
         await service.structured("prompt", SampleOutput)

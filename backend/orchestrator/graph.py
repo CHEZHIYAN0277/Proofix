@@ -63,6 +63,7 @@ def build_graph(store: RedisStore, settings: Settings) -> StateGraph:
         model = await _load_model(store, state)
         model.retry_count = state.get("retry_count", model.retry_count)
         model.retry_brief = state.get("retry_brief")
+        model.validation_failure = state.get("validation_failure")
         result = await nodes.generate_code(model)
         return result.model_dump(exclude_none=False)
 

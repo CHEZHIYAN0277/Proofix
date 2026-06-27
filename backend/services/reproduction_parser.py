@@ -226,3 +226,13 @@ def _relative_path(raw_path: str, repo_root: Path | None) -> str:
         if part in ("tests", "src", "vulnapi") or part.endswith(".py"):
             return str(Path(*parts[idx:]))
     return path.name
+
+
+def extract_failed_nodeids(report: dict | None) -> list[str]:
+    if not report:
+        return []
+    return [
+        t["nodeid"]
+        for t in report.get("tests", [])
+        if t.get("outcome") == "failed" and t.get("nodeid")
+    ]

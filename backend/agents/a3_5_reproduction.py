@@ -3,7 +3,12 @@ from pathlib import Path
 from backend.agents.base import AgentBase
 from backend.models.reproduction import ReproductionResult, ReproductionStatus
 from backend.services.reproduction_commands import build_reproduction_command
-from backend.services.reproduction_parser import load_pytest_report, parse_pytest_report, pytest_report_path
+from backend.services.reproduction_parser import (
+    extract_failed_nodeids,
+    load_pytest_report,
+    parse_pytest_report,
+    pytest_report_path,
+)
 from backend.services.subprocess_runner import run_command
 from backend.state.schema import RunStateModel
 
@@ -42,6 +47,7 @@ class A35ReproductionAgent(AgentBase):
 
         report = load_pytest_report(report_path)
         result = parse_pytest_report(report, code, stdout, stderr, report_path, repo_root=repo)
+        result.pre_existing_failures = extract_failed_nodeids(report)
 
         reexec_cmd, is_targeted, reexec_timeout = build_reproduction_command(result.failing_test)
         result.reexecution_command = reexec_cmd
