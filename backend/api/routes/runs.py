@@ -129,23 +129,51 @@ async def get_run(
     store: Annotated[RedisStore, Depends(get_store)],
 ) -> RunSummary:
 
-    state = await store.load_state(run_id)
+    try:
 
-    if not state:
-        raise HTTPException(
-            status_code=404,
-            detail="Run not found",
+        logger.info(
+            "Loading run state | run_id=%s",
+            run_id,
         )
 
-    return RunSummary(
-        run_id=state.run_id,
-        status=state.status,
-        current_agent=state.current_agent,
-        force_draft_pr=state.force_draft_pr,
-        retry_count=state.retry_count,
-        pr_decision=state.pr_decision,
-        errors=state.errors,
-    )
+        state = await store.load_state(run_id)
+
+        if not state:
+            logger.warning(
+                "Run not found | run_id=%s",
+                run_id,
+            )
+
+            raise HTTPException(
+                status_code=404,
+                detail="Run not found",
+            )
+
+        logger.info(
+            "Run loaded successfully | run_id=%s | status=%s",
+            run_id,
+            state.status,
+        )
+
+        return RunSummary(
+            run_id=state.run_id,
+            status=state.status,
+            current_agent=state.current_agent,
+            force_draft_pr=state.force_draft_pr,
+            retry_count=state.retry_count,
+            pr_decision=state.pr_decision,
+            errors=state.errors,
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception:
+        logger.exception(
+            "GET /runs/%s failed",
+            run_id,
+        )
+        raise
 
 
 @router.get("/{run_id}/sig")
