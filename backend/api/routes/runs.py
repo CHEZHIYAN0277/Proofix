@@ -43,34 +43,50 @@ async def create_run(
     runner: Annotated[PipelineRunner, Depends(get_runner)],
     settings: Annotated[Settings, Depends(get_settings_dep)],
 ) -> CreateRunResponse:
+
     run_id = str(uuid.uuid4())
+
     repo = body.repo_url or body.repo_path
     if not repo:
-        raise HTTPException(status_code=400, detail="repo_path or repo_url is required")
+        raise HTTPException(
+            status_code=400,
+            detail="repo_path or repo_url is required",
+        )
+
     await store.init_run(run_id, repo, body.issue_hint)
 
     if settings.use_render_workflows:
-    from render_sdk import RenderAsync
+        from render_sdk import RenderAsync
 
-    print("========== RENDER DEBUG ==========")
-    print("USE_RENDER_WORKFLOWS:", settings.use_render_workflows)
-    print("WORKFLOW_SLUG:", settings.render_workflow_slug)
-    print("RENDER_API_KEY exists:", "RENDER_API_KEY" in os.environ)
-    print("RENDER_API_KEY length:", len(os.environ.get("RENDER_API_KEY", "")))
-    print("=================================")
+        print("========== RENDER DEBUG ==========")
+        print("USE_RENDER_WORKFLOWS:", settings.use_render_workflows)
+        print("WORKFLOW_SLUG:", settings.render_workflow_slug)
+        print("RENDER_API_KEY exists:", "RENDER_API_KEY" in os.environ)
+        print(
+            "RENDER_API_KEY length:",
+            len(os.environ.get("RENDER_API_KEY", "")),
+        )
+        print("=================================")
 
-    render_client = RenderAsync(
-        token=os.environ["RENDER_API_KEY"]
-    )
+        render_client = RenderAsync(
+            token=os.environ["RENDER_API_KEY"]
+        )
 
-    await render_client.workflows.start_task(
-        settings.render_workflow_slug,
-        [run_id],
-    )
+        await render_client.workflows.start_task(
+            settings.render_workflow_slug,
+            [run_id],
+        )
+
     else:
-        background_tasks.add_task(runner.execute, run_id)
+        background_tasks.add_task(
+            runner.execute,
+            run_id,
+        )
 
-    return CreateRunResponse(run_id=run_id, status="pending")
+    return CreateRunResponse(
+        run_id=run_id,
+        status="pending",
+    )
 
 
 @router.get("/{run_id}", response_model=RunSummary)
