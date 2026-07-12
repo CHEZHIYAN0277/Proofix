@@ -1,5 +1,5 @@
 import asyncio
-import os
+import logging
 import uuid
 from typing import Annotated
 
@@ -13,11 +13,22 @@ from backend.state.redis_store import RedisStore
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
+logger = logging.getLogger(__name__)
+
 
 class CreateRunRequest(BaseModel):
-    repo_path: str = Field(default='', description="Local path or URL to target repo")
-    repo_url: str = Field(default='', description="Alias for repo_path used by frontend")
-    issue_hint: str | None = Field(None, description="Optional hint for which bug to target")
+    repo_path: str = Field(
+        default="",
+        description="Local path or URL to target repo",
+    )
+    repo_url: str = Field(
+        default="",
+        description="Alias for repo_path used by frontend",
+    )
+    issue_hint: str | None = Field(
+        None,
+        description="Optional hint for which bug to target",
+    )
 
 
 class CreateRunResponse(BaseModel):
@@ -47,26 +58,31 @@ async def create_run(
     run_id = str(uuid.uuid4())
 
     repo = body.repo_url or body.repo_path
+
     if not repo:
         raise HTTPException(
             status_code=400,
             detail="repo_path or repo_url is required",
         )
 
-    await store.init_run(run_id, repo, body.issue_hint)
+    await store.init_run(
+        run_id,
+        repo,
+        body.issue_hint,
+    )
 
     if settings.use_render_workflows:
         from render_sdk import RenderAsync
 
-        print("========== RENDER DEBUG ==========")
-        print("USE_RENDER_WORKFLOWS :", settings.use_render_workflows)
-        print("WORKFLOW_SLUG        :", settings.render_workflow_slug)
-        print("API KEY LENGTH       :", len(settings.render_api_key))
-        print("==================================")
+        logger.info(
+            "Starting Render Workflow | run_id=%s | workflow=%s",
+            run_id,
+            settings.render_workflow_slug,
+        )
 
         try:
             render_client = RenderAsync(
-                token=settings.render_api_key
+                token=settings.render_api_key,
             )
 
             await render_client.workflows.start_task(
@@ -74,18 +90,28 @@ async def create_run(
                 [run_id],
             )
 
-            print(f"Workflow started successfully for run {run_id}")
-
-        except Exception as e:
-            print(f"Render Workflow failed: {e}")
-            print("Falling back to BackgroundTasks...")
-
-            background_tasks.add_task(
-                runner.execute,
+            logger.info(
+                "Render Workflow submitted successfully | run_id=%s",
                 run_id,
             )
 
+        except Exception:
+            logger.exception(
+                "Failed to submit Render Workflow | run_id=%s",
+                run_id,
+            )
+
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to start Render Workflow.",
+            )
+
     else:
+        logger.info(
+            "Executing locally using BackgroundTasks | run_id=%s",
+            run_id,
+        )
+
         background_tasks.add_task(
             runner.execute,
             run_id,
@@ -102,9 +128,15 @@ async def get_run(
     run_id: str,
     store: Annotated[RedisStore, Depends(get_store)],
 ) -> RunSummary:
+
     state = await store.load_state(run_id)
+
     if not state:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Run not found",
+        )
+
     return RunSummary(
         run_id=state.run_id,
         status=state.status,
@@ -117,23 +149,47 @@ async def get_run(
 
 
 @router.get("/{run_id}/sig")
-async def get_sig(run_id: str, store: Annotated[RedisStore, Depends(get_store)]) -> dict:
+async def get_sig(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+
     sig = await store.get_json(run_id, "sig")
+
     if sig is None:
         state = await store.load_state(run_id)
+
         if not state:
-            raise HTTPException(status_code=404, detail="Run not found")
+            raise HTTPException(
+                status_code=404,
+                detail="Run not found",
+            )
+
         return state.sig or {}
+
     return sig
 
 
 @router.get("/{run_id}/events")
-async def get_events(run_id: str, store: Annotated[RedisStore, Depends(get_store)]) -> list[dict]:
+async def get_events(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> list[dict]:
+
     state = await store.load_state(run_id)
+
     if not state:
-        raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Run not found",
+        )
+
     events = await store.get_events(run_id)
-    return [e.model_dump(mode="json") for e in events]
+
+    return [
+        event.model_dump(mode="json")
+        for event in events
+    ]
 
 
 @router.get("/{run_id}/proof/{issue_id}")
@@ -142,27 +198,54 @@ async def get_proof_bundle(
     issue_id: str,
     store: Annotated[RedisStore, Depends(get_store)],
 ) -> dict:
-    from pathlib import Path
 
+    from pathlib import Path
     import json
 
     from backend.models.proof import VerificationBundle
 
-    cached = await store.get_json(run_id, f"proof:{issue_id}")
+    cached = await store.get_json(
+        run_id,
+        f"proof:{issue_id}",
+    )
+
     if cached:
-        return VerificationBundle.model_validate(cached).model_dump(mode="json")
+        return VerificationBundle.model_validate(
+            cached
+        ).model_dump(mode="json")
 
     state = await store.load_state(run_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="Run not found")
 
-    if state.proof_bundle and state.proof_bundle.get("issue_id") == issue_id:
+    if not state:
+        raise HTTPException(
+            status_code=404,
+            detail="Run not found",
+        )
+
+    if (
+        state.proof_bundle
+        and state.proof_bundle.get("issue_id") == issue_id
+    ):
         return state.proof_bundle
 
     repo_path = state.repo_clone_path or state.repo_path
-    proof_file = Path(repo_path) / ".proof-of-fix" / f"{issue_id}.json"
-    if proof_file.exists():
-        data = json.loads(proof_file.read_text(encoding="utf-8"))
-        return VerificationBundle.model_validate(data).model_dump(mode="json")
 
-    raise HTTPException(status_code=404, detail="Proof bundle not found")
+    proof_file = (
+        Path(repo_path)
+        / ".proof-of-fix"
+        / f"{issue_id}.json"
+    )
+
+    if proof_file.exists():
+        data = json.loads(
+            proof_file.read_text(encoding="utf-8")
+        )
+
+        return VerificationBundle.model_validate(
+            data
+        ).model_dump(mode="json")
+
+    raise HTTPException(
+        status_code=404,
+        detail="Proof bundle not found",
+    )
