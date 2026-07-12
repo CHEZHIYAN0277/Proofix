@@ -14,7 +14,8 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 
 
 class CreateRunRequest(BaseModel):
-    repo_path: str = Field(..., description="Local path or URL to target repo")
+    repo_path: str = Field(default='', description="Local path or URL to target repo")
+    repo_url: str = Field(default='', description="Alias for repo_path used by frontend")
     issue_hint: str | None = Field(None, description="Optional hint for which bug to target")
 
 
@@ -42,7 +43,10 @@ async def create_run(
     settings: Annotated[Settings, Depends(get_settings_dep)],
 ) -> CreateRunResponse:
     run_id = str(uuid.uuid4())
-    await store.init_run(run_id, body.repo_path, body.issue_hint)
+    repo = body.repo_url or body.repo_path
+    if not repo:
+        raise HTTPException(status_code=400, detail="repo_path or repo_url is required")
+    await store.init_run(run_id, repo, body.issue_hint)
 
     if settings.use_render_workflows:
         from render_sdk import RenderAsync

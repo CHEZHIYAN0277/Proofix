@@ -32,10 +32,10 @@ class Settings(BaseSettings):
     sig_cache_key_version: str = "v1"
     always_llm_filenames: str = ""
 
-    # ── Render Workflow integration ──────────────────────────────────
-    use_render_workflows: bool = False
-    render_api_key: str = ""
-    render_workflow_slug: str = "sentinel-workflow/run_pipeline"
+    # Render Workflow integration
+use_render_workflows: bool = False
+render_api_key: str = ""
+render_workflow_slug: str = "hack-hazards/run_repository_analysis"
 
     def llm_configured(self) -> bool:
         if self.llm_provider == "mistral":
