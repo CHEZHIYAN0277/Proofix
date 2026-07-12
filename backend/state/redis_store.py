@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -39,6 +40,16 @@ class RedisStore:
             model = state_to_model(state)
         key = f"{self._prefix(model.run_id)}:state"
         await self.client.set(key, model.model_dump_json(), ex=self.ttl)
+
+        # Keep the lightweight :meta hash in sync with the canonical :state.
+        await self.update_meta(
+            model.run_id,
+            status=model.status,
+            current_agent=model.current_agent,
+            retry_count=str(model.retry_count),
+            force_draft_pr=str(model.force_draft_pr).lower(),
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
 
     async def load_state(self, run_id: str) -> RunStateModel | None:
         key = f"{self._prefix(run_id)}:state"
