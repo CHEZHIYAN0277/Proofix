@@ -321,6 +321,7 @@ Mergeability Score
 # 👨‍💻 Author
 
 **Chelvachezhiyan S N**
-**zkaushika G**
+
+**Kaushika G**
 
 ---
