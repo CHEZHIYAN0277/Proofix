@@ -126,8 +126,8 @@ README.md
 # ⚙️ Local Development
 
 ```bash
-git clone https://github.com/<username>/sentinel-bugfix.git
-cd sentinel-bugfix
+git clone https://github.com/CHEZHIYAN0277/Proofix
+cd Proofix
 
 python -m venv .venv
 
