@@ -20,6 +20,13 @@ dependencies = [
     "PyGithub>=2.5.0",
     "spacy>=3.8.0",
     "python-multipart>=0.0.12",
+    # Runtime validation tools — invoked by agent pipeline in production
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-json-report>=1.5.0",
+    "bandit>=1.8.0",
+    "mutmut>=2.5.0",
+    "semgrep>=1.50.0",
 ]
 
 [project.optional-dependencies]
@@ -28,12 +35,8 @@ render = [
 ]
 
 dev = [
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.24.0",
-    "pytest-json-report>=1.5.0",
-    "bandit>=1.8.0",
+    # Development-only tools — not needed at runtime
     "ruff>=0.8.0",
-    "mutmut>=2.5.0",
     "fakeredis>=2.26.0",
 ]
 
