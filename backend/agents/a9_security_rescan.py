@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from backend.agents.base import AgentBase
@@ -9,11 +10,15 @@ from backend.services.security_rescan_commands import build_security_rescan_comm
 from backend.services.subprocess_runner import parse_json_safe, run_command
 from backend.state.schema import RunStateModel
 
+logger = logging.getLogger(__name__)
+
 
 class A9SecurityRescanAgent(AgentBase):
     agent_id = "A9"
 
     async def run(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = self.agent_id
+        await self.store.save_state(state)
         await self.emit_status(state, "started", "Running post-patch security re-scan")
         repo = Path(state.repo_clone_path or state.repo_path).resolve()
         static = state.static_report or {}
@@ -94,6 +99,36 @@ class A9SecurityRescanAgent(AgentBase):
         if validation_failure:
             state.validation_failure = validation_failure.model_dump(mode="json")
 
+        # Fix 4: Full security diagnostic log before return
+        logger.info(
+            "A9 EXIT | run_id=%s | retry_count=%d"
+            " | baseline_bandit=%d | baseline_semgrep=%d"
+            " | post_bandit=%d | post_semgrep=%d"
+            " | baseline_keys=%d | post_keys=%d"
+            " | new_keys=%d | new_findings=%d"
+            " | rejected=%s"
+            " | security_score=%.1f (formula: max(0, 100 - new_findings*25))"
+            " | DECISION: patch_retry=%s",
+            state.run_id,
+            state.retry_count,
+            len(baseline.get("bandit", [])),
+            len(baseline.get("semgrep", [])),
+            len(post_bandit),
+            len(post_semgrep),
+            len(baseline_keys),
+            len(post_keys),
+            len(new_keys),
+            len(new_findings),
+            rejected,
+            security_score,
+            rejected,
+        )
+        if new_findings:
+            logger.info(
+                "A9 NEW_FINDINGS | run_id=%s | findings=%s",
+                state.run_id,
+                [{"file": f.file, "line": f.line, "message": f.message} for f in new_findings],
+            )
         await self.emit_status(
             state,
             "completed",

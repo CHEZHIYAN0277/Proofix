@@ -30,6 +30,8 @@ class A4EvidenceInvestigatorAgent(AgentBase):
     agent_id = "A4"
 
     async def run(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = self.agent_id
+        await self.store.save_state(state)
         await self.emit_status(state, "started", "Investigating root cause with trace evidence")
         repo = Path(state.repo_clone_path or state.repo_path)
         reproduction = state.reproduction or {}

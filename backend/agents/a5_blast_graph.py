@@ -12,6 +12,8 @@ class A5BlastGraphAgent(AgentBase):
     agent_id = "A5"
 
     async def run(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = self.agent_id
+        await self.store.save_state(state)
         await self.emit_status(state, "started", "Expanding blast graph scope")
         sig_data = state.sig or await self.store.get_json(state.run_id, "sig")
         root_cause = state.root_cause or {}

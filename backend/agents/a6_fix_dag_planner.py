@@ -24,6 +24,8 @@ class A6FixDAGPlannerAgent(AgentBase):
     agent_id = "A6"
 
     async def run(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = self.agent_id
+        await self.store.save_state(state)
         await self.emit_status(state, "started", "Planning fix DAG with conflict detection")
         blast = state.blast_graph or {}
         static = state.static_report or {}

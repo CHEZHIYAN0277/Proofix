@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from backend.agents.base import AgentBase
@@ -7,11 +8,15 @@ from backend.services.scoped_validation import run_scoped_validation
 from backend.services.subprocess_runner import run_command
 from backend.state.schema import RunStateModel
 
+logger = logging.getLogger(__name__)
+
 
 class A8MutationValidatorAgent(AgentBase):
     agent_id = "A8"
 
     async def run(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = self.agent_id
+        await self.store.save_state(state)
         await self.emit_status(state, "started", "Running mutation validation gauntlet")
         repo = Path(state.repo_clone_path or state.repo_path)
         patch_bundle = state.patch_bundle or {}
@@ -131,6 +136,40 @@ class A8MutationValidatorAgent(AgentBase):
                 }
             )
 
+        # Fix 2+3: Full diagnostic log before return
+        logger.info(
+            "A8 EXIT | run_id=%s | retry_count=%d"
+            " | INPUTS: target_test=%s | baseline_failures=%d | contracts=%d"
+            " | CORRECTNESS: pytest_passed=%s | mutant_survived=%s"
+            " | mutation_score=%s"
+            " | correctness_score=%.1f"
+            " | DECISION: patch_retry_required=%s"
+            " | REASON: %s",
+            state.run_id,
+            state.retry_count,
+            target_test,
+            len(baseline_failures),
+            len(contracts),
+            pytest_passed,
+            mutant_survived,
+            mutation_score,
+            correctness_score,
+            patch_retry_required,
+            (
+                "mutant_survived" if mutant_survived
+                else ("pytest_failed" if not scoped.pytest_passed else "ok")
+            ),
+        )
+        if validation_failure:
+            logger.info(
+                "A8 VALIDATION_FAILURE | run_id=%s | stage=%s | assertion=%s"
+                " | target_test_passed=%s | regression_tests_passed=%s",
+                state.run_id,
+                getattr(validation_failure, "validation_stage", None),
+                getattr(validation_failure, "assertion_message", None),
+                scoped.target_test_passed,
+                scoped.regression_tests_passed,
+            )
         await self.emit_status(
             state,
             "completed",

@@ -1,9 +1,12 @@
 import logging
 
 from backend.agents.a10_routing import (
+    citation_review_needed,
     compute_fidelity_score,
     compute_scope_risk,
+    hard_draft_reason,
     route_pr_decision,
+    technical_validation_passed,
 )
 from backend.agents.base import AgentBase
 from backend.models.pr import AxisScores, PRRoutingDecision
@@ -20,6 +23,8 @@ class A10MCIScorerAgent(AgentBase):
     agent_id = "A10"
 
     async def run(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = self.agent_id
+        await self.store.save_state(state)
         await self.emit_status(state, "started", "MCI verification and reviewability scoring")
 
         root_cause = state.root_cause or {}
@@ -34,6 +39,20 @@ class A10MCIScorerAgent(AgentBase):
 
         fidelity_ok, phantoms = verify_mci(description_why + " " + description_what, diff_text)
 
+        # Fix 5: Phantom change detection diagnostics
+        logger.info(
+            "A10 MCI_VERIFY | run_id=%s"
+            " | description_why_len=%d | description_what_len=%d | diff_len=%d"
+            " | fidelity_ok=%s | phantoms=%s | phantom_count=%d",
+            state.run_id,
+            len(description_why),
+            len(description_what),
+            len(diff_text),
+            fidelity_ok,
+            sorted(phantoms),
+            len(phantoms),
+        )
+
         correctness = mutation.get("correctness_score", 0.0)
         security_score = security.get("security_score", 0.0)
         fidelity = compute_fidelity_score(fidelity_ok, state)
@@ -44,6 +63,34 @@ class A10MCIScorerAgent(AgentBase):
             security=security_score,
             fidelity=fidelity,
             scope_risk=scope_risk,
+        )
+
+        # Fix 6: Full routing decision log before route_pr_decision
+        _mutation = state.mutation_result or {}
+        _security = state.security_result or {}
+        _tech_passed = technical_validation_passed(state, _mutation, _security, phantoms)
+        _citation_needed = citation_review_needed(state)
+        _hard, _hard_reason = hard_draft_reason(state, axis, phantoms)
+        logger.info(
+            "A10 ROUTING | run_id=%s"
+            " | axis: correctness=%.1f | security=%.1f | fidelity=%.1f | scope_risk=%.1f"
+            " | technical_validation_passed=%s"
+            " | citation_review_needed=%s"
+            " | phantom_changes_detected=%s (phantoms=%s)"
+            " | hard_draft=%s | hard_draft_reason=%s"
+            " | validation_exhausted=%s",
+            state.run_id,
+            correctness,
+            security_score,
+            fidelity,
+            scope_risk,
+            _tech_passed,
+            _citation_needed,
+            bool(phantoms),
+            sorted(phantoms),
+            _hard,
+            _hard_reason,
+            state.validation_exhausted,
         )
 
         pr_type, review_note = route_pr_decision(state, axis, phantoms)

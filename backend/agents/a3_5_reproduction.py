@@ -24,6 +24,8 @@ class A35ReproductionAgent(AgentBase):
     agent_id = "A3.5"
 
     async def run(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = self.agent_id
+        await self.store.save_state(state)
         await self.emit_status(state, "started", "Running reproduction gate via pytest")
         repo = Path(state.repo_clone_path or state.repo_path).resolve()
         report_path = pytest_report_path(state.run_id)

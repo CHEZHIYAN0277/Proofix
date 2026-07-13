@@ -33,6 +33,8 @@ class A7CodeGenerationAgent(AgentBase):
     agent_id = "A7"
 
     async def run(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = self.agent_id
+        await self.store.save_state(state)
         await self.emit_status(state, "started", "Generating validated patches")
         repo = Path(state.repo_clone_path or state.repo_path).resolve()
         acquired = await self.store.acquire_lock(state.run_id)
