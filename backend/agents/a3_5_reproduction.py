@@ -1,4 +1,5 @@
 import logging
+import time
 from pathlib import Path
 
 from backend.agents.base import AgentBase
@@ -36,19 +37,73 @@ class A35ReproductionAgent(AgentBase):
         if report_path.exists():
             report_path.unlink()
 
+        # Instrumentation 1: log everything about the pytest invocation before it runs
+        _cmd = ["python", "-m", "pytest", "--tb=long", "--json-report",
+                f"--json-report-file={report_path}", "-v"]
+        logger.info(
+            "A3.5 PYTEST START | run_id=%s"
+            " | cwd=%s"
+            " | command=%s"
+            " | report_path=%s"
+            " | report_exists_before=%s"
+            " | timeout=%d",
+            state.run_id,
+            str(repo),
+            " ".join(_cmd),
+            str(report_path),
+            report_path.exists(),
+            120,
+        )
+
+        _t0 = time.monotonic()
         code, stdout, stderr = await run_command(
-            [
-                "python",
-                "-m",
-                "pytest",
-                "--tb=long",
-                "--json-report",
-                f"--json-report-file={report_path}",
-                "-v",
-            ],
+            _cmd,
             cwd=repo,
             timeout=120,
         )
+        _duration = time.monotonic() - _t0
+
+        # Instrumentation 2: log outcome immediately after run_command returns
+        logger.info(
+            "A3.5 PYTEST FINISHED | run_id=%s"
+            " | exit_code=%d"
+            " | duration=%.2fs"
+            " | stdout_len=%d"
+            " | stderr_len=%d"
+            " | report_exists=%s"
+            " | report_path=%s",
+            state.run_id,
+            code,
+            _duration,
+            len(stdout),
+            len(stderr),
+            report_path.exists(),
+            str(report_path),
+        )
+
+        # Instrumentation 3: full stdout/stderr when report was not created
+        if not report_path.exists():
+            logger.info(
+                "A3.5 PYTEST STDOUT | run_id=%s\n%s",
+                state.run_id,
+                stdout,
+            )
+            logger.info(
+                "A3.5 PYTEST STDERR | run_id=%s\n%s",
+                state.run_id,
+                stderr,
+            )
+        else:
+            # Instrumentation 4: quick sanity check on the report that was created
+            _raw = report_path.read_text(encoding="utf-8", errors="replace")
+            logger.info(
+                "A3.5 REPORT FOUND | run_id=%s"
+                " | size=%d"
+                " | preview=%s",
+                state.run_id,
+                len(_raw),
+                _raw[:300],
+            )
 
         report = load_pytest_report(report_path)
         result = parse_pytest_report(report, code, stdout, stderr, report_path, repo_root=repo)
