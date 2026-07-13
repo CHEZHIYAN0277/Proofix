@@ -1,4 +1,5 @@
 import ast
+import logging
 from pathlib import Path
 
 from backend.agents.a7_patch_engine import (
@@ -28,6 +29,8 @@ from backend.services.runtime_patch_prompt import (
 )
 from backend.state.schema import RunStateModel
 
+logger = logging.getLogger(__name__)
+
 
 class A7CodeGenerationAgent(AgentBase):
     agent_id = "A7"
@@ -38,6 +41,27 @@ class A7CodeGenerationAgent(AgentBase):
         await self.emit_status(state, "started", "Generating validated patches")
         repo = Path(state.repo_clone_path or state.repo_path).resolve()
         acquired = await self.store.acquire_lock(state.run_id)
+
+        # Instrument: log what A7 received from upstream agents
+        _repro = state.reproduction or {}
+        _brief = state.retry_brief or {}
+        logger.info(
+            "A7 ENTRY | run_id=%s | retry_count=%d"
+            " | reproduction.failing_test=%s"
+            " | reproduction.status=%s"
+            " | retry_brief_present=%s"
+            " | retry_brief.assertion_failure=%s"
+            " | mutation_result_present=%s"
+            " | patch_bundle_present=%s",
+            state.run_id,
+            state.retry_count,
+            _repro.get("failing_test"),
+            _repro.get("status"),
+            state.retry_brief is not None,
+            _brief.get("assertion_failure"),
+            state.mutation_result is not None,
+            state.patch_bundle is not None,
+        )
 
         metrics: list[dict] = []
 
@@ -145,6 +169,22 @@ class A7CodeGenerationAgent(AgentBase):
             bundle_dict = bundle.model_dump(mode="json")
             await self.store.set_json(state.run_id, "patches", bundle_dict)
             state.patch_bundle = bundle_dict
+
+            # Instrument: log the patch_bundle written to state (what A8 will read)
+            logger.info(
+                "A7 PATCH_BUNDLE | run_id=%s | retry_count=%d"
+                " | patch_count=%d | contract_count=%d"
+                " | patch_files=%s"
+                " | diff_text_len=%d"
+                " | contracts=%s",
+                state.run_id,
+                state.retry_count,
+                len(patches),
+                len(contracts),
+                [p.file for p in patches],
+                len(diff_text),
+                [c.assertion for c in contracts],
+            )
 
             payload = {
                 "files": [p.file for p in patches],

@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from backend.agents.base import AgentBase
@@ -11,6 +12,8 @@ from backend.services.reproduction_parser import (
 )
 from backend.services.subprocess_runner import run_command
 from backend.state.schema import RunStateModel
+
+logger = logging.getLogger(__name__)
 
 _STATUS_MESSAGES = {
     ReproductionStatus.CONFIRMED: "Reproduction confirmed",
@@ -51,15 +54,58 @@ class A35ReproductionAgent(AgentBase):
         result = parse_pytest_report(report, code, stdout, stderr, report_path, repo_root=repo)
         result.pre_existing_failures = extract_failed_nodeids(report)
 
+        # Instrument: log discovered test immediately after parsing
+        logger.info(
+            "A3.5 PARSE_RESULT | run_id=%s | exit_code=%d"
+            " | report_exists=%s | report_tests=%d"
+            " | result_status=%s | failing_test=%s | confidence=%.2f"
+            " | pre_existing_failures=%d",
+            state.run_id,
+            code,
+            report is not None,
+            len((report or {}).get("tests", [])),
+            result.status.value,
+            result.failing_test,
+            result.confidence,
+            len(result.pre_existing_failures),
+        )
+
         reexec_cmd, is_targeted, reexec_timeout = build_reproduction_command(result.failing_test)
         result.reexecution_command = reexec_cmd
         result.reexecution_is_targeted = is_targeted
         result.reexecution_timeout_seconds = reexec_timeout
 
+        # Instrument: log the full dict that will be stored in state.reproduction
         result_dict = result.model_dump(mode="json")
+        logger.info(
+            "A3.5 REPRODUCTION_DICT | run_id=%s"
+            " | keys=%s"
+            " | failing_test=%s"
+            " | reexecution_command=%s"
+            " | is_targeted=%s"
+            " | force_draft_pr=%s",
+            state.run_id,
+            list(result_dict.keys()),
+            result_dict.get("failing_test"),
+            result_dict.get("reexecution_command"),
+            is_targeted,
+            result_dict.get("force_draft_pr"),
+        )
         state.reproduction = result_dict
         if result.force_draft_pr:
             state.force_draft_pr = True
+
+        # Instrument: confirm what A8 will read from state.reproduction
+        logger.info(
+            "A3.5 STATE_REPRODUCTION | run_id=%s"
+            " | state.reproduction[failing_test]=%s"
+            " | state.reproduction[status]=%s"
+            " | state.force_draft_pr=%s",
+            state.run_id,
+            (state.reproduction or {}).get("failing_test"),
+            (state.reproduction or {}).get("status"),
+            state.force_draft_pr,
+        )
 
         await self.emit_status(
             state,

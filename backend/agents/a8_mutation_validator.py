@@ -25,6 +25,25 @@ class A8MutationValidatorAgent(AgentBase):
         target_test = reproduction.get("failing_test")
         baseline_failures = reproduction.get("pre_existing_failures") or []
 
+        # Instrument: log exactly what A8 receives \u2014 the critical handoff point
+        logger.info(
+            "A8 ENTRY | run_id=%s | retry_count=%d"
+            " | reproduction.status=%s"
+            " | target_test=%s"
+            " | baseline_failures=%d"
+            " | contracts=%d"
+            " | patch_bundle_patches=%d"
+            " | retry_brief_present=%s",
+            state.run_id,
+            state.retry_count,
+            reproduction.get("status"),
+            target_test,
+            len(baseline_failures),
+            len(contracts),
+            len(patch_bundle.get("patches", [])),
+            state.retry_brief is not None,
+        )
+
         scoped = await run_scoped_validation(
             repo,
             state.run_id,
