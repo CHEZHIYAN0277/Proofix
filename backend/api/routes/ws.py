@@ -1,12 +1,13 @@
 import asyncio
-import traceback
+import logging
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from backend.services.ws_broadcaster import get_broadcaster
 from backend.state.events import AgentStatusEvent
 from backend.state.redis_store import RedisStore
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["websocket"])
 
@@ -38,6 +39,10 @@ def _translate_event(
 ) -> list[dict]:
     """
     Convert an AgentStatusEvent into frontend-compatible events.
+
+    Every translated event includes ``message`` so the frontend can
+    display real-time activity lines.  Finalized events also carry
+    ``payload`` for agent-specific metrics and failure reasons.
     """
 
     index = _AGENT_INDEX.get(event.agent_id)
@@ -52,6 +57,7 @@ def _translate_event(
             {
                 "type": "agent.started",
                 "index": index,
+                "message": event.message or None,
             }
         )
 
@@ -65,6 +71,7 @@ def _translate_event(
                 "type": "agent.line",
                 "index": index,
                 "lineIndex": line_idx,
+                "message": event.message or None,
             }
         )
 
@@ -74,6 +81,8 @@ def _translate_event(
                 "type": "agent.finalized",
                 "index": index,
                 "status": "completed",
+                "message": event.message or None,
+                "payload": event.payload,
             }
         )
 
@@ -83,6 +92,8 @@ def _translate_event(
                 "type": "agent.finalized",
                 "index": index,
                 "status": "failed",
+                "message": event.message or None,
+                "payload": event.payload,
             }
         )
 
@@ -92,6 +103,8 @@ def _translate_event(
                 "type": "agent.finalized",
                 "index": index,
                 "status": "retry",
+                "message": event.message or None,
+                "payload": event.payload,
             }
         )
 
@@ -100,7 +113,9 @@ def _translate_event(
 
 def _check_run_completed(events: list[AgentStatusEvent]) -> bool:
     """
-    Return True when all agents reached a terminal state.
+    Return True when all agents reached a terminal state in the
+    event stream.  This is a purely event-driven check — no Redis
+    polling is involved.
     """
 
     terminal: set[str] = set()
@@ -122,9 +137,8 @@ async def ws_run_timeline(
 ) -> None:
 
     listener_task = None
-    broadcaster = None
-    queue = None
     pubsub = None
+    channel = f"bugfix:{run_id}:live"
 
     try:
 
@@ -141,11 +155,12 @@ async def ws_run_timeline(
 
         await websocket.accept()
 
-        # Replay history
+        # ── Replay history ──────────────────────────────────────
 
         history = await store.get_events(run_id)
 
         seq_counters: dict[str, int] = {}
+        run_completed_sent = False
 
         for event in history:
 
@@ -156,25 +171,31 @@ async def ws_run_timeline(
             for fe_event in _translate_event(event, seq_counters):
                 await websocket.send_json(fe_event)
 
-        if _check_run_completed(history):
+        # Check completion from replayed history + persisted status.
+        # If the run already completed before the client connected,
+        # the persisted state.status will be "completed" or "failed"
+        # and we should inform the frontend immediately.
+        if state.status in ("completed", "failed") or _check_run_completed(history):
             await websocket.send_json(
                 {"type": "run.completed"}
             )
+            run_completed_sent = True
 
         all_events = list(history)
 
-        broadcaster = get_broadcaster()
-        queue = broadcaster.subscribe(run_id)
+        # ── Live updates via Redis Pub/Sub only ─────────────────
+        # No polling.  The WebSocket is purely event-driven.
+        # PipelineRunner persists completion state; the frontend
+        # already polls GET /runs/{id} for that.
 
         redis_client: aioredis.Redis = websocket.app.state.redis
 
         pubsub = redis_client.pubsub()
 
-        channel = f"bugfix:{run_id}:live"
-
         await pubsub.subscribe(channel)
 
         async def redis_listener():
+            nonlocal run_completed_sent
 
             try:
 
@@ -209,10 +230,13 @@ async def ws_run_timeline(
 
                         all_events.append(event)
 
-                        if _check_run_completed(all_events):
+                        # Emit run.completed exactly once when all
+                        # agents reach a terminal state.
+                        if not run_completed_sent and _check_run_completed(all_events):
                             await websocket.send_json(
                                 {"type": "run.completed"}
                             )
+                            run_completed_sent = True
 
             except asyncio.CancelledError:
                 pass
@@ -221,52 +245,29 @@ async def ws_run_timeline(
             redis_listener()
         )
 
+        # ── Keep-alive pings ────────────────────────────────────
+        # No polling — just periodic pings to detect dead clients.
+
         while True:
 
             try:
-
-                event = await asyncio.wait_for(
-                    queue.get(),
-                    timeout=30.0,
-                )
+                await asyncio.sleep(30.0)
 
                 await websocket.send_json(
-                    event.model_dump(mode="json")
+                    {"type": "ping"}
                 )
 
-                for fe_event in _translate_event(
-                    event,
-                    seq_counters,
-                ):
-                    await websocket.send_json(fe_event)
-
-                all_events.append(event)
-
-                if _check_run_completed(all_events):
-                    await websocket.send_json(
-                        {"type": "run.completed"}
-                    )
-
-            except asyncio.TimeoutError:
-
-                try:
-                    await websocket.send_json(
-                        {"type": "ping"}
-                    )
-
-                except Exception:
-                    break
+            except Exception:
+                break
 
     except WebSocketDisconnect:
-        print(f"WebSocket disconnected: {run_id}")
+        logger.info("WebSocket disconnected | run_id=%s", run_id)
 
     except Exception:
-
-        print("=" * 80)
-        print("WEBSOCKET CRASH")
-        print(f"Run ID: {run_id}")
-        traceback.print_exc()
-        print("=" * 80)
+        logger.exception(
+            "WebSocket handler crashed | run_id=%s",
+            run_id,
+        )
 
         try:
             await websocket.close(code=1011)
@@ -277,12 +278,10 @@ async def ws_run_timeline(
 
         if listener_task:
             listener_task.cancel()
-
-        if broadcaster and queue:
-            broadcaster.unsubscribe(
-                run_id,
-                queue,
-            )
+            try:
+                await listener_task
+            except asyncio.CancelledError:
+                pass
 
         if pubsub:
             try:

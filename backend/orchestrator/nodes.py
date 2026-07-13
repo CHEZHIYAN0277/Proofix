@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from pathlib import Path
 
@@ -20,6 +21,8 @@ from backend.services.sig_helpers import reclassify_cve_report
 from backend.state.redis_store import RedisStore
 from backend.state.schema import RunState, RunStateModel
 
+logger = logging.getLogger(__name__)
+
 
 class GraphNodes:
     def __init__(self, store: RedisStore, settings: Settings):
@@ -37,6 +40,18 @@ class GraphNodes:
         self.a9 = A9SecurityRescanAgent(store, settings)
         self.a10 = A10MCIScorerAgent(store, settings)
 
+    async def _save(self, node: str, state: RunStateModel) -> None:
+        """Wrapper that logs before every Redis save so we can trace status changes."""
+        logger.info(
+            "NODE SAVE | node=%s | run_id=%s | status=%s | current_agent=%s | retry=%d",
+            node,
+            state.run_id,
+            state.status,
+            state.current_agent,
+            state.retry_count,
+        )
+        await self.store.save_state(state)
+
     async def prepare_repo(self, state: RunStateModel) -> RunStateModel:
         if not state.repo_clone_path:
             state.repo_clone_path = clone_or_copy_repo(state.repo_path)
@@ -44,12 +59,12 @@ class GraphNodes:
             state.source_roots = discover_source_roots(Path(state.repo_clone_path).resolve())
         if not state.base_commit_sha:
             state.base_commit_sha = get_head_sha(Path(state.repo_clone_path))
-        await self.store.save_state(state)
+        await self._save("prepare_repo", state)
         return state
 
     async def parallel_intel(self, state: RunStateModel) -> RunStateModel:
         state.current_agent = "A1+A2+A3"
-        await self.store.save_state(state)
+        await self._save("parallel_intel:pre-gather", state)
 
         async def run_a1() -> RunStateModel:
             s = await self.store.load_state(state.run_id)
@@ -76,7 +91,7 @@ class GraphNodes:
             if r.static_report:
                 merged.static_report = r.static_report
             merged.ws_sequence = max(merged.ws_sequence, r.ws_sequence)
-        await self.store.save_state(merged)
+        await self._save("parallel_intel:post-gather", merged)
         return merged
 
     async def layer1_fan_in(self, state: RunStateModel) -> RunStateModel:
@@ -87,7 +102,7 @@ class GraphNodes:
             reclassified = reclassify_cve_report(sig, cve)
             state.cve_report = reclassified
             await self.store.set_json(state.run_id, "cve", reclassified)
-        await self.store.save_state(state)
+        await self._save("layer1_fan_in", state)
         return state
 
     async def reproduction_gate(self, state: RunStateModel) -> RunStateModel:

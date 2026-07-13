@@ -1,3 +1,5 @@
+import logging
+
 from backend.agents.a10_routing import (
     compute_fidelity_score,
     compute_scope_risk,
@@ -10,6 +12,8 @@ from backend.services.mci_verifier import generate_description_from_diff, verify
 from backend.services.proof_bundle import build_verification_bundle
 from backend.state.events import A10CompletedPayload
 from backend.state.schema import RunStateModel
+
+logger = logging.getLogger(__name__)
 
 
 class A10MCIScorerAgent(AgentBase):
@@ -108,5 +112,17 @@ class A10MCIScorerAgent(AgentBase):
             "completed",
             f"PR routed as {pr_type}",
             completed_payload.model_dump(mode="json"),
+        )
+
+        logger.info(
+            "A10 EXIT | run_id=%s | status=%s | current_agent=%s"
+            " | retry=%d | proof=%s | pr_type=%s | pr_url=%s",
+            state.run_id,
+            state.status,
+            state.current_agent,
+            state.retry_count,
+            state.proof_bundle is not None,
+            decision.pr_type,
+            decision.pr_url,
         )
         return state

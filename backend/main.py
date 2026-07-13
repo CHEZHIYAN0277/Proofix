@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
@@ -7,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api.routes import runs, ws
 from backend.config import Settings, get_settings
 from backend.state.redis_store import create_redis_client
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -43,7 +46,7 @@ def create_app() -> FastAPI:
         try:
             redis_ok = await app.state.redis.ping()
         except Exception:
-            pass
+            logger.warning("Redis health check failed", exc_info=True)
         return {
             "status": "ok" if redis_ok else "degraded",
             "redis": redis_ok,

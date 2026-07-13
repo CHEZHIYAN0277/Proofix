@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,6 +13,8 @@ from backend.state.schema import (
     model_to_state,
     state_to_model,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RedisStore:
@@ -65,6 +68,35 @@ class RedisStore:
 
         key = f"{self._prefix(model.run_id)}:state"
 
+        logger.info(
+            "SAVE_STATE | run_id=%s | status=%s | current_agent=%s | retry=%d",
+            model.run_id,
+            model.status,
+            model.current_agent,
+            model.retry_count,
+        )
+
+        # Regression check: warn if a completed run is being overwritten
+        # with a running state.  Never blocks the save.
+        existing_raw = await self.client.get(key)
+        if existing_raw:
+            try:
+                existing = RunStateModel.model_validate_json(existing_raw)
+                if existing.status == "completed" and model.status == "running":
+                    logger.warning(
+                        "STATUS REGRESSION DETECTED | completed -> running"
+                        " | run_id=%s"
+                        " | existing_status=%s | existing_current_agent=%s"
+                        " | incoming_status=%s | incoming_current_agent=%s",
+                        model.run_id,
+                        existing.status,
+                        existing.current_agent,
+                        model.status,
+                        model.current_agent,
+                    )
+            except Exception:
+                pass  # Never let regression check break the save path
+
         await self.client.set(
             key,
             model.model_dump_json(),
@@ -94,19 +126,22 @@ class RedisStore:
             return None
 
         try:
-            return RunStateModel.model_validate_json(raw)
+            model = RunStateModel.model_validate_json(raw)
+            logger.info(
+                "LOAD_STATE | run_id=%s | status=%s | current_agent=%s | retry=%d",
+                model.run_id,
+                model.status,
+                model.current_agent,
+                model.retry_count,
+            )
+            return model
 
         except Exception:
-            import traceback
-
-            print("=" * 80)
-            print("FAILED TO LOAD RUN STATE")
-            print("RUN ID:", run_id)
-            print("RAW REDIS DATA:")
-            print(raw)
-            traceback.print_exc()
-            print("=" * 80)
-
+            logger.exception(
+                "Failed to deserialize RunState | run_id=%s | raw=%s",
+                run_id,
+                raw,
+            )
             raise
 
     async def set_json(

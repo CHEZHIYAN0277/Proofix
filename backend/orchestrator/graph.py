@@ -1,3 +1,5 @@
+import logging
+
 from langgraph.graph import END, StateGraph
 
 from backend.config import Settings
@@ -5,6 +7,8 @@ from backend.orchestrator.edges import after_mutation, after_security, should_re
 from backend.orchestrator.nodes import GraphNodes
 from backend.state.redis_store import RedisStore
 from backend.state.schema import RunState
+
+logger = logging.getLogger(__name__)
 
 
 def _model_to_dict(state: RunState) -> dict:
@@ -25,73 +29,181 @@ def build_graph(store: RedisStore, settings: Settings) -> StateGraph:
 
     async def prepare_repo(state: RunState) -> RunState:
         from backend.state.schema import RunStateModel
+        logger.info(
+            "GRAPH ENTER prepare_repo | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = RunStateModel(**{k: v for k, v in state.items() if k in RunStateModel.model_fields})
         result = await nodes.prepare_repo(model)
-        return result.model_dump(exclude_none=False)
+        out = result.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  prepare_repo | run_id=%s | status=%s | current_agent=%s",
+            out.get("run_id"), out.get("status"), out.get("current_agent"),
+        )
+        return out
 
     async def parallel_intel(state: RunState) -> RunState:
+        logger.info(
+            "GRAPH ENTER parallel_intel | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = await _load_model(store, state)
         result = await nodes.parallel_intel(model)
-        return result.model_dump(exclude_none=False)
+        out = result.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  parallel_intel | run_id=%s | status=%s | current_agent=%s",
+            out.get("run_id"), out.get("status"), out.get("current_agent"),
+        )
+        return out
 
     async def layer1_fan_in(state: RunState) -> RunState:
+        logger.info(
+            "GRAPH ENTER layer1_fan_in | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = await _load_model(store, state)
         result = await nodes.layer1_fan_in(model)
-        return result.model_dump(exclude_none=False)
+        out = result.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  layer1_fan_in | run_id=%s | status=%s | current_agent=%s",
+            out.get("run_id"), out.get("status"), out.get("current_agent"),
+        )
+        return out
 
     async def reproduction_gate(state: RunState) -> RunState:
+        logger.info(
+            "GRAPH ENTER reproduction_gate | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = await _load_model(store, state)
         result = await nodes.reproduction_gate(model)
-        return result.model_dump(exclude_none=False)
+        out = result.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  reproduction_gate | run_id=%s | status=%s | current_agent=%s",
+            out.get("run_id"), out.get("status"), out.get("current_agent"),
+        )
+        return out
 
     async def investigate(state: RunState) -> RunState:
+        logger.info(
+            "GRAPH ENTER investigate | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = await _load_model(store, state)
         result = await nodes.investigate(model)
-        return result.model_dump(exclude_none=False)
+        out = result.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  investigate | run_id=%s | status=%s | current_agent=%s",
+            out.get("run_id"), out.get("status"), out.get("current_agent"),
+        )
+        return out
 
     async def blast_scope(state: RunState) -> RunState:
+        logger.info(
+            "GRAPH ENTER blast_scope | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = await _load_model(store, state)
         result = await nodes.blast_scope(model)
-        return result.model_dump(exclude_none=False)
+        out = result.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  blast_scope | run_id=%s | status=%s | current_agent=%s",
+            out.get("run_id"), out.get("status"), out.get("current_agent"),
+        )
+        return out
 
     async def plan_fixes(state: RunState) -> RunState:
+        logger.info(
+            "GRAPH ENTER plan_fixes | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = await _load_model(store, state)
         result = await nodes.plan_fixes(model)
-        return result.model_dump(exclude_none=False)
+        out = result.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  plan_fixes | run_id=%s | status=%s | current_agent=%s",
+            out.get("run_id"), out.get("status"), out.get("current_agent"),
+        )
+        return out
 
     async def generate_code(state: RunState) -> RunState:
+        logger.info(
+            "GRAPH ENTER generate_code | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = await _load_model(store, state)
         model.retry_count = state.get("retry_count", model.retry_count)
         model.retry_brief = state.get("retry_brief")
         model.validation_failure = state.get("validation_failure")
         result = await nodes.generate_code(model)
-        return result.model_dump(exclude_none=False)
+        out = result.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  generate_code | run_id=%s | status=%s | current_agent=%s",
+            out.get("run_id"), out.get("status"), out.get("current_agent"),
+        )
+        return out
 
     async def increment_retry(state: RunState) -> RunState:
+        logger.info(
+            "GRAPH ENTER increment_retry | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = await _load_model(store, state)
         model.retry_count += 1
         model.status = "validation_retry"
         await store.save_state(model)
-        return model.model_dump(exclude_none=False)
+        out = model.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  increment_retry | run_id=%s | status=%s | current_agent=%s | retry=%d",
+            out.get("run_id"), out.get("status"), out.get("current_agent"), model.retry_count,
+        )
+        return out
 
     async def validate_mutation(state: RunState) -> RunState:
+        logger.info(
+            "GRAPH ENTER validate_mutation | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = await _load_model(store, state)
         result = await nodes.validate_mutation(model)
-        return result.model_dump(exclude_none=False)
+        out = result.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  validate_mutation | run_id=%s | status=%s | current_agent=%s",
+            out.get("run_id"), out.get("status"), out.get("current_agent"),
+        )
+        return out
 
     async def validate_security(state: RunState) -> RunState:
+        logger.info(
+            "GRAPH ENTER validate_security | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = await _load_model(store, state)
         result = await nodes.validate_security(model)
-        return result.model_dump(exclude_none=False)
+        out = result.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  validate_security | run_id=%s | status=%s | current_agent=%s",
+            out.get("run_id"), out.get("status"), out.get("current_agent"),
+        )
+        return out
 
     async def route_pr(state: RunState) -> RunState:
         from backend.orchestrator.trust_gating import apply_trust_gates_before_pr
 
+        logger.info(
+            "GRAPH ENTER route_pr | run_id=%s | status=%s | current_agent=%s",
+            state.get("run_id"), state.get("status"), state.get("current_agent"),
+        )
         model = await _load_model(store, state)
         model = apply_trust_gates_before_pr(model, settings.max_retries)
         await store.save_state(model)
         result = await nodes.route_pr(model)
-        return result.model_dump(exclude_none=False)
+        out = result.model_dump(exclude_none=False)
+        logger.info(
+            "GRAPH EXIT  route_pr | run_id=%s | status=%s | current_agent=%s",
+            out.get("run_id"), out.get("status"), out.get("current_agent"),
+        )
+        return out
 
     graph.add_node("prepare_repo", prepare_repo)
     graph.add_node("parallel_intel", parallel_intel)

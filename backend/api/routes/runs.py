@@ -290,21 +290,26 @@ async def get_cve_report(
     store: Annotated[RedisStore, Depends(get_store)],
 ) -> dict:
     """Return CVE reachability report produced by A2 (Dependency Analyzer)."""
+    try:
+        cached = await store.get_json(run_id, "cve")
 
-    cached = await store.get_json(run_id, "cve")
+        if cached is not None:
+            return cached
 
-    if cached is not None:
-        return cached
+        state = await store.load_state(run_id)
 
-    state = await store.load_state(run_id)
+        if not state:
+            raise HTTPException(
+                status_code=404,
+                detail="Run not found",
+            )
 
-    if not state:
-        raise HTTPException(
-            status_code=404,
-            detail="Run not found",
-        )
-
-    return state.cve_report or {}
+        return state.cve_report or {}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("GET /runs/%s/cve failed", run_id)
+        raise
 
 
 @router.get("/{run_id}/static")
@@ -313,21 +318,26 @@ async def get_static_report(
     store: Annotated[RedisStore, Depends(get_store)],
 ) -> dict:
     """Return consensus static analysis report produced by A3."""
+    try:
+        cached = await store.get_json(run_id, "static")
 
-    cached = await store.get_json(run_id, "static")
+        if cached is not None:
+            return cached
 
-    if cached is not None:
-        return cached
+        state = await store.load_state(run_id)
 
-    state = await store.load_state(run_id)
+        if not state:
+            raise HTTPException(
+                status_code=404,
+                detail="Run not found",
+            )
 
-    if not state:
-        raise HTTPException(
-            status_code=404,
-            detail="Run not found",
-        )
-
-    return state.static_report or {}
+        return state.static_report or {}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("GET /runs/%s/static failed", run_id)
+        raise
 
 
 @router.get("/{run_id}/blast")
@@ -336,16 +346,21 @@ async def get_blast_graph(
     store: Annotated[RedisStore, Depends(get_store)],
 ) -> dict:
     """Return blast radius graph produced by A5."""
+    try:
+        state = await store.load_state(run_id)
 
-    state = await store.load_state(run_id)
+        if not state:
+            raise HTTPException(
+                status_code=404,
+                detail="Run not found",
+            )
 
-    if not state:
-        raise HTTPException(
-            status_code=404,
-            detail="Run not found",
-        )
-
-    return state.blast_graph or {}
+        return state.blast_graph or {}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("GET /runs/%s/blast failed", run_id)
+        raise
 
 
 @router.get("/{run_id}/fix-plan")
@@ -354,16 +369,21 @@ async def get_fix_plan(
     store: Annotated[RedisStore, Depends(get_store)],
 ) -> dict:
     """Return ordered fix DAG produced by A6 (Repair Planner)."""
+    try:
+        state = await store.load_state(run_id)
 
-    state = await store.load_state(run_id)
+        if not state:
+            raise HTTPException(
+                status_code=404,
+                detail="Run not found",
+            )
 
-    if not state:
-        raise HTTPException(
-            status_code=404,
-            detail="Run not found",
-        )
-
-    return state.fix_dag or {}
+        return state.fix_dag or {}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("GET /runs/%s/fix-plan failed", run_id)
+        raise
 
 
 @router.get("/{run_id}/patches")
@@ -372,21 +392,26 @@ async def get_patches(
     store: Annotated[RedisStore, Depends(get_store)],
 ) -> dict:
     """Return generated patch bundle produced by A7 (Code Generation)."""
+    try:
+        cached = await store.get_json(run_id, "patches")
 
-    cached = await store.get_json(run_id, "patches")
+        if cached is not None:
+            return cached
 
-    if cached is not None:
-        return cached
+        state = await store.load_state(run_id)
 
-    state = await store.load_state(run_id)
+        if not state:
+            raise HTTPException(
+                status_code=404,
+                detail="Run not found",
+            )
 
-    if not state:
-        raise HTTPException(
-            status_code=404,
-            detail="Run not found",
-        )
-
-    return state.patch_bundle or {}
+        return state.patch_bundle or {}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("GET /runs/%s/patches failed", run_id)
+        raise
 
 
 @router.get("/{run_id}/human-review")
@@ -395,16 +420,21 @@ async def get_human_review_files(
     store: Annotated[RedisStore, Depends(get_store)],
 ) -> dict:
     """Return files flagged for human review by A5 (Blast Radius)."""
+    try:
+        state = await store.load_state(run_id)
 
-    state = await store.load_state(run_id)
+        if not state:
+            raise HTTPException(
+                status_code=404,
+                detail="Run not found",
+            )
 
-    if not state:
-        raise HTTPException(
-            status_code=404,
-            detail="Run not found",
-        )
-
-    return {
-        "run_id": run_id,
-        "files": state.human_review_files or [],
-    }
+        return {
+            "run_id": run_id,
+            "files": state.human_review_files or [],
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("GET /runs/%s/human-review failed", run_id)
+        raise
