@@ -2,7 +2,7 @@ import json
 from typing import TypeVar
 
 from anthropic import AsyncAnthropic
-from mistralai.client import Mistral
+from mistralai import Mistral
 from pydantic import BaseModel
 
 from backend.config import Settings, get_settings
