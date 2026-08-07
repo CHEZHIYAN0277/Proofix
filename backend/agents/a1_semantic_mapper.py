@@ -4,8 +4,13 @@ from datetime import datetime
 from pathlib import Path
 
 from backend.agents.base import AgentBase
+from backend.agents.repository_intelligence import load_repository_intelligence
 from backend.models.sig import FileNode, SemanticIntentGraph
-from backend.services.ast_import_graph import build_import_graph, compute_criticality
+from backend.services.ast_import_graph import (
+    build_import_graph,
+    build_import_graph_reusing,
+    compute_criticality,
+)
 from backend.services.git_service import get_churn_weights
 from backend.services.repo_layout import discover_source_roots
 from backend.services.role_classifier import (
@@ -60,6 +65,8 @@ class A1SemanticMapperAgent(AgentBase):
             "llm_ms": 0,
             "total_a1_ms": 0,
             "parse_count": 0,
+            "repository_index_available": False,
+            "repository_index_reused_parses": 0,
         }
 
         repo_hash = compute_repo_hash(repo, source_roots)
@@ -95,7 +102,17 @@ class A1SemanticMapperAgent(AgentBase):
 
         if cache_payload is None:
             t_ast = time.monotonic()
-            graph, parsed_modules = build_import_graph(repo, source_roots=source_roots)
+            # A0.5 already parsed these files this run. Reusing that parse is
+            # pure saving: the graph it produces is identical either way.
+            indexed_modules = await self._indexed_modules(state)
+            metrics["repository_index_available"] = indexed_modules is not None
+            if indexed_modules:
+                graph, parsed_modules, reused = build_import_graph_reusing(
+                    repo, source_roots, indexed_modules
+                )
+                metrics["repository_index_reused_parses"] = reused
+            else:
+                graph, parsed_modules = build_import_graph(repo, source_roots=source_roots)
             metrics["ast_build_ms"] = int((time.monotonic() - t_ast) * 1000)
             metrics["parse_count"] = len(parsed_modules)
 
@@ -126,6 +143,8 @@ class A1SemanticMapperAgent(AgentBase):
                     ambiguous_queue,
                     settings=self.settings,
                     ast_predictions=local_predictions,
+                    run_id=state.run_id,
+                    agent_id=self.agent_id,
                 )
                 metrics["llm_ms"] = int((time.monotonic() - t_llm) * 1000)
                 if llm_results:
@@ -214,6 +233,24 @@ class A1SemanticMapperAgent(AgentBase):
             },
         )
         return state
+
+
+    async def _indexed_modules(self, state: RunStateModel) -> dict | None:
+        """Parsed modules from the repository index, or None when unavailable.
+
+        Failure to load is silent by design — this is an optimisation, and A1
+        must build the same SIG with or without it.
+        """
+        if not (
+            self.settings.repository_intelligence_enabled
+            and self.settings.repository_reuse_in_a1
+        ):
+            return None
+        try:
+            index = await load_repository_intelligence(self.store, state.run_id, self.settings)
+        except Exception:  # noqa: BLE001 — never fail A1 for a cache read
+            return None
+        return index.parsed_modules if index and index.parsed_modules else None
 
 
 def _build_imported_by(import_map: dict[str, list[str]]) -> dict[str, list[str]]:

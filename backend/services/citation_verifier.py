@@ -7,6 +7,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
+from backend.services.path_resolution import (
+    match_key,
+    normalize_path_token,
+    path_candidates,
+    relative_to_repo,
+)
+
 FUNCTION_NAME_RE = re.compile(r"\b([a-z_][a-z0-9_]*)\s*\(")
 LINE_WINDOW_OFFSETS = (0, 1, 2, 3, 5)
 
@@ -50,21 +57,6 @@ class CitationMetrics:
             self.unresolved += 1
 
 
-def normalize_path_token(raw_path: str) -> str:
-    cleaned = str(raw_path).strip().strip("`\"'")
-    cleaned = cleaned.replace("\\", "/")
-    if cleaned.startswith("./"):
-        cleaned = cleaned[2:]
-    for prefix in ("a/", "b/"):
-        if cleaned.startswith(prefix):
-            cleaned = cleaned[len(prefix) :]
-    cleaned = cleaned.lstrip("/")
-    parts = [part for part in cleaned.split("/") if part and part != "."]
-    if not parts:
-        return ""
-    return PurePosixPath(*parts).as_posix().casefold()
-
-
 def _sig_file_keys(sig: dict | None) -> list[str]:
     if not sig:
         return []
@@ -72,59 +64,6 @@ def _sig_file_keys(sig: dict | None) -> list[str]:
     if isinstance(files, dict):
         return list(files.keys())
     return []
-
-
-def _match_sig_file_keys(candidate: str, sig_files: list[str]) -> str | None:
-    norm = normalize_path_token(candidate)
-    if not norm or not sig_files:
-        return None
-
-    lowered = {key: key.casefold() for key in sig_files}
-    for key, folded in lowered.items():
-        if folded == norm:
-            return key
-
-    suffix_matches = [
-        key for key, folded in lowered.items() if folded.endswith(f"/{norm}") or folded == norm
-    ]
-    if len(suffix_matches) == 1:
-        return suffix_matches[0]
-
-    base = PurePosixPath(norm).name
-    base_matches = [
-        key for key, folded in lowered.items() if folded.endswith(f"/{base}") or folded == base
-    ]
-    if len(base_matches) == 1:
-        return base_matches[0]
-
-    return None
-
-
-def _path_candidates(raw_path: str) -> list[str]:
-    text = str(raw_path).strip().replace("\\", "/")
-    if text.startswith("./"):
-        text = text[2:]
-    for prefix in ("a/", "b/"):
-        if text.startswith(prefix):
-            text = text[len(prefix) :]
-    text = text.lstrip("/")
-
-    candidates: list[str] = []
-    seen: set[str] = set()
-
-    def add(value: str) -> None:
-        norm = normalize_path_token(value)
-        if norm and norm not in seen:
-            seen.add(norm)
-            candidates.append(value.replace("\\", "/").lstrip("/"))
-
-    add(text)
-    parts = PurePosixPath(text).parts
-    for idx, part in enumerate(parts):
-        if part in ("tests", "test", "vulnapi", "src", "app", "backend") or part.endswith(".py"):
-            add(str(PurePosixPath(*parts[idx:])))
-    add(PurePosixPath(text).name)
-    return candidates
 
 
 def _rglob_matches(repo_path: Path, basename: str) -> list[str]:
@@ -169,27 +108,26 @@ def resolve_citation_path(
     repo = repo_path.resolve()
     sig_files = _sig_file_keys(sig)
 
-    for candidate in _path_candidates(raw_path):
+    for candidate in path_candidates(raw_path):
         full = repo / candidate
         if full.is_file():
             return str(full.relative_to(repo)).replace("\\", "/")
 
-        matched = _match_sig_file_keys(candidate, sig_files)
+        matched = match_key(candidate, sig_files)
         if matched and (repo / matched).is_file():
             return matched
 
-    basename = PurePosixPath(str(raw_path).replace("\\", "/")).name
-    rglob = _rglob_matches(repo, basename)
+    name = PurePosixPath(str(raw_path).replace("\\", "/")).name
+    rglob = _rglob_matches(repo, name)
     picked = _pick_rglob_match(raw_path, rglob)
     if picked:
         return picked
 
     absolute = Path(str(raw_path).replace("\\", "/"))
     if absolute.is_absolute() and absolute.is_file():
-        try:
-            return str(absolute.resolve().relative_to(repo)).replace("\\", "/")
-        except ValueError:
-            pass
+        relative = relative_to_repo(repo, raw_path)
+        if relative:
+            return relative
 
     return None
 

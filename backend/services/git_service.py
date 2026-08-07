@@ -1,6 +1,5 @@
 import hashlib
 import shutil
-import subprocess
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path

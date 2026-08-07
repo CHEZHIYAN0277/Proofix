@@ -1,5 +1,6 @@
 import math
 from pathlib import Path
+from typing import NamedTuple
 
 from backend.agents.base import AgentBase
 from backend.models.findings import Finding, StaticAnalysisReport
@@ -7,6 +8,28 @@ from backend.services.repo_layout import get_scan_targets, iter_python_files, re
 from backend.services.sig_helpers import get_file_criticality, get_sig_or_defaults
 from backend.services.subprocess_runner import parse_json_safe, run_command
 from backend.state.schema import RunStateModel
+
+
+class ScanOutcome(NamedTuple):
+    """Result of one scanner invocation.
+
+    `executed` separates the two cases the agent previously conflated: a scanner
+    that ran and legitimately found nothing, versus a scanner that never ran.
+    Only the latter may fall back to heuristics, and only in stub mode — a clean
+    repository must produce an empty finding list, never a synthesized one.
+    """
+
+    executed: bool
+    findings: list[dict]
+    detail: str = ""
+
+    @classmethod
+    def clean(cls, findings: list[dict]) -> "ScanOutcome":
+        return cls(executed=True, findings=findings)
+
+    @classmethod
+    def failed(cls, detail: str) -> "ScanOutcome":
+        return cls(executed=False, findings=[], detail=detail)
 
 
 class A3StaticAnalysisAgent(AgentBase):
@@ -25,20 +48,29 @@ class A3StaticAnalysisAgent(AgentBase):
         raw_findings: list[dict] = []
         baseline: dict = {"bandit": [], "semgrep": [], "ruff": []}
 
-        bandit_findings = await self._run_bandit(repo, scan_targets)
-        semgrep_findings = await self._run_semgrep(repo, scan_targets)
-        ruff_findings = await self._run_ruff(repo, scan_targets)
+        bandit = self._resolve_outcome(
+            await self._run_bandit(repo, scan_targets),
+            lambda: self._stub_bandit(repo, scan_targets),
+        )
+        semgrep = self._resolve_outcome(
+            await self._run_semgrep(repo, scan_targets),
+            lambda: self._stub_semgrep(repo, scan_targets),
+        )
+        ruff = self._resolve_outcome(await self._run_ruff(repo, scan_targets), list)
 
-        baseline["bandit"] = bandit_findings
-        baseline["semgrep"] = semgrep_findings
-        baseline["ruff"] = ruff_findings
+        scanner_status = {
+            "bandit": self._status_label(bandit),
+            "semgrep": self._status_label(semgrep),
+            "ruff": self._status_label(ruff),
+        }
 
-        for f in bandit_findings:
-            raw_findings.append({**f, "tool": "bandit"})
-        for f in semgrep_findings:
-            raw_findings.append({**f, "tool": "semgrep"})
-        for f in ruff_findings:
-            raw_findings.append({**f, "tool": "ruff"})
+        baseline["bandit"] = bandit.findings
+        baseline["semgrep"] = semgrep.findings
+        baseline["ruff"] = ruff.findings
+
+        for tool, outcome in (("bandit", bandit), ("semgrep", semgrep), ("ruff", ruff)):
+            for f in outcome.findings:
+                raw_findings.append({**f, "tool": tool})
 
         clustered = self._cluster_findings(raw_findings)
         prioritized = self._rank_findings(clustered, sig, default_crit)[:8]
@@ -59,20 +91,50 @@ class A3StaticAnalysisAgent(AgentBase):
                 "prioritized_count": len(prioritized),
                 "source_roots": source_roots,
                 "scan_targets": [str(p.resolve().relative_to(repo)) for p in scan_targets],
+                "scanner_status": scanner_status,
             },
         )
         return state
 
-    async def _run_bandit(self, repo: Path, scan_targets: list[Path]) -> list[dict]:
+    def _resolve_outcome(self, outcome: ScanOutcome, stub) -> ScanOutcome:
+        """Apply the stub fallback only to a scanner that failed to execute.
+
+        A scanner that ran and reported nothing yields an empty list. Fabricating
+        findings for a clean repository would give A4 a root cause to explain and
+        A7 a file to patch that no tool ever flagged.
+        """
+        if outcome.executed:
+            return outcome
+        if self.settings.stub_mode:
+            return ScanOutcome(executed=False, findings=stub(), detail=outcome.detail)
+        return outcome
+
+    @staticmethod
+    def _status_label(outcome: ScanOutcome) -> str:
+        if outcome.executed:
+            return "ok" if outcome.findings else "ok_no_findings"
+        return "stubbed" if outcome.findings else "unavailable"
+
+    async def _run_bandit(self, repo: Path, scan_targets: list[Path]) -> ScanOutcome:
         if not scan_targets:
-            return self._stub_bandit(repo, [])
+            return ScanOutcome.failed("no scan targets resolved")
         cmd = ["bandit", "-f", "json", "-q"]
         for target in scan_targets:
             cmd.extend(["-r", str(target)])
-        code, stdout, _stderr = await run_command(cmd, cwd=repo, timeout=60)
-        if code == -1 or (code != 0 and not stdout.strip()):
-            return self._stub_bandit(repo, scan_targets)
+        code, stdout, stderr = await run_command(cmd, cwd=repo, timeout=60)
+        if code == -1:
+            return ScanOutcome.failed(stderr.strip() or "bandit could not be executed")
+
         data = parse_json_safe(stdout)
+        # bandit exits 0 with no issues and 1 with issues; anything else that
+        # also produced no JSON envelope means the scan itself did not complete.
+        if not isinstance(data, dict) or "results" not in data:
+            if code not in (0, 1):
+                return ScanOutcome.failed(stderr.strip() or f"bandit exited {code}")
+            if not stdout.strip():
+                return ScanOutcome.failed("bandit produced no output")
+            return ScanOutcome.failed("bandit output could not be parsed")
+
         results = []
         for r in data.get("results", []):
             results.append({
@@ -81,7 +143,7 @@ class A3StaticAnalysisAgent(AgentBase):
                 "message": r.get("issue_text", ""),
                 "severity": {"HIGH": 0.9, "MEDIUM": 0.6, "LOW": 0.3}.get(r.get("issue_severity", "LOW"), 0.3),
             })
-        return results if results else self._stub_bandit(repo, scan_targets)
+        return ScanOutcome.clean(results)
 
     def _roots_from_targets(self, repo: Path, scan_targets: list[Path]) -> list[str]:
         repo = repo.resolve()
@@ -108,15 +170,21 @@ class A3StaticAnalysisAgent(AgentBase):
                 findings.append({"file": rel, "line": 1, "message": "hardcoded secret", "severity": 0.8})
         return findings
 
-    async def _run_semgrep(self, repo: Path, scan_targets: list[Path]) -> list[dict]:
+    async def _run_semgrep(self, repo: Path, scan_targets: list[Path]) -> ScanOutcome:
         if not scan_targets:
-            return self._stub_semgrep(repo, [])
+            return ScanOutcome.failed("no scan targets resolved")
         cmd = ["semgrep", "--config=auto", "--json"]
         cmd.extend(str(t) for t in scan_targets)
-        code, stdout, _stderr = await run_command(cmd, cwd=repo, timeout=90)
-        if code == -1 or not stdout.strip():
-            return self._stub_semgrep(repo, scan_targets)
+        code, stdout, stderr = await run_command(cmd, cwd=repo, timeout=90)
+        if code == -1:
+            return ScanOutcome.failed(stderr.strip() or "semgrep could not be executed")
+        if not stdout.strip():
+            return ScanOutcome.failed(stderr.strip() or "semgrep produced no output")
+
         data = parse_json_safe(stdout)
+        if not isinstance(data, dict) or "results" not in data:
+            return ScanOutcome.failed("semgrep output could not be parsed")
+
         results = []
         for r in data.get("results", []):
             results.append({
@@ -125,7 +193,7 @@ class A3StaticAnalysisAgent(AgentBase):
                 "message": r.get("extra", {}).get("message", ""),
                 "severity": 0.7,
             })
-        return results if results else self._stub_semgrep(repo, scan_targets)
+        return ScanOutcome.clean(results)
 
     def _stub_semgrep(self, repo: Path, scan_targets: list[Path]) -> list[dict]:
         findings = []
@@ -147,12 +215,15 @@ class A3StaticAnalysisAgent(AgentBase):
                 })
         return findings
 
-    async def _run_ruff(self, repo: Path, scan_targets: list[Path]) -> list[dict]:
+    async def _run_ruff(self, repo: Path, scan_targets: list[Path]) -> ScanOutcome:
         if not scan_targets:
-            return []
+            return ScanOutcome.failed("no scan targets resolved")
         cmd = ["ruff", "check", "--output-format=json"]
         cmd.extend(str(t) for t in scan_targets)
-        _code, stdout, _ = await run_command(cmd, cwd=repo, timeout=60)
+        code, stdout, stderr = await run_command(cmd, cwd=repo, timeout=60)
+        if code == -1:
+            return ScanOutcome.failed(stderr.strip() or "ruff could not be executed")
+
         data = parse_json_safe(stdout) if stdout.strip() else []
         if isinstance(data, dict):
             data = data.get("results", [])
@@ -164,7 +235,7 @@ class A3StaticAnalysisAgent(AgentBase):
                 "message": r.get("message", ""),
                 "severity": 0.4,
             })
-        return results
+        return ScanOutcome.clean(results)
 
     def _cluster_findings(self, raw: list[dict]) -> list[dict]:
         clusters: dict[str, dict] = {}

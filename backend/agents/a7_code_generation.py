@@ -6,16 +6,25 @@ from backend.agents.a7_patch_engine import (
     apply_stub_plan,
     build_llm_prompt,
     build_patch_plans,
-    contract_from_plan,
 )
+from backend.agents.a5_5_context_engineering import load_context_package
 from backend.agents.base import AgentBase
+from backend.agents.repository_intelligence import load_repository_intelligence
 from backend.models.blast import BlastGraphResult
+from backend.models.context import ContextPackage
 from backend.models.patch import BehavioralContract, PatchBundle, PatchCandidate, PatchPlan
 from backend.models.root_cause import RootCauseBrief
 from backend.models.validation import RetryBrief
 from backend.services.git_service import get_style_exemplar
 from backend.services.llm import LLMService
 from backend.services.mci_verifier import generate_diff_from_patches
+from backend.models.repository_graph import RepairQuery
+from backend.services.repair_memory import (
+    classify_bug_type,
+    content_hash,
+    find_similar_repairs,
+    summarize_matches,
+)
 from backend.services.retry_brief_builder import retry_reason_from_brief
 from backend.services.runtime_patch_prompt import (
     COMPLETE_FILE_RETRY_INSTRUCTION,
@@ -44,6 +53,9 @@ class A7CodeGenerationAgent(AgentBase):
                 await self.emit_status(state, "failed", "Could not acquire patch lock")
                 return state
 
+            context_package = await load_context_package(self.store, state.run_id)
+            intelligence = await self._load_intelligence(state)
+            self._repository_id_cache = _learning_repository_id(state)
             root_cause = self._parse_root_cause(state.root_cause or {})
             blast = self._parse_blast_graph(state.blast_graph or {})
             fix_dag = state.fix_dag or {}
@@ -85,7 +97,14 @@ class A7CodeGenerationAgent(AgentBase):
                     previous_patch,
                     repo,
                     state.retry_count,
+                    context_package,
+                    state.run_id,
                 )
+                # Metadata only: recorded alongside the attempt, never added to
+                # the prompt. See `_repair_matches`.
+                prior = self._repair_matches(intelligence, plan, original, state)
+                if prior:
+                    plan_metrics["prior_repairs"] = prior
                 metrics.append(plan_metrics)
 
                 if llm_output is None:
@@ -161,6 +180,78 @@ class A7CodeGenerationAgent(AgentBase):
             await self.store.release_lock(state.run_id)
         return state
 
+    def _learned_conventions(self, plan: PatchPlan) -> str:
+        """Repository conventions learned from prior repairs, or "".
+
+        Never raises and never blocks: a learning fault costs A7 some context,
+        which is exactly the pre-Phase-6 behaviour.
+        """
+        if not (
+            self.settings.learning_enabled and self.settings.learning_influence_prompts
+        ):
+            return ""
+        try:
+            from backend.services.learning_pipeline import get_learning_pipeline
+
+            pipeline = get_learning_pipeline(self.settings)
+            return pipeline.directive_block(
+                self._learning_repository_id, getattr(plan, "bug_category", "") or ""
+            )
+        except Exception:  # noqa: BLE001 — context is advisory
+            return ""
+
+    @property
+    def _learning_repository_id(self) -> str:
+        return getattr(self, "_repository_id_cache", "")
+
+    async def _load_intelligence(self, state: RunStateModel):
+        if not (
+            self.settings.repository_intelligence_enabled
+            and self.settings.repair_memory_enabled
+        ):
+            return None
+        try:
+            return await load_repository_intelligence(self.store, state.run_id, self.settings)
+        except Exception:  # noqa: BLE001 — patch generation never depends on this
+            return None
+
+    def _repair_matches(
+        self,
+        intelligence,
+        plan: PatchPlan,
+        original: str,
+        state: RunStateModel,
+    ) -> list[dict]:
+        """Historical repairs resembling this one, as prompt-free metadata.
+
+        Deliberately not fed into the prompt. A past patch shown to the model
+        competes with the runtime evidence for this failure, and the evidence
+        must always win — so this travels in the metrics payload and the proof
+        trail only, where a human can see what the pipeline had seen before.
+        """
+        if intelligence is None or not intelligence.repair_memory.records:
+            return []
+
+        file_path = plan.target_file or plan.file
+        query = RepairQuery(
+            repository_hash=intelligence.repository_hash,
+            file=file_path,
+            file_hash=content_hash(original),
+            function=plan.target_function,
+            function_hash="",
+            bug_type=classify_bug_type(
+                state.reproduction,
+                state.root_cause,
+                (state.static_report or {}).get("prioritized"),
+            ),
+        )
+        matches = find_similar_repairs(
+            intelligence.repair_memory,
+            query,
+            limit=self.settings.repair_memory_max_matches,
+        )
+        return summarize_matches(matches)
+
     def _parse_root_cause(self, data: dict) -> RootCauseBrief:
         return RootCauseBrief.model_validate(data) if data else RootCauseBrief()
 
@@ -224,6 +315,8 @@ class A7CodeGenerationAgent(AgentBase):
         previous_patch: dict | None,
         repo: Path,
         retry_count: int,
+        context_package: ContextPackage | None = None,
+        run_id: str = "",
     ) -> tuple[PatchLLMOutput | None, dict]:
         retry_number = retry_count
         metrics = {
@@ -243,9 +336,13 @@ class A7CodeGenerationAgent(AgentBase):
             metrics["semantic_diff"] = has_semantic_diff(original, output.patched_content)
             return output, metrics
 
-        llm = LLMService(self.settings)
+        llm = LLMService(
+            self.settings, run_id=run_id, agent_id=self.agent_id, retry_count=retry_count
+        )
         repo_context = str(repo)
-        relevant_code = extract_relevant_code(original, plan.target_function)
+        relevant_code, context_source = self._focus_section(plan, original, context_package)
+        metrics["context_source"] = context_source
+        metrics["focus_chars"] = len(relevant_code)
 
         if uses_runtime_prompt(plan):
             prompt = build_runtime_patch_prompt(
@@ -253,6 +350,14 @@ class A7CodeGenerationAgent(AgentBase):
             )
         else:
             prompt = build_llm_prompt(plan, original, style_exemplar, repo_context)
+
+        # Learned conventions, appended as context. Deliberately last and
+        # deliberately additive: the prompt above is unchanged, and the block
+        # states in its own text that runtime evidence outranks it.
+        learned = self._learned_conventions(plan)
+        if learned:
+            prompt += f"\n\n{learned}"
+            metrics["learning_directives"] = learned.count("\n- ")
 
         if retry_brief and retry_count >= 1:
             prompt += build_retry_prompt_section(
@@ -279,6 +384,30 @@ class A7CodeGenerationAgent(AgentBase):
         except Exception:
             metrics["retry_reason"] = "llm_error"
             return apply_stub_plan(plan, original), metrics
+
+    def _focus_section(
+        self,
+        plan: PatchPlan,
+        original: str,
+        context_package: ContextPackage | None,
+    ) -> tuple[str, str]:
+        """Choose the 'relevant code' block the model reasons over.
+
+        The A5.5 focused context replaces only this section. The complete
+        original file is still passed separately as `complete_original`, so the
+        reconstruction contract and the integrity guard are unchanged: the model
+        is still required to return every definition the original contained.
+        """
+        if (
+            context_package is not None
+            and context_package.prefer_focused
+            and context_package.focused_context
+            and context_package.target_file == plan.file
+            and context_package.privacy_guard_status != "failed"
+        ):
+            return context_package.focused_context, "a5_5_context_package"
+
+        return extract_relevant_code(original, plan.target_function), "a7_local_extraction"
 
     async def _call_llm_with_integrity_guard(
         self,
@@ -318,3 +447,13 @@ class A7CodeGenerationAgent(AgentBase):
             return True
         except SyntaxError:
             return False
+
+
+def _learning_repository_id(state: RunStateModel) -> str:
+    """Repository identity shared with the Phase 3 index and the learning layer."""
+    try:
+        from backend.services.repair_memory import repository_id
+
+        return repository_id(state.repo_path or state.repo_clone_path or "")
+    except Exception:  # noqa: BLE001
+        return ""

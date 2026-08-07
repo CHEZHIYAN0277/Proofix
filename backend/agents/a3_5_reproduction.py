@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from backend.agents.base import AgentBase
-from backend.models.reproduction import ReproductionResult, ReproductionStatus
+from backend.models.reproduction import ReproductionStatus
 from backend.services.reproduction_commands import build_reproduction_command
 from backend.services.reproduction_parser import (
     extract_failed_nodeids,

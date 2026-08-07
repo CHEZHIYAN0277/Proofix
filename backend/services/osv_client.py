@@ -3,8 +3,6 @@ from pathlib import Path
 
 import httpx
 
-from backend.services.subprocess_runner import parse_json_safe, run_command
-
 
 async def query_osv(package: str, version: str) -> list[dict]:
     url = "https://api.osv.dev/v1/query"

@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+from backend.agents.a5_5_context_engineering import load_context_package
 from backend.agents.base import AgentBase
 from backend.models.cve import CVEReachabilityReport
 from backend.models.fix_dag import FixDAGPlan
@@ -30,7 +31,7 @@ class A6FixDAGPlannerAgent(AgentBase):
         cve_data = state.cve_report or {}
         sig_data = state.sig or await self.store.get_json(state.run_id, "sig")
 
-        scope_files = blast.get("auto_patch_scope", [])
+        scope_files = await self._scope_files(state, blast)
         findings = static.get("prioritized", [])
         cve_report = CVEReachabilityReport.model_validate(cve_data) if cve_data else CVEReachabilityReport()
         sig = SemanticIntentGraph.model_validate(sig_data) if sig_data else None
@@ -64,8 +65,34 @@ class A6FixDAGPlannerAgent(AgentBase):
         )
         return state
 
+    async def _scope_files(self, state: RunStateModel, blast: dict) -> list[str]:
+        """Files to plan fixes over, ordered by A5.5 relevance when available.
+
+        The *set* is always exactly `auto_patch_scope` — A5.5 reorders, it never
+        adds or removes, so fix-node membership is unchanged. Any ranked file
+        outside the scope is ignored, and any scope file A5.5 did not rank keeps
+        its original position at the end.
+        """
+        auto_scope = blast.get("auto_patch_scope", [])
+        if not auto_scope:
+            return auto_scope
+
+        package = await load_context_package(self.store, state.run_id)
+        if package is None:
+            return auto_scope
+
+        scope_set = set(auto_scope)
+        ordered = [f for f in package.ranked_paths() if f in scope_set]
+        ordered += [f for f in auto_scope if f not in ordered]
+        return ordered
+
     async def _llm_order(self, nodes, state: RunStateModel) -> list[str]:
-        llm = LLMService(self.settings)
+        llm = LLMService(
+            self.settings,
+            run_id=state.run_id,
+            agent_id=self.agent_id,
+            retry_count=state.retry_count,
+        )
         prompt = (
             "Order these fixes respecting dependencies (dependency upgrades before dependent app code):\n"
             f"{[n.model_dump() for n in nodes]}"

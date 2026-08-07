@@ -65,6 +65,38 @@ def build_import_graph(
     return graph, parsed_modules
 
 
+def build_import_graph_reusing(
+    repo_path: Path,
+    source_roots: list[str] | None,
+    cached_modules: dict[str, ParsedModule] | None,
+) -> tuple[ImportGraph, dict[str, ParsedModule], int]:
+    """`build_import_graph`, but taking already-parsed modules where available.
+
+    The file list, its order, and each `ParsedModule` are exactly what
+    `build_import_graph` would produce — the same parser ran over the same bytes
+    — so the resulting graph is identical and only the parse is skipped. A cache
+    miss on any file falls through to parsing it, so a partial or stale supply
+    degrades to the original behaviour rather than to a wrong graph.
+
+    Returns the graph, the parsed modules, and how many parses were avoided.
+    """
+    repo_path = repo_path.resolve()
+    supplied = cached_modules or {}
+    parsed_modules: dict[str, ParsedModule] = {}
+    reused = 0
+
+    for rel in _iter_production_py_files(repo_path, source_roots):
+        module = supplied.get(rel) or supplied.get(rel.replace("\\", "/"))
+        if module is not None:
+            reused += 1
+        else:
+            module = parse_python_file(repo_path, rel)
+        if module is not None:
+            parsed_modules[rel] = module
+
+    return import_graph_from_parsed(parsed_modules), parsed_modules, reused
+
+
 def module_to_files(import_map: dict[str, list[str]], module: str) -> list[str]:
     """Find files that import a given module name."""
     result = []

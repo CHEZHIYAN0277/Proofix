@@ -52,7 +52,8 @@ class A4EvidenceInvestigatorAgent(AgentBase):
             )
         else:
             brief = await self._llm_brief(
-                stack, findings, cve_report, reproduction, evidence_refs, cve_context, repo
+                stack, findings, cve_report, reproduction, evidence_refs, cve_context, repo,
+                run_id=state.run_id, retry_count=state.retry_count,
             )
 
         brief.reinvestigation_count = prior_count
@@ -138,8 +139,13 @@ class A4EvidenceInvestigatorAgent(AgentBase):
         evidence_refs: list,
         cve_context: list[str],
         repo: Path,
+        *,
+        run_id: str = "",
+        retry_count: int = 0,
     ) -> RootCauseBrief:
-        llm = LLMService(self.settings)
+        llm = LLMService(
+            self.settings, run_id=run_id, agent_id=self.agent_id, retry_count=retry_count
+        )
         critical_cves = [
             f"{r.get('cve_id')} ({r.get('package')})"
             for r in cve_report.get("findings", [])

@@ -7,7 +7,6 @@ from backend.services.proof_bundle import (
     generate_verification_workflow,
     proof_bundle_relative_path,
     workflow_relative_path,
-    write_proof_bundle,
 )
 
 

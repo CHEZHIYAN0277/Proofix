@@ -1,3 +1,11 @@
+"""Schema-aware facade over the LLM gateway.
+
+Agents (A1, A4, A6, A7) and `run_chat` keep calling `structured()` / `text()`
+exactly as before. Provider routing, retries, timeouts, and token/cost
+accounting now happen inside `LLMGateway`; this module only handles prompt
+framing and response parsing.
+"""
+
 import json
 from typing import TypeVar
 
@@ -6,8 +14,11 @@ from mistralai.client import Mistral
 from pydantic import BaseModel
 
 from backend.config import Settings, get_settings
+from backend.services.llm_gateway import LLMCallMetrics, LLMGateway
 
 T = TypeVar("T", bound=BaseModel)
+
+DEFAULT_SYSTEM = "You are a security-focused code analysis assistant. Respond with valid JSON only."
 
 
 def _extract_json(text: str) -> str:
@@ -18,89 +29,95 @@ def _extract_json(text: str) -> str:
     return text
 
 
-def _mistral_content(response) -> str:
-    choice = response.choices[0]
-    message = choice.message
-    content = getattr(message, "content", None)
-    if content is None and isinstance(message, dict):
-        content = message.get("content")
-    return content or ""
-
-
 class LLMService:
-    def __init__(self, settings: Settings | None = None):
+    """Schema handling plus the call context the gateway records.
+
+    `run_id`, `agent_id` and `retry_count` are bound once at construction
+    because the agent constructing this already knows all three, and passing
+    them per call is what got forgotten before: every audit event carried an
+    empty `run_id`, so run-scoped cost and provider queries returned nothing
+    despite the plumbing existing end to end.
+    """
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        gateway: LLMGateway | None = None,
+        *,
+        run_id: str = "",
+        agent_id: str = "",
+        retry_count: int = 0,
+    ):
         self.settings = settings or get_settings()
-        self._anthropic: AsyncAnthropic | None = None
-        self._mistral: Mistral | None = None
+        self.gateway = gateway or LLMGateway(self.settings)
+        self.run_id = run_id
+        self.agent_id = agent_id
+        self.retry_count = retry_count
+
+    # Client handles live on the gateway. These proxies keep the historical
+    # `service._anthropic = mock` injection point working for callers and tests.
+    @property
+    def _anthropic(self) -> AsyncAnthropic | None:
+        return self.gateway._anthropic
+
+    @_anthropic.setter
+    def _anthropic(self, client: AsyncAnthropic | None) -> None:
+        self.gateway._anthropic = client
+
+    @property
+    def _mistral(self) -> Mistral | None:
+        return self.gateway._mistral
+
+    @_mistral.setter
+    def _mistral(self, client: Mistral | None) -> None:
+        self.gateway._mistral = client
+
+    @property
+    def last_metrics(self) -> LLMCallMetrics | None:
+        """Observability for the most recent call made through this service."""
+        return self.gateway.last_metrics
 
     def _ensure_available(self) -> None:
-        if self.settings.stub_mode or not self.settings.llm_configured():
-            raise RuntimeError("LLM unavailable in stub mode — use agent stub paths")
-
-    @property
-    def _anthropic_client(self) -> AsyncAnthropic:
-        if self._anthropic is None:
-            self._anthropic = AsyncAnthropic(api_key=self.settings.anthropic_api_key)
-        return self._anthropic
-
-    @property
-    def _mistral_client(self) -> Mistral:
-        if self._mistral is None:
-            self._mistral = Mistral(api_key=self.settings.mistral_api_key)
-        return self._mistral
+        self.gateway.ensure_available()
 
     async def structured(
         self,
         prompt: str,
         schema: type[T],
-        system: str = "You are a security-focused code analysis assistant. Respond with valid JSON only.",
+        system: str = DEFAULT_SYSTEM,
+        *,
+        operation: str = "structured",
     ) -> T:
         self._ensure_available()
         schema_json = json.dumps(schema.model_json_schema(), indent=2)
         full_system = f"{system}\n\nRespond with JSON matching this schema:\n{schema_json}"
-        if self.settings.llm_provider == "mistral":
-            return await self._structured_mistral(prompt, schema, full_system)
-        return await self._structured_anthropic(prompt, schema, full_system)
 
-    async def _structured_anthropic(self, prompt: str, schema: type[T], system: str) -> T:
-        response = await self._anthropic_client.messages.create(
-            model=self.settings.anthropic_model,
-            max_tokens=4096,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
+        response = await self.gateway.complete(
+            prompt,
+            full_system,
+            operation=operation,
+            json_mode=True,
+            **self._call_context(),
         )
-        text = response.content[0].text
-        return schema.model_validate_json(_extract_json(text))
+        return schema.model_validate_json(_extract_json(response.text))
 
-    async def _structured_mistral(self, prompt: str, schema: type[T], system: str) -> T:
-        response = await self._mistral_client.chat.complete_async(
-            model=self.settings.mistral_model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-            max_tokens=4096,
-        )
-        text = _mistral_content(response)
-        return schema.model_validate_json(_extract_json(text))
-
-    async def text(self, prompt: str, system: str = "You are a helpful assistant.") -> str:
+    async def text(
+        self,
+        prompt: str,
+        system: str = "You are a helpful assistant.",
+        *,
+        operation: str = "text",
+    ) -> str:
         self._ensure_available()
-        if self.settings.llm_provider == "mistral":
-            response = await self._mistral_client.chat.complete_async(
-                model=self.settings.mistral_model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=4096,
-            )
-            return _mistral_content(response)
-        response = await self._anthropic_client.messages.create(
-            model=self.settings.anthropic_model,
-            max_tokens=4096,
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
+        response = await self.gateway.complete(
+            prompt, system, operation=operation, **self._call_context()
         )
-        return response.content[0].text
+        return response.text
+
+    def _call_context(self) -> dict[str, object]:
+        """Provenance attached to every call this service makes."""
+        return {
+            "run_id": self.run_id,
+            "agent_id": self.agent_id,
+            "retry_count": self.retry_count,
+        }

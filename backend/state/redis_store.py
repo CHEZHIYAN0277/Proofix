@@ -4,8 +4,10 @@ from typing import Any
 import redis.asyncio as aioredis
 
 from backend.config import Settings, get_settings
-from backend.state.events import AgentStatusEvent
-from backend.state.schema import RunState, RunStateModel, model_to_state, state_to_model
+from backend.state.events import AgentStatusEvent, RunLifecycleEvent
+from backend.state.schema import RunState, RunStateModel, state_to_model
+
+RUN_INDEX_KEY = "bugfix:runs:index"
 
 
 class RedisStore:
@@ -30,7 +32,22 @@ class RedisStore:
         key = f"{self._prefix(run_id)}:meta"
         await self.client.hset(key, mapping=meta)
         await self.client.expire(key, self.ttl)
+        await self.index_run(run_id, state.created_at.timestamp())
         return state
+
+    async def index_run(self, run_id: str, score: float) -> None:
+        """Record a run in the global index so the UI can list run history."""
+        await self.client.zadd(RUN_INDEX_KEY, {run_id: score})
+
+    async def list_run_ids(self, limit: int = 100) -> list[str]:
+        """Return run ids, most recent first."""
+        raw = await self.client.zrevrange(RUN_INDEX_KEY, 0, max(0, limit - 1))
+        return [r.decode() if isinstance(r, bytes) else r for r in raw]
+
+    async def prune_run_index(self, run_ids: list[str]) -> None:
+        """Drop index entries whose state has expired out of Redis."""
+        if run_ids:
+            await self.client.zrem(RUN_INDEX_KEY, *run_ids)
 
     async def save_state(self, state: RunStateModel | RunState) -> None:
         if isinstance(state, RunStateModel):
@@ -69,6 +86,36 @@ class RedisStore:
         channel = f"bugfix:{event.run_id}:live"
         await self.client.publish(channel, event.model_dump_json())
 
+    async def append_lifecycle_event(self, event: RunLifecycleEvent) -> bool:
+        """Persist and publish a lifecycle event, at most once per run and kind.
+
+        Returns True when this call is the one that recorded it. The guard is a
+        Redis `SET NX`, so concurrent writers — a retrying runner, two workers
+        racing on the same run — cannot produce a second `run.completed`.
+        """
+        guard = f"{self._prefix(event.run_id)}:lifecycle:{event.type}"
+        if not await self.client.set(guard, "1", nx=True, ex=self.ttl):
+            return False
+
+        key = f"{self._prefix(event.run_id)}:lifecycle"
+        await self.client.rpush(key, event.model_dump_json())
+        await self.client.expire(key, self.ttl)
+        await self.client.publish(
+            f"bugfix:{event.run_id}:live", event.model_dump_json()
+        )
+        return True
+
+    async def get_lifecycle_events(self, run_id: str) -> list[RunLifecycleEvent]:
+        """Lifecycle events for a run, in the order they occurred."""
+        key = f"{self._prefix(run_id)}:lifecycle"
+        raw = await self.client.lrange(key, 0, -1)
+        events: list[RunLifecycleEvent] = []
+        for item in raw:
+            if isinstance(item, bytes):
+                item = item.decode()
+            events.append(RunLifecycleEvent.model_validate_json(item))
+        return events
+
     async def get_events(self, run_id: str, count: int = 100) -> list[AgentStatusEvent]:
         key = f"{self._prefix(run_id)}:events"
         entries = await self.client.xrevrange(key, count=count)
@@ -94,6 +141,37 @@ class RedisStore:
     async def release_lock(self, run_id: str) -> None:
         key = f"{self._prefix(run_id)}:lock"
         await self.client.delete(key)
+
+    # -- generic cross-run cache -------------------------------------------
+    # Namespaced, versioned, run-independent storage. The SIG cache predates
+    # this and keeps its own method pair; new caches (repository intelligence,
+    # repair memory) use these rather than growing another bespoke pair.
+
+    def namespaced_key(self, namespace: str, version: str, key: str) -> str:
+        return f"{namespace}:{version}:{key}"
+
+    async def get_cached(self, namespace: str, version: str, key: str) -> str | None:
+        raw = await self.client.get(self.namespaced_key(namespace, version, key))
+        if raw is None:
+            return None
+        return raw.decode() if isinstance(raw, bytes) else raw
+
+    async def set_cached(
+        self,
+        namespace: str,
+        version: str,
+        key: str,
+        payload_json: str,
+        ttl: int | None = None,
+    ) -> None:
+        await self.client.set(
+            self.namespaced_key(namespace, version, key),
+            payload_json,
+            ex=ttl or self.ttl,
+        )
+
+    async def delete_cached(self, namespace: str, version: str, key: str) -> None:
+        await self.client.delete(self.namespaced_key(namespace, version, key))
 
     def sig_cache_redis_key(self, version: str, repo_hash: str) -> str:
         return f"sig_cache:{version}:{repo_hash}"

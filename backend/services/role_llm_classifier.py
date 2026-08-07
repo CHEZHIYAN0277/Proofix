@@ -65,6 +65,8 @@ async def classify_ambiguous_batch(
     *,
     settings: Settings,
     ast_predictions: dict[str, RolePrediction],
+    run_id: str = "",
+    agent_id: str = "A1",
 ) -> dict[str, RolePrediction]:
     if not queue:
         return {}
@@ -74,7 +76,7 @@ async def classify_ambiguous_batch(
     if settings.stub_mode or not settings.llm_configured():
         return _fallback_predictions(queue, ast_predictions)
 
-    llm = LLMService(settings)
+    llm = LLMService(settings, run_id=run_id, agent_id=agent_id)
     prompt = _build_batch_prompt(contexts)
     system = (
         "You are a security-focused code analysis assistant. "

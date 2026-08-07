@@ -38,6 +38,18 @@ class MutationValidationResult(BaseModel):
     mutation_score: float | None = None
     mutant_survived: bool = False
     correctness_score: float = 0.0
+
+    # Real mutation evidence. All additive and defaulted, so states persisted
+    # before mutation parsing existed still deserialize. `mutation_status`
+    # distinguishes "measured" from "could not be measured" — consumers must not
+    # read `mutation_score is None` as a score of zero.
+    mutation_status: Literal["scored", "unavailable", "not_run"] = "not_run"
+    mutation_unavailable_reason: str | None = None
+    killed_mutants: int | None = None
+    survived_mutants: int | None = None
+    total_mutants: int | None = None
+    inconclusive_mutants: int | None = None
+    mutants_by_status: dict[str, int] = Field(default_factory=dict)
     failure_brief: RetryBrief | None = None
     validation_failure: ValidationFailure | None = None
     pytest_reexecution_command: str = ""

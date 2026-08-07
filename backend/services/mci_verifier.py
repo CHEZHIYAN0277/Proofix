@@ -2,6 +2,8 @@ import re
 from difflib import unified_diff
 from pathlib import PurePosixPath
 
+from backend.services.path_resolution import normalize_path_token, paths_equivalent
+
 FILE_PATH_RE = re.compile(r"[\w/\\.-]+\.py", re.IGNORECASE)
 DIFF_FILE_HEADER_RE = re.compile(r"^(?:---|\+\+\+) [ab]/(.+)$", re.MULTILINE)
 
@@ -32,41 +34,13 @@ def generate_diff_from_patches(patches: list[dict]) -> str:
     return "".join(lines)
 
 
-def normalize_path_token(path: str) -> str:
-    """Normalize a repo path token for phantom comparison."""
-    cleaned = path.strip().strip("`\"'")
-    cleaned = cleaned.replace("\\", "/")
-    for prefix in ("a/", "b/"):
-        if cleaned.startswith(prefix):
-            cleaned = cleaned[len(prefix) :]
-    cleaned = cleaned.lstrip("/")
-    parts = [part for part in cleaned.split("/") if part and part != "."]
-    if not parts:
-        return ""
-    return PurePosixPath(*parts).as_posix().casefold()
-
-
 def file_paths_equivalent(desc_path: str, diff_path: str) -> bool:
-    """Return True when two path references denote the same file."""
-    normalized_desc = normalize_path_token(desc_path)
-    normalized_diff = normalize_path_token(diff_path)
-    if not normalized_desc or not normalized_diff:
-        return False
-    if normalized_desc == normalized_diff:
-        return True
+    """Return True when two path references denote the same file.
 
-    desc_parts = normalized_desc.split("/")
-    diff_parts = normalized_diff.split("/")
-    if desc_parts[-1] != diff_parts[-1]:
-        return False
-
-    # Same basename with repo-relative prefix, e.g. auth.py vs vulnapi/auth.py
-    if len(desc_parts) == 1 and diff_parts[-1] == desc_parts[0]:
-        return True
-    if len(diff_parts) == 1 and desc_parts[-1] == diff_parts[0]:
-        return True
-
-    return desc_parts == diff_parts
+    Thin alias over the shared path service, kept as the name MCI code and its
+    tests already use.
+    """
+    return paths_equivalent(desc_path, diff_path)
 
 
 def extract_diff_file_paths(diff_text: str) -> set[str]:

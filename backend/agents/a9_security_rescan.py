@@ -2,7 +2,7 @@ from pathlib import Path
 
 from backend.agents.base import AgentBase
 from backend.models.findings import Finding
-from backend.models.validation import RetryBrief, SecurityRescanResult, ValidationFailure
+from backend.models.validation import SecurityRescanResult, ValidationFailure
 from backend.services.retry_brief_builder import build_retry_brief
 from backend.services.repo_layout import get_scan_targets, resolve_source_roots
 from backend.services.security_rescan_commands import build_security_rescan_command

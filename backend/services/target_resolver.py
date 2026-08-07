@@ -10,6 +10,11 @@ from typing import Literal
 from pydantic import BaseModel
 
 from backend.models.sig import SemanticIntentGraph
+from backend.services.path_resolution import (
+    match_key,
+    path_candidates,
+    relative_to_repo,
+)
 from backend.services.repo_layout import is_production_file
 from backend.state.schema import RunStateModel
 
@@ -49,38 +54,17 @@ def normalize_repo_path(
     if not raw_path or not str(raw_path).strip():
         return None
 
-    text = str(raw_path).strip().replace("\\", "/")
-    if text.startswith("./"):
-        text = text[2:]
-
     repo = repo_path.resolve()
-    path = Path(text)
 
-    candidates: list[str] = []
-    repo_relative: str | None = None
+    candidates = path_candidates(raw_path)
+    if not candidates:
+        return None
 
-    try:
-        repo_relative = str(path.resolve().relative_to(repo)).replace("\\", "/")
-        candidates.append(repo_relative)
-    except ValueError:
-        pass
+    # Preferred fallback when nothing matches the SIG: the path expressed
+    # relative to the repository root, else the most specific candidate.
+    repo_relative = relative_to_repo(repo, raw_path) or candidates[0]
 
-    parts = path.parts if path.is_absolute() else Path(text).parts
-    for idx, part in enumerate(parts):
-        if part in ("tests", "test", "testing", "vulnapi", "src", "app", "backend") or part.endswith(".py"):
-            segment = str(Path(*parts[idx:])).replace("\\", "/")
-            candidates.append(segment)
-            if repo_relative is None:
-                repo_relative = segment
-
-    candidates.append(text.lstrip("/"))
-    candidates.append(path.name)
-
-    seen: set[str] = set()
     for candidate in candidates:
-        if not candidate or candidate in seen:
-            continue
-        seen.add(candidate)
         matched = _match_sig_path(candidate, sig)
         if matched:
             return matched
@@ -369,20 +353,7 @@ def _is_application_sig_path(path: str, sig: SemanticIntentGraph) -> bool:
 
 
 def _match_sig_path(candidate: str, sig: SemanticIntentGraph) -> str | None:
-    norm = candidate.replace("\\", "/").lstrip("/")
-    if norm in sig.files:
-        return norm
-
-    suffix_matches = [key for key in sig.files if key.endswith(f"/{norm}") or key == norm]
-    if len(suffix_matches) == 1:
-        return suffix_matches[0]
-
-    base = Path(norm).name
-    base_matches = [key for key in sig.files if key.endswith(f"/{base}") or key == base]
-    if len(base_matches) == 1:
-        return base_matches[0]
-
-    return None
+    return match_key(candidate, sig.files)
 
 
 def _module_to_sig_path(module: str, sig: SemanticIntentGraph) -> str | None:

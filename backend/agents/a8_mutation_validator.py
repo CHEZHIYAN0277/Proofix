@@ -2,10 +2,23 @@ from pathlib import Path
 
 from backend.agents.base import AgentBase
 from backend.models.validation import MutationValidationResult, ValidationFailure
+from backend.services.mutation_parser import MutationOutcome, parse_mutation_output
 from backend.services.retry_brief_builder import build_retry_brief
 from backend.services.scoped_validation import run_scoped_validation
 from backend.services.subprocess_runner import run_command
 from backend.state.schema import RunStateModel
+
+# Correctness rubric. Named so the merge threshold in `a10_routing` can be read
+# against the values that feed it.
+CORRECTNESS_TESTS_FAILED = 0.0
+CORRECTNESS_MUTANT_SURVIVED = 40.0
+CORRECTNESS_MUTATION_UNAVAILABLE = 70.0
+CORRECTNESS_MUTATION_BASE = 60.0
+CORRECTNESS_MUTATION_RANGE = 40.0
+
+MUTANT_SURVIVED_ASSERTION = (
+    "Mutant survived — test passes coincidentally without validating fix"
+)
 
 
 class A8MutationValidatorAgent(AgentBase):
@@ -28,8 +41,6 @@ class A8MutationValidatorAgent(AgentBase):
             timeout=120,
         )
 
-        mutant_survived = False
-        mutation_score = None
         failure_brief = None
         validation_failure = scoped.validation_failure
         mutmut_cmd = ""
@@ -37,16 +48,22 @@ class A8MutationValidatorAgent(AgentBase):
         pytest_passed = scoped.pytest_passed
         patch_retry_required = scoped.patch_retry_required
         failure_brief_needed = scoped.failure_brief_needed
-        correctness_score = 100.0 if pytest_passed else 0.0
+
+        outcome = MutationOutcome(status="not_run", unavailable_reason=None)
+        correctness_score = 100.0 if pytest_passed else CORRECTNESS_TESTS_FAILED
 
         if pytest_passed:
-            mutant_survived, mutation_score, mutmut_cmd = await self._run_mutmut(repo, patch_bundle)
-            if mutant_survived:
-                correctness_score = 40.0
+            outcome, mutmut_cmd = await self._run_mutmut(repo, patch_bundle)
+
+            if outcome.mutant_survived:
+                correctness_score = CORRECTNESS_MUTANT_SURVIVED
                 contract = contracts[0]["assertion"] if contracts else "unknown contract"
                 validation_failure = ValidationFailure(
                     failing_test=target_test,
-                    assertion_message="Mutant survived — test passes coincidentally without validating fix",
+                    assertion_message=(
+                        f"{MUTANT_SURVIVED_ASSERTION} "
+                        f"({outcome.survived_mutants} of {outcome.total_mutants} mutants survived)"
+                    ),
                     validation_stage="mutation",
                     target_test_passed=True,
                     regression_tests_passed=True,
@@ -62,10 +79,16 @@ class A8MutationValidatorAgent(AgentBase):
                     reproduction=reproduction,
                     violated_contract=contract,
                 )
-            elif mutation_score is not None:
-                correctness_score = min(100.0, 60.0 + mutation_score * 40)
+            elif outcome.status == "scored" and outcome.mutation_score is not None:
+                correctness_score = min(
+                    100.0,
+                    CORRECTNESS_MUTATION_BASE + outcome.mutation_score * CORRECTNESS_MUTATION_RANGE,
+                )
             else:
-                correctness_score = 70.0
+                # No mutation evidence. Score below the auto-merge threshold so
+                # the absence of proof forces manual review rather than passing
+                # on a substituted value.
+                correctness_score = CORRECTNESS_MUTATION_UNAVAILABLE
         elif failure_brief_needed and validation_failure:
             failure_brief = build_retry_brief(
                 validation_failure,
@@ -76,8 +99,15 @@ class A8MutationValidatorAgent(AgentBase):
 
         result = MutationValidationResult(
             pytest_passed=pytest_passed,
-            mutation_score=mutation_score,
-            mutant_survived=mutant_survived,
+            mutation_score=outcome.mutation_score,
+            mutant_survived=outcome.mutant_survived,
+            mutation_status=outcome.status,
+            mutation_unavailable_reason=outcome.unavailable_reason,
+            killed_mutants=outcome.killed_mutants,
+            survived_mutants=outcome.survived_mutants,
+            total_mutants=outcome.total_mutants,
+            inconclusive_mutants=outcome.inconclusive_mutants,
+            mutants_by_status=outcome.by_status,
             correctness_score=correctness_score,
             failure_brief=failure_brief,
             validation_failure=validation_failure,
@@ -114,6 +144,17 @@ class A8MutationValidatorAgent(AgentBase):
 
         payload = {
             "correctness_score": correctness_score,
+            # Per-attempt scores. `mutation_score` stays None when pytest failed,
+            # because mutmut never ran — the UI must say "not scored" rather than
+            # render a 0.00 that looks like a measurement. `mutation_status`
+            # tells the UI which of those two cases it is.
+            "mutation_score": outcome.mutation_score,
+            "mutant_survived": outcome.mutant_survived,
+            "mutation_status": outcome.status,
+            "mutation_unavailable_reason": outcome.unavailable_reason,
+            "killed_mutants": outcome.killed_mutants,
+            "survived_mutants": outcome.survived_mutants,
+            "total_mutants": outcome.total_mutants,
             "pytest_passed": pytest_passed,
             "target_test_passed": scoped.target_test_passed,
             "regression_tests_passed": scoped.regression_tests_passed,
@@ -134,36 +175,63 @@ class A8MutationValidatorAgent(AgentBase):
         await self.emit_status(
             state,
             "completed",
-            f"pytest={'pass' if pytest_passed else 'fail'}, mutant_survived={mutant_survived}",
+            f"pytest={'pass' if pytest_passed else 'fail'}, "
+            f"mutation={outcome.status}, mutant_survived={outcome.mutant_survived}",
             payload,
         )
         return state
 
-    async def _run_mutmut(self, repo: Path, patch_bundle: dict) -> tuple[bool, float | None, str]:
+    async def _run_mutmut(self, repo: Path, patch_bundle: dict) -> tuple[MutationOutcome, str]:
+        """Run mutmut and parse its real output. Never returns a substituted score."""
         patches = patch_bundle.get("patches", [])
         if not patches:
-            return False, None, ""
+            return (
+                MutationOutcome(
+                    status="unavailable",
+                    unavailable_reason="no patches to mutate",
+                ),
+                "",
+            )
 
         patch_file = patches[0].get("file", "")
         if not patch_file:
-            return False, None, ""
+            return (
+                MutationOutcome(
+                    status="unavailable",
+                    unavailable_reason="patch bundle has no target file",
+                ),
+                "",
+            )
 
-        mutmut_cmd = f"python -m mutmut run --paths-to-mutate {patch_file} && python -m mutmut results"
+        mutmut_cmd = (
+            f"python -m mutmut run --paths-to-mutate {patch_file}"
+            " && python -m mutmut results --all true"
+        )
 
-        code, stdout, stderr = await run_command(
+        run_code, run_stdout, run_stderr = await run_command(
             ["python", "-m", "mutmut", "run", "--paths-to-mutate", patch_file],
             cwd=repo,
             timeout=self.settings.mutmut_timeout_seconds,
         )
 
-        if code == -1:
-            return False, None, mutmut_cmd
+        results_code: int | None = None
+        results_stdout = ""
+        results_stderr = ""
+        if run_code != -1:
+            # `--all true` includes killed mutants, which the default listing
+            # omits — without them there is no denominator to score against.
+            results_code, results_stdout, results_stderr = await run_command(
+                ["python", "-m", "mutmut", "results", "--all", "true"],
+                cwd=repo,
+                timeout=30,
+            )
 
-        code2, results_out, _ = await run_command(
-            ["python", "-m", "mutmut", "results"],
-            cwd=repo,
-            timeout=30,
+        outcome = parse_mutation_output(
+            run_exit_code=run_code,
+            run_stdout=run_stdout,
+            run_stderr=run_stderr,
+            results_exit_code=results_code,
+            results_stdout=results_stdout,
+            results_stderr=results_stderr,
         )
-        survived = "survived" in (results_out + stderr).lower() or "not killed" in (results_out + stderr).lower()
-        score = 0.5 if not survived else 0.0
-        return survived, score, mutmut_cmd
+        return outcome, mutmut_cmd

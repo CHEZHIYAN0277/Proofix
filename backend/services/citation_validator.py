@@ -75,15 +75,6 @@ def coerce_llm_citations(
     return coerced
 
 
-def validate_citation(repo_path: Path, file: str, line: int, sig: dict | None = None) -> bool:
-    validated, _metrics = verify_all_citations_with_metrics(
-        repo_path,
-        [{"file": file, "line": line, "claim": "line validation"}],
-        sig=sig,
-    )
-    return bool(validated and validated[0].get("verified"))
-
-
 def validate_all_citations(
     repo_path: Path,
     citations: list[dict],

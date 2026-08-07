@@ -1,10 +1,9 @@
 from contextlib import asynccontextmanager
 
-import redis.asyncio as aioredis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.routes import runs, ws
+from backend.api.routes import knowledge, learning, runs, security, ui, ws
 from backend.config import Settings, get_settings
 from backend.state.redis_store import create_redis_client
 
@@ -26,15 +25,22 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    # Browsers reject `allow_origins=["*"]` together with credentials, so the
+    # dev origins are listed explicitly. Override with CORS_ORIGINS in .env.
+    settings = get_settings()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.cors_origin_list(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
     app.include_router(runs.router)
+    app.include_router(ui.router)
     app.include_router(ws.router)
+    app.include_router(knowledge.router)
+    app.include_router(security.router)
+    app.include_router(learning.router)
 
     @app.get("/health")
     async def health():

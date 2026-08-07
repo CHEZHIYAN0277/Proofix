@@ -1,6 +1,6 @@
 """Trust gates applied before PR routing."""
 
-from backend.config import Settings, get_settings
+from backend.config import get_settings
 from backend.models.proof import ReproductionConfidence
 from backend.state.schema import RunStateModel
 

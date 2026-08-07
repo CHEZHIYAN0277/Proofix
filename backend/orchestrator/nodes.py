@@ -7,30 +7,43 @@ from backend.agents.a2_dependency_analyzer import A2DependencyAnalyzerAgent
 from backend.agents.a3_static_analysis import A3StaticAnalysisAgent
 from backend.agents.a3_5_reproduction import A35ReproductionAgent
 from backend.agents.a4_evidence_investigator import A4EvidenceInvestigatorAgent
+from backend.agents.a5_5_context_engineering import A55ContextEngineeringAgent
 from backend.agents.a5_blast_graph import A5BlastGraphAgent
 from backend.agents.a6_fix_dag_planner import A6FixDAGPlannerAgent
 from backend.agents.a7_code_generation import A7CodeGenerationAgent
 from backend.agents.a8_mutation_validator import A8MutationValidatorAgent
 from backend.agents.a9_security_rescan import A9SecurityRescanAgent
 from backend.agents.a10_mci_scorer import A10MCIScorerAgent
+from backend.agents.repository_intelligence import (
+    INTELLIGENCE_STORE_KEY,
+    RepositoryIntelligenceAgent,
+)
 from backend.config import Settings
 from backend.services.git_service import clone_or_copy_repo, get_head_sha
+from backend.services.repair_memory import (
+    build_repair_record,
+    classify_bug_type,
+    record_repair,
+)
 from backend.services.repo_layout import discover_source_roots
+from backend.services.repository_cache import RepositoryCache
 from backend.services.sig_helpers import reclassify_cve_report
 from backend.state.redis_store import RedisStore
-from backend.state.schema import RunState, RunStateModel
+from backend.state.schema import RunStateModel
 
 
 class GraphNodes:
     def __init__(self, store: RedisStore, settings: Settings):
         self.store = store
         self.settings = settings
+        self.repository_intelligence = RepositoryIntelligenceAgent(store, settings)
         self.a1 = A1SemanticMapperAgent(store, settings)
         self.a2 = A2DependencyAnalyzerAgent(store, settings)
         self.a3 = A3StaticAnalysisAgent(store, settings)
         self.a35 = A35ReproductionAgent(store, settings)
         self.a4 = A4EvidenceInvestigatorAgent(store, settings)
         self.a5 = A5BlastGraphAgent(store, settings)
+        self.a55 = A55ContextEngineeringAgent(store, settings)
         self.a6 = A6FixDAGPlannerAgent(store, settings)
         self.a7 = A7CodeGenerationAgent(store, settings)
         self.a8 = A8MutationValidatorAgent(store, settings)
@@ -44,6 +57,17 @@ class GraphNodes:
             state.source_roots = discover_source_roots(Path(state.repo_clone_path).resolve())
         if not state.base_commit_sha:
             state.base_commit_sha = get_head_sha(Path(state.repo_clone_path))
+        await self.store.save_state(state)
+        return state
+
+    async def index_repository(self, state: RunStateModel) -> RunStateModel:
+        """Repository Intelligence is advisory: a failure here must not fail the run."""
+        if not self.settings.repository_intelligence_enabled:
+            return state
+        try:
+            state = await self.repository_intelligence.run(state)
+        except Exception as exc:  # noqa: BLE001 — degrade to pre-Phase-3 behaviour
+            state.errors.append({"agent": "A0.5", "error": str(exc)})
         await self.store.save_state(state)
         return state
 
@@ -99,6 +123,16 @@ class GraphNodes:
     async def blast_scope(self, state: RunStateModel) -> RunStateModel:
         return await self.a5.run(state)
 
+    async def engineer_context(self, state: RunStateModel) -> RunStateModel:
+        """A5.5 is advisory: a failure here must not fail the run."""
+        if not self.settings.context_engineering_enabled:
+            return state
+        try:
+            return await self.a55.run(state)
+        except Exception as exc:  # noqa: BLE001 — degrade to pre-A5.5 behaviour
+            state.errors.append({"agent": "A5.5", "error": str(exc)})
+            return state
+
     async def plan_fixes(self, state: RunStateModel) -> RunStateModel:
         return await self.a6.run(state)
 
@@ -112,4 +146,104 @@ class GraphNodes:
         return await self.a9.run(state)
 
     async def route_pr(self, state: RunStateModel) -> RunStateModel:
-        return await self.a10.run(state)
+        state = await self.a10.run(state)
+        await self._remember_repairs(state)
+        self._learn_from_run(state)
+        return state
+
+    def _learn_from_run(self, state: RunStateModel) -> None:
+        """Extract the completed run into durable organisational knowledge.
+
+        Placed here, after routing, for the same reason repair memory is: the
+        outcome is only known once the trust gates have decided. Synchronous
+        because the whole update is in-memory counting and stays well inside
+        its budget; making it a task would add ordering hazards for no gain.
+        """
+        if not self.settings.learning_enabled:
+            return
+        try:
+            from backend.services.learning_pipeline import get_learning_pipeline
+
+            get_learning_pipeline(self.settings, self.store).learn_from_run(state)
+        except Exception as exc:  # noqa: BLE001 — learning never fails a run
+            state.errors.append({"agent": "learning", "error": str(exc)})
+
+    async def _remember_repairs(self, state: RunStateModel) -> None:
+        """Write this run's validated repairs into persistent repair memory.
+
+        Placed here rather than inside A10 so the scoring agent keeps its single
+        responsibility, and so the write happens exactly once, after routing has
+        decided whether the repair was actually trustworthy.
+
+        Only validated repairs are stored. A patch that failed validation is not
+        knowledge about how to fix this repository; recording it would poison
+        every future retrieval.
+        """
+        if not (
+            self.settings.repository_intelligence_enabled
+            and self.settings.repair_memory_enabled
+        ):
+            return
+
+        try:
+            pointer = await self.store.get_json(state.run_id, INTELLIGENCE_STORE_KEY)
+            if not pointer or not pointer.get("repository_id"):
+                return
+
+            mutation = state.mutation_result or {}
+            security = state.security_result or {}
+            decision = state.pr_decision or {}
+            patches = (state.patch_bundle or {}).get("patches") or []
+
+            validated = bool(mutation.get("pytest_passed")) and not security.get("rejected")
+            if not validated or not patches:
+                return
+
+            repo = Path(state.repo_clone_path or state.repo_path).resolve()
+            bug_type = classify_bug_type(
+                state.reproduction,
+                state.root_cause,
+                (state.static_report or {}).get("prioritized"),
+            )
+            root_cause_summary = (state.root_cause or {}).get("root_cause") or ""
+            affected = [p.get("file", "") for p in patches if p.get("file")]
+
+            cache = RepositoryCache(
+                self.store,
+                ttl_seconds=self.settings.state_ttl_seconds,
+                version=self.settings.repository_cache_version,
+            )
+            memory = await cache.load_repair_memory(pointer["repository_id"])
+            memory.repository_id = pointer["repository_id"]
+
+            for patch in patches:
+                file_path = patch.get("file")
+                if not file_path:
+                    continue
+                record_repair(
+                    memory,
+                    build_repair_record(
+                        run_id=state.run_id,
+                        repo_path=repo,
+                        repository_hash=pointer.get("repository_hash", ""),
+                        file=file_path,
+                        function=None,
+                        bug_type=bug_type,
+                        root_cause_summary=root_cause_summary,
+                        affected_files=affected,
+                        validation_passed=True,
+                        mutation_score=mutation.get("mutation_score"),
+                        mutation_status=mutation.get("mutation_status") or "not_run",
+                        security_score=security.get("security_score"),
+                        retry_count=state.retry_count,
+                        pr_type=decision.get("pr_type", ""),
+                        accepted_patch_diff=(state.patch_bundle or {}).get("diff_text", ""),
+                        # Hashes describe the pre-patch code, which is what a
+                        # future run will be looking at when it queries.
+                        original_file_source=patch.get("original") or "",
+                    ),
+                )
+
+            await cache.save_repair_memory(memory)
+        except Exception as exc:  # noqa: BLE001 — memory is advisory, never fatal
+            state.errors.append({"agent": "repair_memory", "error": str(exc)})

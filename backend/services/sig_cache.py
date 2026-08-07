@@ -8,7 +8,6 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from backend.config import Settings
 from backend.models.sig import FileRole
 from backend.services.ast_import_graph import ImportGraph
 from backend.services.git_service import get_head_sha, get_worktree_diff_hash

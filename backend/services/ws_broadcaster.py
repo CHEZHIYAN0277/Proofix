@@ -1,6 +1,5 @@
 import asyncio
 from collections import defaultdict
-from typing import Callable
 
 from backend.state.events import AgentStatusEvent
 
