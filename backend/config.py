@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # Phase 3 Repository Intelligence. Disabling it returns A1, A5.5 and A7 to
     # their pre-Phase-3 behaviour exactly — the layer is additive throughout.
     repository_intelligence_enabled: bool = True
+
+    #: Run the environment precheck (A0.7) and let it gate reproduction.
+    #: On by default: continuing past an unrunnable environment produces
+    #: fabricated-looking results, which is worse than stopping.
+    environment_precheck_enabled: bool = True
+    #: Seconds allowed for the probe's interpreter checks.
+    environment_probe_timeout: int = 30
     # v2: FunctionSpan gained `complexity`, which the risk engine reads.
     repository_cache_version: str = "v2"
     repository_index_max_files: int = 3000

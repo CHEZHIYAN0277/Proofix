@@ -30,7 +30,12 @@ class AgentStatusEvent(BaseModel):
     sequence: int = 0
 
 
-RunLifecycleType = Literal["run.started", "run.completed", "run.failed"]
+# `run.blocked` is a third terminal outcome, distinct from both. The pipeline
+# neither completed a repair nor failed doing one — it determined the target was
+# not analysable (dependencies not installed, unsupported language) and declined
+# to continue. Reporting that as `run.failed` blamed the repository for the
+# environment; reporting it as `run.completed` claimed work that never happened.
+RunLifecycleType = Literal["run.started", "run.completed", "run.failed", "run.blocked"]
 
 
 class RunLifecycleEvent(BaseModel):

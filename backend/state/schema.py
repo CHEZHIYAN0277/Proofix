@@ -6,7 +6,13 @@ from pydantic import BaseModel, Field
 from backend.models.proof import ReproductionConfidence
 
 
-RunStatus = Literal["pending", "running", "validation_retry", "completed", "failed"]
+# `blocked` is distinct from `failed`: the pipeline worked correctly and
+# declined to continue. A repository whose dependencies are not installed has
+# not failed analysis — it was never analysable, and reporting that as a failure
+# blames the code for the environment.
+RunStatus = Literal[
+    "pending", "running", "validation_retry", "completed", "failed", "blocked"
+]
 
 
 class RunStateModel(BaseModel):
@@ -23,6 +29,9 @@ class RunStateModel(BaseModel):
     sig: dict | None = None
     cve_report: dict | None = None
     static_report: dict | None = None
+    #: `EnvironmentReport` from the precheck. `None` before it runs, or when
+    #: the precheck is disabled.
+    environment: dict | None = None
     reproduction: dict | None = None
     root_cause: dict | None = None
     blast_graph: dict | None = None
@@ -58,6 +67,7 @@ class RunState(TypedDict, total=False):
     sig: dict
     cve_report: dict
     static_report: dict
+    environment: dict
     reproduction: dict
     root_cause: dict
     blast_graph: dict

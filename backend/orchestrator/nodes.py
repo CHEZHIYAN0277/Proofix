@@ -2,6 +2,7 @@ import asyncio
 
 from pathlib import Path
 
+from backend.agents.a0_7_environment import A07EnvironmentAgent
 from backend.agents.a1_semantic_mapper import A1SemanticMapperAgent
 from backend.agents.a2_dependency_analyzer import A2DependencyAnalyzerAgent
 from backend.agents.a3_static_analysis import A3StaticAnalysisAgent
@@ -37,6 +38,7 @@ class GraphNodes:
         self.store = store
         self.settings = settings
         self.repository_intelligence = RepositoryIntelligenceAgent(store, settings)
+        self.a07 = A07EnvironmentAgent(store, settings)
         self.a1 = A1SemanticMapperAgent(store, settings)
         self.a2 = A2DependencyAnalyzerAgent(store, settings)
         self.a3 = A3StaticAnalysisAgent(store, settings)
@@ -57,6 +59,42 @@ class GraphNodes:
             state.source_roots = discover_source_roots(Path(state.repo_clone_path).resolve())
         if not state.base_commit_sha:
             state.base_commit_sha = get_head_sha(Path(state.repo_clone_path))
+        await self.store.save_state(state)
+        return state
+
+    async def environment_precheck(self, state: RunStateModel) -> RunStateModel:
+        """A0.7. Advisory when disabled; gating when on (see `edges.after_environment`).
+
+        Skipped in `stub_mode`, following the convention every other agent uses
+        for real tooling (A1's LLM classification, A3's scanners, A4, A6, A7).
+        Stub mode exists to exercise the pipeline without invoking real tools,
+        and a probe that shells out to an interpreter is exactly that — gating
+        on its verdict there would block every stubbed run on the environment of
+        the machine running it rather than the repository under test.
+        """
+        if self.settings.stub_mode or not self.settings.environment_precheck_enabled:
+            return state
+        try:
+            return await self.a07.run(state)
+        except Exception as exc:  # noqa: BLE001
+            # A probe that itself fails must not block the run: that would turn
+            # a diagnostic into a new failure mode. Record it and continue as
+            # the pipeline behaved before the precheck existed.
+            state.errors.append({"agent": "A0.7", "error": str(exc)})
+            await self.store.save_state(state)
+            return state
+
+    async def halt_environment(self, state: RunStateModel) -> RunStateModel:
+        """Terminal state for a repository whose tests cannot run.
+
+        Not `failed`: nothing failed. The pipeline determined the target was not
+        analysable and declined to spend LLM calls producing empty artifacts.
+        `blocked` keeps that distinct in the status, the projection and the
+        lifecycle event.
+        """
+        state.status = "blocked"
+        # No PR decision is written. A run that generated no patch has nothing
+        # to route, and an axis-scored decision here would be scoring absence.
         await self.store.save_state(state)
         return state
 

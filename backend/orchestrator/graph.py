@@ -1,7 +1,12 @@
 from langgraph.graph import END, StateGraph
 
 from backend.config import Settings
-from backend.orchestrator.edges import after_mutation, after_security, should_reinvestigate
+from backend.orchestrator.edges import (
+    after_environment,
+    after_mutation,
+    after_security,
+    should_reinvestigate,
+)
 from backend.orchestrator.nodes import GraphNodes
 from backend.state.redis_store import RedisStore
 from backend.state.schema import RunState
@@ -16,6 +21,16 @@ def build_graph(store: RedisStore, settings: Settings) -> StateGraph:
         from backend.state.schema import RunStateModel
         model = RunStateModel(**{k: v for k, v in state.items() if k in RunStateModel.model_fields})
         result = await nodes.prepare_repo(model)
+        return result.model_dump(exclude_none=False)
+
+    async def environment_precheck(state: RunState) -> RunState:
+        model = await _load_model(store, state)
+        result = await nodes.environment_precheck(model)
+        return result.model_dump(exclude_none=False)
+
+    async def halt_environment(state: RunState) -> RunState:
+        model = await _load_model(store, state)
+        result = await nodes.halt_environment(model)
         return result.model_dump(exclude_none=False)
 
     async def index_repository(state: RunState) -> RunState:
@@ -93,6 +108,8 @@ def build_graph(store: RedisStore, settings: Settings) -> StateGraph:
         return result.model_dump(exclude_none=False)
 
     graph.add_node("prepare_repo", prepare_repo)
+    graph.add_node("environment_precheck", environment_precheck)
+    graph.add_node("halt_environment", halt_environment)
     graph.add_node("index_repository", index_repository)
     graph.add_node("parallel_intel", parallel_intel)
     graph.add_node("layer1_fan_in", layer1_fan_in)
@@ -108,10 +125,19 @@ def build_graph(store: RedisStore, settings: Settings) -> StateGraph:
     graph.add_node("route_pr", route_pr)
 
     graph.set_entry_point("prepare_repo")
-    graph.add_edge("prepare_repo", "index_repository")
+    graph.add_edge("prepare_repo", "environment_precheck")
+    graph.add_edge("environment_precheck", "index_repository")
     graph.add_edge("index_repository", "parallel_intel")
     graph.add_edge("parallel_intel", "layer1_fan_in")
-    graph.add_edge("layer1_fan_in", "reproduction_gate")
+    # The probe runs immediately after the clone, but the *gate* is here.
+    # Static intelligence (A1/A2/A3) reads source and needs no installed
+    # dependencies, so it still produces real findings on an unprepared
+    # repository; what stops is everything that must execute code.
+    graph.add_conditional_edges("layer1_fan_in", after_environment, {
+        "reproduction_gate": "reproduction_gate",
+        "halt_environment": "halt_environment",
+    })
+    graph.add_edge("halt_environment", END)
     graph.add_edge("reproduction_gate", "investigate")
     graph.add_conditional_edges("investigate", should_reinvestigate, {
         "investigate": "investigate",

@@ -40,14 +40,34 @@ class PipelineRunner:
         try:
             final = await self.graph.ainvoke(initial, config)
             result = RunStateModel(**{k: v for k, v in final.items() if k in RunStateModel.model_fields})
+
+            # `blocked` is a real terminal outcome and must survive. The blanket
+            # coercion below exists so a run that reached the end is not left
+            # reporting an intermediate status, but applying it to `blocked`
+            # would have relabelled "we could not run your tests" as a completed
+            # repair.
+            if result.status == "blocked":
+                await self.store.save_state(result)
+                await self._emit_blocked(result)
+                return result
+
             if result.status != "completed":
                 result.status = "completed"
             await self.store.save_state(result)
             await self._emit_completed(result)
             return result
         except Exception as e:
-            state.status = "failed"
-            state.errors.append({"error": str(e), "trace": traceback.format_exc()})
+            # Re-read before marking failed. `state` is the snapshot taken
+            # *before* the graph ran, and every node persists its own progress
+            # as it goes — so saving this object overwrote all of it. A run that
+            # failed at A4 came back reporting no environment report, no SIG, no
+            # static findings and no reproduction, none of which was true: five
+            # agents had completed and their work was discarded by the failure
+            # handler. The failure annotates the real state instead.
+            latest = await self.store.load_state(run_id) or state
+            latest.status = "failed"
+            latest.errors.append({"error": str(e), "trace": traceback.format_exc()})
+            state = latest
             await self.store.save_state(state)
             await self._emit_lifecycle(
                 RunLifecycleEvent(
@@ -58,6 +78,29 @@ class PipelineRunner:
                 )
             )
             raise
+
+    async def _emit_blocked(self, result: RunStateModel) -> None:
+        """Announce a run stopped by the environment precheck.
+
+        Carries the probe's own `reason`, so the client renders why in the
+        backend's words rather than composing a sentence of its own.
+        """
+        env = result.environment or {}
+        try:
+            event = RunLifecycleEvent(
+                type="run.blocked",
+                run_id=result.run_id,
+                decision_label="Environment not prepared",
+                reason=str(env.get("reason") or "The repository's tests could not be executed."),
+                sequence=result.ws_sequence + 1,
+            )
+        except Exception as exc:  # noqa: BLE001 — reported, never propagated
+            logger.warning(
+                "lifecycle_build_failed",
+                extra={"lifecycle": {"run_id": result.run_id, "error": str(exc)}},
+            )
+            return
+        await self._emit_lifecycle(event)
 
     async def _emit_completed(self, result: RunStateModel) -> None:
         """Announce completion without letting the announcement fail the run.

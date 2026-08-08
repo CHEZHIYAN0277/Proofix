@@ -43,3 +43,23 @@ def after_security(state: dict) -> Literal["route_pr", "generate_code"]:
         if retry_count < max_retries:
             return "generate_code"
     return "route_pr"
+
+
+def after_environment(state: dict) -> Literal["reproduction_gate", "halt_environment"]:
+    """Whether reproduction can realistically execute.
+
+    The gate the pipeline never had. `reproduction_gate` fed `investigate`
+    unconditionally, so a repository whose tests could not run still went
+    through investigation, blast analysis, context engineering, planning, patch
+    generation and the whole retry loop — on empty input, spending the two most
+    expensive LLM calls in the system to generate nothing.
+
+    Only a *blocking* verdict stops the run. A probe that could not reach a
+    conclusion (it errored, or the precheck is disabled) leaves `environment`
+    unset and the pipeline behaves exactly as it did before — a diagnostic must
+    not become a new failure mode.
+    """
+    environment = state.get("environment") or {}
+    if environment.get("blocking"):
+        return "halt_environment"
+    return "reproduction_gate"
