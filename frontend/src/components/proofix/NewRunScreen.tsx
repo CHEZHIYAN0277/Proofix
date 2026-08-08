@@ -1,19 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  ArrowRight,
-  Check,
-  Github,
-  Loader2,
-  AlertCircle,
-} from "lucide-react";
+import { ArrowRight, Check, Github, Loader2, AlertCircle } from "lucide-react";
 import { isLive, parseGithubUrl, validateRepository } from "@/lib/runService";
 import type { RepoMetadata } from "@/mocks";
 
-export function NewRunScreen({
-  onAnalyze,
-}: {
-  onAnalyze: (url: string) => void;
-}) {
+export function NewRunScreen({ onAnalyze }: { onAnalyze: (url: string) => void }) {
   const [url, setUrl] = useState("");
   const [meta, setMeta] = useState<RepoMetadata | null>(null);
   const [loadingMeta, setLoadingMeta] = useState(false);
@@ -74,16 +64,14 @@ export function NewRunScreen({
         aria-hidden
         className="pointer-events-none absolute left-1/2 top-[18%] -z-0 h-[520px] w-[720px] -translate-x-1/2 rounded-full opacity-60 blur-3xl"
         style={{
-          background:
-            "radial-gradient(closest-side, hsl(var(--ink) / 0.04), transparent 70%)",
+          background: "radial-gradient(closest-side, hsl(var(--ink) / 0.04), transparent 70%)",
         }}
       />
       <div
         aria-hidden
         className="pointer-events-none absolute left-1/2 top-[42%] -z-0 h-[360px] w-[520px] -translate-x-1/2 rounded-full opacity-50 blur-3xl"
         style={{
-          background:
-            "radial-gradient(closest-side, hsl(var(--ink) / 0.03), transparent 70%)",
+          background: "radial-gradient(closest-side, hsl(var(--ink) / 0.03), transparent 70%)",
         }}
       />
 
@@ -93,14 +81,14 @@ export function NewRunScreen({
             launching ? "scale-[0.985] opacity-70 blur-[1px]" : "scale-100 opacity-100"
           }`}
         >
-
           {/* Header */}
           <div className="text-center">
             <h1 className="text-[34px] font-semibold tracking-[-0.02em] text-ink sm:text-[42px] sm:leading-[1.1]">
               Start Autonomous Repository Analysis
             </h1>
             <p className="mx-auto mt-5 max-w-2xl text-[15px] leading-relaxed text-ink-soft sm:text-base">
-              Analyze repositories with autonomous AI agents that detect, repair, validate, and explain software issues.
+              Analyze repositories with autonomous AI agents that detect, repair, validate, and
+              explain software issues.
             </p>
           </div>
 
@@ -121,13 +109,15 @@ export function NewRunScreen({
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder={isLive ? "https://github.com/owner/repo — or a local path" : "https://github.com/owner/repository"}
+                placeholder={
+                  isLive
+                    ? "https://github.com/owner/repo — or a local path"
+                    : "https://github.com/owner/repository"
+                }
                 className="flex-1 bg-transparent font-mono text-sm text-ink outline-none placeholder:text-ink-soft/70"
                 disabled={launching}
               />
-              {loadingMeta && (
-                <Loader2 className="h-4 w-4 animate-spin text-ink-soft" />
-              )}
+              {loadingMeta && <Loader2 className="h-4 w-4 animate-spin text-ink-soft" />}
               {meta && !loadingMeta && (
                 <span
                   key={`${meta.owner}/${meta.name}`}
@@ -170,7 +160,6 @@ export function NewRunScreen({
                 </>
               )}
             </button>
-
           </form>
         </div>
       </div>
@@ -184,7 +173,6 @@ function RepoPreview({ meta }: { meta: RepoMetadata }) {
     { label: "Branch", value: meta.branch ?? "—" },
     { label: "Visibility", value: meta.visibility },
     { label: "Status", value: "Ready to Analyze" },
-
   ];
   return (
     <div className="mt-5 animate-line-in rounded-xl border border-border bg-surface p-5">
@@ -217,10 +205,7 @@ function RepoPreview({ meta }: { meta: RepoMetadata }) {
             <dt className="text-[10px] font-medium uppercase tracking-[0.12em] text-ink-soft">
               {r.label}
             </dt>
-            <dd
-              className="mt-1 truncate text-[13px] font-semibold text-ink"
-              title={r.value}
-            >
+            <dd className="mt-1 truncate text-[13px] font-semibold text-ink" title={r.value}>
               {r.value}
             </dd>
           </div>

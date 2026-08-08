@@ -10,9 +10,7 @@ export const API_BASE_URL: string =
 export type DataSource = "mock" | "api";
 
 export const DATA_SOURCE: DataSource =
-  ((import.meta.env.VITE_DATA_SOURCE as string | undefined) ?? "mock") === "api"
-    ? "api"
-    : "mock";
+  ((import.meta.env.VITE_DATA_SOURCE as string | undefined) ?? "mock") === "api" ? "api" : "mock";
 
 /**
  * Endpoint registry. Keep every backend path in one place so swapping the
@@ -28,8 +26,7 @@ export const ENDPOINTS = {
   runReport: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/report`,
   runAgents: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/agents`,
   runSummary: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/summary`,
-  retryAttempts: (runId: string) =>
-    `/api/runs/${encodeURIComponent(runId)}/attempts`,
+  retryAttempts: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/attempts`,
 } as const;
 
 export interface FetcherOptions extends RequestInit {
@@ -37,10 +34,7 @@ export interface FetcherOptions extends RequestInit {
   json?: unknown;
 }
 
-export async function apiFetch<T = unknown>(
-  url: string,
-  options: FetcherOptions = {},
-): Promise<T> {
+export async function apiFetch<T = unknown>(url: string, options: FetcherOptions = {}): Promise<T> {
   const { json, headers, ...rest } = options;
   const full = /^https?:/i.test(url) ? url : `${API_BASE_URL}${url}`;
   const response = await fetch(full, {

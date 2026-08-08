@@ -19,9 +19,25 @@
 import { API_BASE_URL, ENDPOINTS, apiFetch } from "@/lib/api";
 import type { AgentEntry, AgentStatus } from "./data";
 import type { EventEmitter, EventSourceFactory, ExecutionEvent } from "./mockEventStream";
+import {
+  isTerminalFrameType,
+  resolveRunLifecycle,
+  stateForFrameType,
+  statusToLifecycleState,
+  type RunLifecycleFrame,
+  type RunLifecycleState,
+} from "./runLifecycle";
 
-/** Backend agent_id -> frontend card id. Mirrors backend AGENT_REGISTRY. */
+/**
+ * Backend agent_id -> frontend card id. Mirrors backend AGENT_REGISTRY.
+ *
+ * A0.7 was added after the original eleven. Without it the environment
+ * precheck — the only stage a blocked run ever reaches — emitted events the
+ * journal silently discarded, so the boundary where the run actually stopped
+ * was invisible.
+ */
 const CARD_BY_AGENT_ID: Record<string, string> = {
+  "A0.7": "environment",
   A1: "repo-intel",
   A2: "deps",
   A3: "static",
@@ -131,7 +147,7 @@ export function createLiveEventSource(runId: string): EventSourceFactory {
       if (!event) return;
 
       // Promote to the delivered level only now that the reducer has it.
-      const card = event.type === "run.completed" ? undefined : cardByIndex.get(event.index);
+      const card = event.type === "run.settled" ? undefined : cardByIndex.get(event.index);
       if (card) {
         if (event.type === "agent.line") {
           emittedLines.set(card, Math.max(emittedLines.get(card) ?? 0, event.lineIndex));
@@ -201,14 +217,23 @@ export function createLiveEventSource(runId: string): EventSourceFactory {
         try {
           const parsed = JSON.parse(message.data as string);
           if (parsed?.type === "ping") return;
-          // The backend says outright when the run has settled. Queued rather
-          // than applied immediately so the end-of-run report reveal waits for
-          // the journal to finish playing instead of firing while lines are
-          // still arriving.
-          if (parsed?.type === "run.completed") {
-            enqueue({ type: "run.completed" });
+          // The backend says outright when the run has settled, and which of
+          // the three endings it reached. Queued rather than applied
+          // immediately so the end-of-run reveal waits for the journal to
+          // finish playing instead of firing while lines are still arriving.
+          if (isTerminalFrameType(parsed?.type)) {
+            // The state-poll fallback frame is always named `run.completed`
+            // for backwards compatibility and carries the real outcome on
+            // `status`. Trusting the name there reported a blocked run as a
+            // completed one, so `status` wins whenever it is present.
+            const state =
+              statusToLifecycleState(parsed?.status) ?? stateForFrameType(parsed.type as string);
+            if (state) enqueue({ type: "run.settled", state });
             return;
           }
+          // `run.started` and any future non-terminal lifecycle frame carry no
+          // agent id; dropping them here keeps them out of `applyEvent`.
+          if (typeof parsed?.type === "string") return;
           applyEvent(parsed as BackendAgentEvent);
         } catch {
           /* ignore malformed frames */
@@ -228,16 +253,31 @@ export function createLiveEventSource(runId: string): EventSourceFactory {
         const history = await apiFetch<BackendAgentEvent[]>(ENDPOINTS.runEvents(runId));
         if (disposed) return;
         history.forEach(applyEvent);
-
-        const finished = history.some(
-          (event) => event.agent_id === "A10" && event.status === "completed",
-        );
-        if (finished) {
-          enqueue({ type: "run.completed" });
-          return;
-        }
       } catch {
-        /* fall through to the socket — history is best-effort */
+        /* fall through — history is best-effort */
+      }
+
+      // Whether the run is over is the backend's `status` and lifecycle record,
+      // not an inference from A10. Inferring from A10 could only ever recognise
+      // one of the three endings, so a run that failed at A4 or was blocked at
+      // A0.7 replayed its whole history and then sat there claiming to be live.
+      let settled: RunLifecycleState | null = null;
+      try {
+        const header = await apiFetch<{
+          status?: string;
+          lifecycle?: RunLifecycleFrame[];
+        }>(ENDPOINTS.run(runId));
+        if (disposed) return;
+        const view = resolveRunLifecycle(header);
+        if (view.terminal) settled = view.state;
+      } catch {
+        /* fall through to the socket — it announces the ending too */
+      }
+
+      if (disposed) return;
+      if (settled) {
+        enqueue({ type: "run.settled", state: settled });
+        return;
       }
       attachSocket();
     })();

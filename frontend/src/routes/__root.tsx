@@ -78,9 +78,17 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "ProoFix — Autonomous Repository Repair" },
-      { name: "description", content: "Watch an autonomous engineer analyze, reason, validate and decide whether a pull request deserves to be merged." },
+      {
+        name: "description",
+        content:
+          "Watch an autonomous engineer analyze, reason, validate and decide whether a pull request deserves to be merged.",
+      },
       { property: "og:title", content: "ProoFix — Autonomous Repository Repair" },
-      { property: "og:description", content: "An AI execution workspace that makes repository repair observable, explainable and evidence-driven." },
+      {
+        property: "og:description",
+        content:
+          "An AI execution workspace that makes repository repair observable, explainable and evidence-driven.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
     ],
@@ -88,7 +96,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "stylesheet", href: appCss },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Geist:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" },
+      {
+        rel: "stylesheet",
+        href: "https://fonts.googleapis.com/css2?family=Geist:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap",
+      },
     ],
   }),
   shellComponent: RootShell,

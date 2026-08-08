@@ -1,12 +1,4 @@
-import {
-  LayoutGrid,
-  Settings,
-  Plus,
-  Sun,
-  Moon,
-  ChevronRight,
-  Folder,
-} from "lucide-react";
+import { LayoutGrid, Settings, Plus, Sun, Moon, ChevronRight, Folder } from "lucide-react";
 import { useEffect, useState } from "react";
 
 export interface SidebarRun {
@@ -21,9 +13,7 @@ export interface SidebarRepo {
   runs: SidebarRun[];
 }
 
-const PRIMARY_NAV = [
-  { key: "home", label: "Home", icon: LayoutGrid },
-] as const;
+const PRIMARY_NAV = [{ key: "home", label: "Home", icon: LayoutGrid }] as const;
 
 function ProoFixMark({ className = "" }: { className?: string }) {
   return (
@@ -155,9 +145,7 @@ function RepoNode({
       >
         <ul className="min-h-0 ml-4 mt-0.5 space-y-0.5 border-l border-border/60 pl-2">
           {repo.runs.length === 0 && (
-            <li className="px-1.5 py-1 text-[11px] italic text-ink-soft/70">
-              No runs yet
-            </li>
+            <li className="px-1.5 py-1 text-[11px] italic text-ink-soft/70">No runs yet</li>
           )}
           {repo.runs.map((run) => {
             const isSelected = selectedRunId === run.id;
@@ -181,12 +169,12 @@ function RepoNode({
                     />
                   )}
                   <StatusDot status={run.status} />
-                  <span className={`min-w-0 flex-1 truncate ${isActive ? "font-medium text-ink" : ""}`}>
+                  <span
+                    className={`min-w-0 flex-1 truncate ${isActive ? "font-medium text-ink" : ""}`}
+                  >
                     {run.name}
                   </span>
-                  <span className="shrink-0 text-[10px] text-ink-soft/70">
-                    {run.time}
-                  </span>
+                  <span className="shrink-0 text-[10px] text-ink-soft/70">{run.time}</span>
                 </button>
               </li>
             );
@@ -196,7 +184,6 @@ function RepoNode({
     </li>
   );
 }
-
 
 export function Sidebar({
   onNewRun,
@@ -220,9 +207,7 @@ export function Sidebar({
       <div className="px-3 pt-3 pb-2">
         <div className="flex items-center gap-1.5">
           <ProoFixMark className="h-[20px] w-[20px] text-ink" />
-          <div className="text-[13px] font-semibold tracking-tight text-ink">
-            ProoFix
-          </div>
+          <div className="text-[13px] font-semibold tracking-tight text-ink">ProoFix</div>
         </div>
       </div>
 
@@ -285,9 +270,7 @@ export function Sidebar({
           type="button"
           onClick={() => onNavigate?.("settings")}
           className={`flex w-full items-center gap-2.5 rounded-lg px-1 py-1 text-left text-[13px] transition-colors ${
-            currentView === "settings"
-              ? "text-ink"
-              : "text-ink-soft hover:text-ink"
+            currentView === "settings" ? "text-ink" : "text-ink-soft hover:text-ink"
           }`}
         >
           <Settings className="h-3.5 w-3.5" strokeWidth={1.75} />

@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const prefersReducedMotion = () =>
-  typeof window !== "undefined" &&
-  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 /**
  * Animate a numeric value from 0 → target once, on mount or when the

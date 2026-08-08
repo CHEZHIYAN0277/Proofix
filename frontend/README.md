@@ -6,14 +6,14 @@ It is deliberately **not** a chatbot, an analytics dashboard, or a DevOps monito
 
 ## Stack
 
-| Concern | Choice |
-| --- | --- |
-| Framework | React 19 + TanStack Start (SSR) |
-| Routing | TanStack Router (file-based, `src/routes/`) |
-| Data | TanStack Query |
-| Styling | Tailwind CSS v4 |
+| Concern    | Choice                                                   |
+| ---------- | -------------------------------------------------------- |
+| Framework  | React 19 + TanStack Start (SSR)                          |
+| Routing    | TanStack Router (file-based, `src/routes/`)              |
+| Data       | TanStack Query                                           |
+| Styling    | Tailwind CSS v4                                          |
 | Primitives | Radix UI + shadcn-style wrappers in `src/components/ui/` |
-| Build | Vite 8 |
+| Build      | Vite 8                                                   |
 
 ## Getting started
 
@@ -32,10 +32,10 @@ The app ships with a complete mock fixture set so it runs standalone. One env va
 cp .env.example .env
 ```
 
-| Variable | Meaning |
-| --- | --- |
-| `VITE_DATA_SOURCE` | `mock` (default) reads `src/mocks/*`; `api` calls the backend |
-| `VITE_API_BASE_URL` | Base URL for API calls. Leave empty to use the dev proxy |
+| Variable              | Meaning                                                                                   |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| `VITE_DATA_SOURCE`    | `mock` (default) reads `src/mocks/*`; `api` calls the backend                             |
+| `VITE_API_BASE_URL`   | Base URL for API calls. Leave empty to use the dev proxy                                  |
 | `VITE_BACKEND_ORIGIN` | Backend the Vite dev proxy forwards `/api` and `/ws` to (default `http://127.0.0.1:8000`) |
 
 In dev, Vite proxies `/api` and `/ws` to the FastAPI backend, so the browser sees one origin and CORS never applies.
@@ -45,7 +45,7 @@ In dev, Vite proxies `/api` and `/ws` to the FastAPI backend, so the browser see
 Two seams keep the UI independent of where data comes from:
 
 - **`src/lib/runService.ts`** — the only module that decides mock vs. API. Every screen calls it; no component fetches directly. Endpoint paths live in `src/lib/api.ts`.
-- **`src/components/proofix/mockEventStream.ts`** — owns *all* execution timing. `useExecutionRun` is a pure reducer over `ExecutionEvent`s, so replacing the mock factory with a WebSocket or SSE source drives the live journal without touching the hook or any component.
+- **`src/components/proofix/mockEventStream.ts`** — owns _all_ execution timing. `useExecutionRun` is a pure reducer over `ExecutionEvent`s, so replacing the mock factory with a WebSocket or SSE source drives the live journal without touching the hook or any component.
 
 ### Layout
 

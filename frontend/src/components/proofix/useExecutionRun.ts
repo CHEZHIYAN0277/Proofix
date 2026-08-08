@@ -14,6 +14,7 @@ import {
   type EventSourceFactory,
   type ExecutionEvent,
 } from "./mockEventStream";
+import type { RunLifecycleState } from "./runLifecycle";
 
 export interface LiveAgent extends AgentEntry {
   visibleLines: number;
@@ -54,13 +55,17 @@ export function useExecutionRun(options: UseExecutionRunOptions = {}) {
   const [statusByIdx, setStatusByIdx] = useState<AgentStatus[]>(() =>
     agents.map(() => "running" as AgentStatus),
   );
-  const [done, setDone] = useState(false);
+  // Which ending the stream announced, or `null` while the run is live. `done`
+  // is derived from it so every existing consumer keeps its boolean, while a
+  // caller that must distinguish "finished" from "blocked" can.
+  const [settledState, setSettledState] = useState<RunLifecycleState | null>(null);
+  const done = settledState !== null;
 
   const restart = useCallback(() => {
     setVisibleByIdx(agents.map(() => 0));
     setStatusByIdx(agents.map(() => "running"));
     setActiveIndex(0);
-    setDone(false);
+    setSettledState(null);
     setToken((t) => t + 1);
   }, [agents]);
 
@@ -103,8 +108,8 @@ export function useExecutionRun(options: UseExecutionRunOptions = {}) {
             return next;
           });
           return;
-        case "run.completed":
-          setDone(true);
+        case "run.settled":
+          setSettledState(event.state);
           return;
       }
     };
@@ -135,5 +140,5 @@ export function useExecutionRun(options: UseExecutionRunOptions = {}) {
     [agents, visibleByIdx, statusByIdx, seedStatusFromAgents],
   );
 
-  return { agents: live, activeIndex, restart, done };
+  return { agents: live, activeIndex, restart, done, settledState };
 }

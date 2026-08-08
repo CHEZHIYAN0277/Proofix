@@ -155,11 +155,7 @@ export const AGENTS: AgentEntry[] = [
           { name: "JWT Decoder", sub: "decode + verify" },
           { name: "Database", sub: "session lookup" },
         ],
-        unreachable: [
-          { name: "legacy_login" },
-          { name: "admin_panel" },
-          { name: "debug_routes" },
-        ],
+        unreachable: [{ name: "legacy_login" }, { name: "admin_panel" }, { name: "debug_routes" }],
         metrics: { reachable: 8, deadFindings: 6, attackPaths: 2 },
       },
     },
@@ -237,7 +233,11 @@ export const AGENTS: AgentEntry[] = [
       title: "Runtime Evidence",
       subtitle: "Live failure captured from the test harness.",
       fields: [
-        { label: "Failing test", value: "tests/test_auth.py::test_validate_token_expired", mono: true },
+        {
+          label: "Failing test",
+          value: "tests/test_auth.py::test_validate_token_expired",
+          mono: true,
+        },
         { label: "Exit code", value: "1", mono: true },
         { label: "Confidence", value: "0.97" },
         { label: "Report", value: "runs/11b8/repro/trace.json", mono: true },
@@ -306,8 +306,18 @@ export const AGENTS: AgentEntry[] = [
         bugMessage: "BUG FOUND — missing expiry condition",
         evidence: [
           { n: 1, title: "Missing expiry validation", detail: "auth/token.py:142", conf: 98 },
-          { n: 2, title: "Runtime assertion failed", detail: "test_validate_token_expired", conf: 94 },
-          { n: 3, title: "Static warning R-204", detail: "Semgrep · auth.jwt.missing-exp", conf: 89 },
+          {
+            n: 2,
+            title: "Runtime assertion failed",
+            detail: "test_validate_token_expired",
+            conf: 94,
+          },
+          {
+            n: 3,
+            title: "Static warning R-204",
+            detail: "Semgrep · auth.jwt.missing-exp",
+            conf: 89,
+          },
         ],
       },
     },
@@ -508,8 +518,7 @@ export const AGENTS: AgentEntry[] = [
         pytestPassed: true,
         correctness: 62,
         correctnessThreshold: 80,
-        failureMessage:
-          "Validation failed — mutants survived. Patch behaviour is too permissive.",
+        failureMessage: "Validation failed — mutants survived. Patch behaviour is too permissive.",
       },
     },
   },
@@ -561,48 +570,16 @@ export const AGENTS: AgentEntry[] = [
         ],
         weights: [0.4, 0.35, 0.25],
         decisionLabel: "Draft PR",
-        reviewNote:
-          "Human review recommended — fidelity below auto-merge threshold.",
+        reviewNote: "Human review recommended — fidelity below auto-merge threshold.",
       },
     },
   },
 ];
 
-export const RETRY_ATTEMPTS = [
-  {
-    n: 1,
-    action: "Generate Patch",
-    detail: "Tightened expiry check inside validate_token()",
-    result: "Validation Failed",
-    mutation: 0.42,
-  },
-  {
-    n: 2,
-    action: "Generate Patch",
-    detail: "Added pre-check guard before _decode()",
-    result: "Validation Failed",
-    mutation: 0.55,
-  },
-  {
-    n: 3,
-    action: "Generate Patch",
-    detail: "Refactored middleware to short-circuit expired tokens",
-    result: "Validation Failed",
-    mutation: 0.61,
-  },
-];
-
-
-// Per-agent summary bullet appended to the AI Executive Summary as agents finalize.
-export const AGENT_SUMMARY_BULLETS: Record<string, { text: string; ok: boolean }> = {
-  "repo-intel": { text: "Repository understanding completed.", ok: true },
-  deps: { text: "Dependency reachability confirmed — no exploitable CVEs.", ok: true },
-  static: { text: "6 actionable findings prioritized.", ok: true },
-  reproduce: { text: "Runtime failure reproduced.", ok: true },
-  root: { text: "Root cause isolated to validate_token().", ok: true },
-  blast: { text: "Blast radius expanded — 5 affected modules.", ok: true },
-  planner: { text: "Repair DAG generated.", ok: true },
-  patch: { text: "Candidate patch synthesized.", ok: true },
-  mutation: { text: "Mutation validation failed — patch rejected.", ok: false },
-  merge: { text: "Routing to Draft PR for manual review.", ok: false },
-};
+// `RETRY_ATTEMPTS` and `AGENT_SUMMARY_BULLETS` were removed here (bug B-F04).
+// Both were exported and imported by nothing. `AGENT_SUMMARY_BULLETS` in
+// particular was a table of hardcoded evidence claims — `"Runtime failure
+// reproduced.", ok: true` — of exactly the kind that once drew green ticks on
+// runs where A3.5 and A4 never executed. Repair attempts now come from
+// `GET /api/runs/{id}/attempts` and evidence flags from the run report, both
+// with the backend's own wording. Nothing in this file may assert a run fact.

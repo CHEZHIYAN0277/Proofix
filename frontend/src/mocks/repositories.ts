@@ -3,9 +3,7 @@ import type { SidebarRepo } from "@/components/proofix/Sidebar";
 export const MOCK_REPOSITORIES: SidebarRepo[] = [
   {
     name: "vulnapi",
-    runs: [
-      { id: "vulnapi-live", name: "Runtime Validation", status: "running", time: "now" },
-    ],
+    runs: [{ id: "vulnapi-live", name: "Runtime Validation", status: "running", time: "now" }],
   },
   {
     name: "proofix",
@@ -24,15 +22,11 @@ export const MOCK_REPOSITORIES: SidebarRepo[] = [
   },
   {
     name: "QuantumRisk",
-    runs: [
-      { id: "qr-1", name: "Memory Leak Repair", status: "completed", time: "1w ago" },
-    ],
+    runs: [{ id: "qr-1", name: "Memory Leak Repair", status: "completed", time: "1w ago" }],
   },
   {
     name: "e-doc-assistant",
-    runs: [
-      { id: "ed-1", name: "OCR Pipeline Repair", status: "draft", time: "2w ago" },
-    ],
+    runs: [{ id: "ed-1", name: "OCR Pipeline Repair", status: "draft", time: "2w ago" }],
   },
 ];
 

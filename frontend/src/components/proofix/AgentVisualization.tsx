@@ -144,11 +144,7 @@ function RepoIntelViz({
           <li className="text-ink-soft">repo/</li>
           {repoFiles.map((f, i) => {
             const state =
-              i < filesIndexed
-                ? "indexed"
-                : i === currentScanning
-                  ? "scanning"
-                  : "waiting";
+              i < filesIndexed ? "indexed" : i === currentScanning ? "scanning" : "waiting";
             const astBadge = i < filesIndexed && astProg > 0;
             return (
               <li key={f.name} className="flex items-center justify-between gap-2 pl-3">
@@ -248,7 +244,10 @@ function RepoIntelViz({
           { label: "Dependencies", value: deps },
           { label: "Semantic Roles", value: roles },
         ].map((m) => (
-          <div key={m.label} className="rounded-md border border-border bg-surface-muted/60 px-2 py-1.5">
+          <div
+            key={m.label}
+            className="rounded-md border border-border bg-surface-muted/60 px-2 py-1.5"
+          >
             <div className="text-[9px] font-medium uppercase tracking-wider text-ink-soft">
               {m.label}
             </div>
@@ -263,15 +262,7 @@ function RepoIntelViz({
 /* ============================================================
  * A2 — Dependency Analyzer
  * ============================================================ */
-function DepsViz({
-  data,
-  progress,
-  done,
-}: {
-  data: DepsPayload;
-  progress: number;
-  done: boolean;
-}) {
+function DepsViz({ data, progress, done }: { data: DepsPayload; progress: number; done: boolean }) {
   const path = data.path;
   const nodeW = 150;
   const nodeH = 32;
@@ -300,7 +291,11 @@ function DepsViz({
 
   return (
     <Frame label="Reachability — Live Trace">
-      <svg viewBox={`0 0 220 ${totalH + 8}`} className="animate-graph-in w-full" style={{ height: totalH + 8 }}>
+      <svg
+        viewBox={`0 0 220 ${totalH + 8}`}
+        className="animate-graph-in w-full"
+        style={{ height: totalH + 8 }}
+      >
         <defs>
           <radialGradient id="dep-pulse">
             <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.9" />
@@ -319,9 +314,7 @@ function DepsViz({
               y2={ys[i + 1]}
               stroke="currentColor"
               strokeWidth={reached ? 1.4 : 0.9}
-              className={`transition-all duration-500 ${
-                reached ? "text-ink-soft" : "text-border"
-              }`}
+              className={`transition-all duration-500 ${reached ? "text-ink-soft" : "text-border"}`}
             />
           );
         })}
@@ -371,12 +364,7 @@ function DepsViz({
         {!done && reachedCount > 0 && (
           <>
             <circle cx={col} cy={pulseY} r={10} fill="url(#dep-pulse)" />
-            <circle
-              cx={col}
-              cy={pulseY}
-              r={3.5}
-              className="fill-primary animate-soft-pulse"
-            />
+            <circle cx={col} cy={pulseY} r={3.5} className="fill-primary animate-soft-pulse" />
           </>
         )}
 
@@ -392,12 +380,7 @@ function DepsViz({
               strokeWidth={0.6}
               className="text-border"
             />
-            <circle
-              cx={col + nodeW / 2 + 18}
-              cy={d.y}
-              r={2.2}
-              className="fill-ink-soft/40"
-            />
+            <circle cx={col + nodeW / 2 + 18} cy={d.y} r={2.2} className="fill-ink-soft/40" />
             <text
               x={col + nodeW / 2 + 24}
               y={d.y + 3}
@@ -415,7 +398,10 @@ function DepsViz({
           { label: "Dead Findings", value: deadFindings, tone: "text-ink-soft" },
           { label: "Attack Paths", value: attack, tone: "text-status-failed" },
         ].map((m) => (
-          <div key={m.label} className="rounded-md border border-border bg-surface-muted/60 px-2 py-1.5">
+          <div
+            key={m.label}
+            className="rounded-md border border-border bg-surface-muted/60 px-2 py-1.5"
+          >
             <div className="text-[9px] font-medium uppercase tracking-wider text-ink-soft">
               {m.label}
             </div>
@@ -488,10 +474,7 @@ function StaticViz({
                     ? "bg-status-retry-bg text-status-retry"
                     : "bg-status-running-bg text-status-running";
               return (
-                <li
-                  key={f.text}
-                  className="animate-line-in flex items-center gap-2 text-[11px]"
-                >
+                <li key={f.text} className="animate-line-in flex items-center gap-2 text-[11px]">
                   <span className={`rounded px-1.5 py-0.5 text-[9px] font-semibold ${tone}`}>
                     {f.sev}
                   </span>
@@ -588,11 +571,15 @@ function ReproduceViz({
           <div className="mt-0.5 grid grid-cols-2 gap-2 text-[10px] text-ink-soft">
             <div>
               <span>Expected </span>
-              <span className="rounded bg-status-completed-bg px-1 text-status-completed">{data.failure.expected}</span>
+              <span className="rounded bg-status-completed-bg px-1 text-status-completed">
+                {data.failure.expected}
+              </span>
             </div>
             <div>
               <span>Actual </span>
-              <span className="rounded bg-status-failed-bg px-1 text-status-failed">{data.failure.actual}</span>
+              <span className="rounded bg-status-failed-bg px-1 text-status-failed">
+                {data.failure.actual}
+              </span>
             </div>
           </div>
           <div className="mt-2 border-t border-status-failed/20 pt-1.5">
@@ -604,7 +591,9 @@ function ReproduceViz({
                   className="animate-line-in flex items-center gap-1.5"
                   style={{ animationDelay: `${i * 100}ms` }}
                 >
-                  <span className="text-ink-soft">{i === data.failure.stack.length - 1 ? "└" : "├"}</span>
+                  <span className="text-ink-soft">
+                    {i === data.failure.stack.length - 1 ? "└" : "├"}
+                  </span>
                   <span>{f}</span>
                 </li>
               ))}
@@ -738,10 +727,7 @@ function BlastViz({
   });
 
   const affected = placed.filter((m) => progress >= m.hitAt).length;
-  const affectedCount = useCountUp(
-    modules.length,
-    done || affected === modules.length,
-  );
+  const affectedCount = useCountUp(modules.length, done || affected === modules.length);
 
   return (
     <Frame label="Impact Propagation">
@@ -793,7 +779,9 @@ function BlastViz({
                 cy={m.y}
                 r={reached ? 5 : 3}
                 className={`transition-all duration-500 ${
-                  reached ? "fill-surface-muted stroke-ink-soft/40" : "fill-surface-muted stroke-border"
+                  reached
+                    ? "fill-surface-muted stroke-ink-soft/40"
+                    : "fill-surface-muted stroke-border"
                 } ${reached && !done ? "animate-soft-pulse" : ""}`}
                 strokeWidth={0.8}
               />
@@ -811,12 +799,7 @@ function BlastViz({
           );
         })}
 
-        <circle
-          cx={cx}
-          cy={cy}
-          r={8}
-          className="fill-status-failed animate-soft-pulse"
-        />
+        <circle cx={cx} cy={cy} r={8} className="fill-status-failed animate-soft-pulse" />
         <text
           x={cx}
           y={cy + 22}
@@ -991,8 +974,8 @@ function PatchViz({
               Generated Patch
             </div>
             <pre className="whitespace-pre p-2 font-mono text-[10px] leading-relaxed text-ink">
-{typed}
-{typed.length < generated.length && <span className="animate-soft-pulse">▌</span>}
+              {typed}
+              {typed.length < generated.length && <span className="animate-soft-pulse">▌</span>}
             </pre>
           </div>
         </div>
@@ -1080,7 +1063,11 @@ function MutationViz({
                   : "bg-status-failed-bg text-status-failed"
               }`}
             >
-              {c.ok ? <Check className="h-2.5 w-2.5" strokeWidth={3} /> : <Skull className="h-2.5 w-2.5" />}
+              {c.ok ? (
+                <Check className="h-2.5 w-2.5" strokeWidth={3} />
+              ) : (
+                <Skull className="h-2.5 w-2.5" />
+              )}
               {c.detail}
             </span>
           </li>
@@ -1091,7 +1078,9 @@ function MutationViz({
         <div className="flex items-center justify-between text-[10px] text-ink-soft">
           <span>Mutation Score</span>
           {/* "not scored" is a distinct outcome from a score of zero. */}
-          <span className={`font-mono ${scored ? (failed ? "text-status-failed" : "text-status-completed") : "text-ink-soft"}`}>
+          <span
+            className={`font-mono ${scored ? (failed ? "text-status-failed" : "text-status-completed") : "text-ink-soft"}`}
+          >
             {scored ? `${animatedScore}%` : "not scored"}
           </span>
         </div>
@@ -1160,13 +1149,7 @@ function MergeViz({
 
   const allDone = progress >= 0.85;
 
-  const stage = allDone
-    ? progress < 0.92
-      ? 1
-      : progress < 0.97
-        ? 2
-        : 3
-    : 0;
+  const stage = allDone ? (progress < 0.92 ? 1 : progress < 0.97 ? 2 : 3) : 0;
 
   const size = 96;
   const stroke = 8;
@@ -1188,8 +1171,7 @@ function MergeViz({
             const v = animated[i] ?? 0;
             const reveal = progress > 0.05 + i * 0.16;
             const tone = m.ok ? "text-status-completed" : "text-status-retry";
-            const display =
-              m.scopeLabel && v >= m.value - 1 ? m.scopeLabel : `${v}%`;
+            const display = m.scopeLabel && v >= m.value - 1 ? m.scopeLabel : `${v}%`;
             return (
               <div
                 key={m.label}
@@ -1198,9 +1180,7 @@ function MergeViz({
                 }`}
               >
                 <span className="text-[11px] font-medium text-ink">{m.label}</span>
-                <span className={`font-mono text-[13px] font-semibold ${tone}`}>
-                  {display}
-                </span>
+                <span className={`font-mono text-[13px] font-semibold ${tone}`}>{display}</span>
               </div>
             );
           })}
@@ -1231,17 +1211,11 @@ function MergeViz({
               />
             </svg>
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-              <span className="font-mono text-[18px] font-semibold text-ink">
-                {compositeAnim}
-              </span>
-              <span className="text-[8px] uppercase tracking-wider text-ink-soft">
-                Trust
-              </span>
+              <span className="font-mono text-[18px] font-semibold text-ink">{compositeAnim}</span>
+              <span className="text-[8px] uppercase tracking-wider text-ink-soft">Trust</span>
             </div>
           </div>
-          <span className="mt-1 text-[9px] uppercase tracking-wider text-ink-soft">
-            Composite
-          </span>
+          <span className="mt-1 text-[9px] uppercase tracking-wider text-ink-soft">Composite</span>
         </div>
       </div>
 
@@ -1286,11 +1260,7 @@ function MergeViz({
         </div>
       )}
 
-      {done && (
-        <div className="mt-2 text-[10px] text-ink-soft">
-          {data.reviewNote}
-        </div>
-      )}
+      {done && <div className="mt-2 text-[10px] text-ink-soft">{data.reviewNote}</div>}
     </Frame>
   );
 }
@@ -1316,9 +1286,7 @@ export function EvidenceHandoff({
       {/* Vertical pipe with a flowing pulse when the next agent is live */}
       <div className="relative h-6 w-px overflow-hidden bg-border animate-handoff-line-grow">
         {live && (
-          <span
-            className="absolute left-1/2 top-0 h-2 w-px -translate-x-1/2 bg-primary/70 animate-handoff-flow"
-          />
+          <span className="absolute left-1/2 top-0 h-2 w-px -translate-x-1/2 bg-primary/70 animate-handoff-flow" />
         )}
       </div>
       {/* From → To chip: previous output visually becoming next input */}
@@ -1336,5 +1304,3 @@ export function EvidenceHandoff({
     </div>
   );
 }
-
-

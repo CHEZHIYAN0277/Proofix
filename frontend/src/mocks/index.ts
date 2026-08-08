@@ -5,7 +5,7 @@
  * (see `src/lib/runService.ts`). UI components import only from this barrel
  * or from typed services, never from individual fixture files.
  */
-export { AGENTS, RETRY_ATTEMPTS, AGENT_SUMMARY_BULLETS } from "@/components/proofix/data";
+export { AGENTS } from "@/components/proofix/data";
 export type {
   AgentEntry,
   AgentStatus,

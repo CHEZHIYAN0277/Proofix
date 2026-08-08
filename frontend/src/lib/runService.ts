@@ -54,9 +54,7 @@ export function eventSourceFor(runId: string): EventSourceFactory {
 }
 
 /** Parse a GitHub URL into owner/name. Pure client-side gating only. */
-export function parseGithubUrl(
-  raw: string,
-): { owner: string; name: string } | null {
+export function parseGithubUrl(raw: string): { owner: string; name: string } | null {
   const s = raw.trim();
   if (!s) return null;
   try {
@@ -84,18 +82,14 @@ export async function getRunReport(runId: string): Promise<RunReportModel> {
   return MOCK_RUN_REPORT;
 }
 
-export async function getWorkspaceHeader(
-  runId: string,
-): Promise<WorkspaceHeaderModel> {
+export async function getWorkspaceHeader(runId: string): Promise<WorkspaceHeaderModel> {
   if (DATA_SOURCE === "api") {
     return apiFetch<WorkspaceHeaderModel>(ENDPOINTS.run(runId));
   }
   return MOCK_WORKSPACE_HEADER;
 }
 
-export async function getExecutiveSummary(
-  runId: string,
-): Promise<ExecutiveSummaryModel> {
+export async function getExecutiveSummary(runId: string): Promise<ExecutiveSummaryModel> {
   if (DATA_SOURCE === "api") {
     return apiFetch<ExecutiveSummaryModel>(ENDPOINTS.runSummary(runId));
   }
@@ -109,9 +103,7 @@ export async function getRunAgents(runId: string): Promise<AgentEntry[]> {
   return AGENTS;
 }
 
-export async function getRepairAttempts(
-  runId: string,
-): Promise<RepairAttemptsModel> {
+export async function getRepairAttempts(runId: string): Promise<RepairAttemptsModel> {
   if (DATA_SOURCE === "api") {
     return apiFetch<RepairAttemptsModel>(ENDPOINTS.retryAttempts(runId));
   }
@@ -123,9 +115,7 @@ export async function getRepairAttempts(
  * this goes through the ProoFix backend, which performs auth, rate-limiting
  * and metadata enrichment server-side.
  */
-export async function validateRepository(
-  url: string,
-): Promise<RepoMetadata | null> {
+export async function validateRepository(url: string): Promise<RepoMetadata | null> {
   if (DATA_SOURCE === "api") {
     try {
       return await apiFetch<RepoMetadata>(ENDPOINTS.repoValidate(), {
@@ -151,10 +141,10 @@ export async function validateRepository(
 
 export async function askChat(runId: string, question: string): Promise<string> {
   if (DATA_SOURCE === "api") {
-    const { answer } = await apiFetch<{ answer: string }>(
-      ENDPOINTS.runChat(runId),
-      { method: "POST", json: { question } },
-    );
+    const { answer } = await apiFetch<{ answer: string }>(ENDPOINTS.runChat(runId), {
+      method: "POST",
+      json: { question },
+    });
     return answer;
   }
   const { mockAnswerer } = await import("@/mocks/chat");

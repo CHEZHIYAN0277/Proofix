@@ -1,10 +1,6 @@
 @import "tailwindcss" source(none);
 @source "../src";
 @import "tw-animate-css";
-/* Design system token layer (Workspace V2 Phase 0). Purely additive — it
-   extends the blocks below, never redefines a token V1 already renders with.
-   See src/design/tokens/tokens.css. */
-@import "./design/tokens/tokens.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -72,115 +68,170 @@
   --card-foreground: oklch(0.21 0.03 264);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.21 0.03 264);
-  --primary: #3B82F6;
-  --primary-foreground: #F8FAFC;
+  --primary: #3b82f6;
+  --primary-foreground: #f8fafc;
   --secondary: #f5f5f5;
   --secondary-foreground: #18181b;
   --muted: #f5f5f5;
   --muted-foreground: #737373;
   --accent: #f4f4f5;
   --accent-foreground: #18181b;
-  --destructive: #EF4444;
+  --destructive: #ef4444;
   --destructive-foreground: #fafafa;
   --border: oklch(0.92 0.008 256);
   --input: oklch(0.92 0.008 256);
-  --ring: #3B82F6;
+  --ring: #3b82f6;
 
-  --status-running: #3B82F6;
-  --status-running-bg: color-mix(in srgb, #3B82F6 12%, white);
-  --status-completed: #16A34A;
-  --status-completed-bg: color-mix(in srgb, #22C55E 14%, white);
-  --status-retry: #D97706;
-  --status-retry-bg: color-mix(in srgb, #F59E0B 16%, white);
-  --status-failed: #DC2626;
-  --status-failed-bg: color-mix(in srgb, #EF4444 12%, white);
-  --status-draft: #0891B2;
-  --status-draft-bg: color-mix(in srgb, #06B6D4 14%, white);
+  --status-running: #3b82f6;
+  --status-running-bg: color-mix(in srgb, #3b82f6 12%, white);
+  --status-completed: #16a34a;
+  --status-completed-bg: color-mix(in srgb, #22c55e 14%, white);
+  --status-retry: #d97706;
+  --status-retry-bg: color-mix(in srgb, #f59e0b 16%, white);
+  --status-failed: #dc2626;
+  --status-failed-bg: color-mix(in srgb, #ef4444 12%, white);
+  --status-draft: #0891b2;
+  --status-draft-bg: color-mix(in srgb, #06b6d4 14%, white);
 }
 
 .dark {
   /* Neutral near-black palette — reference-matched */
-  --background: #0A0A0A;
-  --foreground: #FAFAFA;
+  --background: #0a0a0a;
+  --foreground: #fafafa;
   --surface: #141414;
-  --surface-muted: #1A1A1A;
-  --ink: #FAFAFA;
-  --ink-soft: #A1A1AA;
+  --surface-muted: #1a1a1a;
+  --ink: #fafafa;
+  --ink-soft: #a1a1aa;
   --card: #141414;
-  --card-foreground: #FAFAFA;
+  --card-foreground: #fafafa;
   --popover: #141414;
-  --popover-foreground: #FAFAFA;
-  --primary: #3B82F6;
-  --primary-foreground: #FAFAFA;
-  --secondary: #1A1A1A;
-  --secondary-foreground: #FAFAFA;
+  --popover-foreground: #fafafa;
+  --primary: #3b82f6;
+  --primary-foreground: #fafafa;
+  --secondary: #1a1a1a;
+  --secondary-foreground: #fafafa;
   --muted: #171717;
   --muted-foreground: #737373;
-  --accent: #1F1F1F;
-  --accent-foreground: #FAFAFA;
-  --destructive: #EF4444;
-  --destructive-foreground: #FAFAFA;
+  --accent: #1f1f1f;
+  --accent-foreground: #fafafa;
+  --destructive: #ef4444;
+  --destructive-foreground: #fafafa;
   --border: #262626;
   --input: #262626;
-  --ring: #3B82F6;
+  --ring: #3b82f6;
 
   /* Semantic status — blue=active, green=done, amber=retry, red=fail, cyan=info(draft) */
-  --status-running: #3B82F6;
-  --status-running-bg: color-mix(in srgb, #3B82F6 16%, transparent);
-  --status-completed: #22C55E;
-  --status-completed-bg: color-mix(in srgb, #22C55E 14%, transparent);
-  --status-retry: #F59E0B;
-  --status-retry-bg: color-mix(in srgb, #F59E0B 14%, transparent);
-  --status-failed: #EF4444;
-  --status-failed-bg: color-mix(in srgb, #EF4444 14%, transparent);
-  --status-draft: #06B6D4;
-  --status-draft-bg: color-mix(in srgb, #06B6D4 14%, transparent);
+  --status-running: #3b82f6;
+  --status-running-bg: color-mix(in srgb, #3b82f6 16%, transparent);
+  --status-completed: #22c55e;
+  --status-completed-bg: color-mix(in srgb, #22c55e 14%, transparent);
+  --status-retry: #f59e0b;
+  --status-retry-bg: color-mix(in srgb, #f59e0b 14%, transparent);
+  --status-failed: #ef4444;
+  --status-failed-bg: color-mix(in srgb, #ef4444 14%, transparent);
+  --status-draft: #06b6d4;
+  --status-draft-bg: color-mix(in srgb, #06b6d4 14%, transparent);
 }
-
 
 @keyframes line-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 @keyframes panel-in-right {
-  from { opacity: 0; transform: translateX(20px); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 @keyframes card-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 @keyframes soft-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 @keyframes caret-blink {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0; }
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
 }
 @keyframes handoff-flow {
-  0% { transform: translateY(-100%); opacity: 0; }
-  20% { opacity: 1; }
-  80% { opacity: 1; }
-  100% { transform: translateY(100%); opacity: 0; }
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
 }
 @keyframes handoff-line-grow {
-  from { transform: scaleY(0); }
-  to { transform: scaleY(1); }
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
 }
 @keyframes graph-in {
-  from { opacity: 0; transform: scale(0.985); }
-  to { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 @keyframes graph-label-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 @keyframes graph-edge-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
-
 
 @utility animate-line-in {
   animation: line-in 350ms ease-out both;
@@ -225,13 +276,16 @@
   @apply hover:-translate-y-[1px] hover:scale-[1.005] hover:border-primary/30 hover:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_20px_-14px_hsl(var(--primary)/0.25)];
 }
 
-
-
 @layer base {
-  * { border-color: var(--color-border); }
+  * {
+    border-color: var(--color-border);
+  }
   /* Cohesive global theme transition — every surface fades together */
-  html, body,
-  html *, html *::before, html *::after {
+  html,
+  body,
+  html *,
+  html *::before,
+  html *::after {
     transition:
       background-color 350ms ease-out,
       border-color 350ms ease-out,
@@ -256,17 +310,35 @@
   /* Typography — Geist headings, Inter body, JetBrains Mono for code.
      Applies globally without changing existing layouts; per-element size
      classes still win via specificity. */
-  h1, h2, h3, h4, h5, h6 {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     font-family: var(--font-heading);
     color: var(--color-ink);
     letter-spacing: -0.011em;
     line-height: 1.25;
   }
-  h1 { font-weight: 700; }
-  h2 { font-weight: 700; }
-  h3 { font-weight: 600; }
-  h4, h5, h6 { font-weight: 600; }
-  code, kbd, pre, samp {
+  h1 {
+    font-weight: 700;
+  }
+  h2 {
+    font-weight: 700;
+  }
+  h3 {
+    font-weight: 600;
+  }
+  h4,
+  h5,
+  h6 {
+    font-weight: 600;
+  }
+  code,
+  kbd,
+  pre,
+  samp {
     font-family: var(--font-mono);
     font-size: 0.8125rem; /* 13px */
     font-weight: 500;
@@ -286,16 +358,18 @@
     border-radius: inherit;
   }
 
-  html { scroll-behavior: smooth; }
+  html {
+    scroll-behavior: smooth;
+  }
 }
 
-
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
 }
-

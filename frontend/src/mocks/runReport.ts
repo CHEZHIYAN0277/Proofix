@@ -95,6 +95,21 @@ export interface WorkspaceHeaderModel {
   retries: number;
   executionTime: string;
   decisionLabel: string;
+  /**
+   * How the run ended, as the backend records it. Optional because the mock
+   * fixtures predate the lifecycle record; live responses always carry them.
+   * `status` is `RunStateModel.status`, `lifecycle` the authoritative
+   * `RunLifecycleEvent` list, `environment` A0.7's report.
+   */
+  status?: string;
+  lifecycle?: { type: string; reason?: string | null; decision_label?: string | null }[];
+  environment?: {
+    status?: string | null;
+    language?: string | null;
+    reason?: string | null;
+    test_runner?: string | null;
+    suggested_command?: string | null;
+  } | null;
 }
 
 export interface ExecutiveSummaryModel {

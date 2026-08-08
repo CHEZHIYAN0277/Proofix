@@ -24,6 +24,7 @@ import {
   type RunReportModel,
 } from "@/mocks";
 import { useRunData } from "@/components/proofix/useRunData";
+import { resolveRunLifecycle, type RunLifecycleView } from "@/components/proofix/runLifecycle";
 import { askChat, createRun, eventSourceFor, isLive } from "@/lib/runService";
 
 type View = "execution" | "new-run" | "analyzing" | "settings" | "home" | "runs";
@@ -108,11 +109,42 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
   // The journal replays backend events over the live agent list; in mock mode
   // this falls back to the bundled timing source.
   const eventSource = useMemo(() => eventSourceFor(runId), [runId]);
-  const { agents, activeIndex, restart, done } = useExecutionRun({
+  const {
+    agents,
+    activeIndex,
+    restart,
+    done: journalDone,
+    settledState,
+  } = useExecutionRun({
     agents: runData.agents,
     createEventSource: eventSource,
     seedStatusFromAgents: isLive,
   });
+
+  // How the backend says this run ended. The journal's own `done` only knows
+  // that its replay reached the end, which never happens for a run that stopped
+  // early — the header stayed on `Status · Running` for a run blocked minutes
+  // ago. Either source settling the run is enough.
+  const lifecycle = useMemo(
+    () =>
+      resolveRunLifecycle({
+        status: runData.header.status,
+        lifecycle: runData.header.lifecycle,
+        environment: runData.header.environment,
+        decisionLabel: runData.header.decisionLabel,
+      }),
+    [runData.header],
+  );
+
+  // The run is over. Deliberately shadowing the old `done`: every place that
+  // asked "has the journal finished playing?" actually meant "is the run
+  // over?", and the two only ever agreed for a run that reached A10. A blocked
+  // run answered no to the first forever.
+  const done = journalDone || lifecycle.terminal;
+
+  // Which ending, preferring whichever source has spoken. Mock mode has no
+  // backend status, so its journal completing means completed.
+  const runState = lifecycle.terminal ? lifecycle.state : (settledState ?? "running");
 
   useEffect(() => {
     setRunDone(done);
@@ -186,6 +218,16 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
           })),
         );
       }
+      // The reveal below narrates a repair: it scrolls through repair attempts
+      // to the executive summary and opens the run report. A run that never
+      // generated a patch has none of that to show, so it settles in place and
+      // leaves the environment card as the last thing on screen.
+      if (runState !== "completed") {
+        setShowRunReport(false);
+        prevDone.current = done;
+        return;
+      }
+
       // End-of-run storytelling:
       //  1) 700ms pause, then gently scroll to Repair Attempts (git-history reveal).
       //  2) Attempts stagger in (~540ms) + 700ms breathing room.
@@ -224,7 +266,7 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
     if (!done) setShowRunReport(false);
     prevDone.current = done;
     // setRepositories is a stable useState setter, surfaced via useRunData.
-  }, [done, runId, setRepositories]);
+  }, [done, runState, runId, setRepositories]);
 
   useEffect(() => {
     if (done || view !== "execution") return;
@@ -400,7 +442,7 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
         {view === "execution" && !(isLive && runData.loading) && (
           <div className="mx-auto flex max-w-[1480px] gap-6 px-6 py-6">
             <div className={`min-w-0 flex-1 space-y-6 ${done ? "pb-[160px]" : "pb-24"}`}>
-              <WorkspaceHeader done={done} header={runData.header} />
+              <WorkspaceHeader done={done} header={runData.header} lifecycle={lifecycle} />
               <div ref={executiveSummaryRef} className="scroll-mt-6">
                 <ExecutiveSummary
                   agents={agents}
@@ -593,19 +635,33 @@ function WorkspaceLoading() {
   );
 }
 
+/** What the "Current Agent" tile reads once nothing is streaming any more. */
+const CURRENT_AGENT_BY_STATE: Record<string, string> = {
+  running: "Streaming…",
+  completed: "Completed",
+  failed: "Stopped",
+  blocked: "Stopped",
+};
+
 function WorkspaceHeader({
   done,
   header,
+  lifecycle,
 }: {
   done: boolean;
   /** Always supplied by `useRunData` — blank in live mode until the backend answers. */
   header: WorkspaceHeaderModel;
+  /** How the backend says this run ended. Drives every label in this header. */
+  lifecycle: RunLifecycleView;
 }) {
+  // Mock mode has no backend status, so `done` alone settles it as completed.
+  const state = lifecycle.terminal ? lifecycle.state : done ? "completed" : "running";
+  const settled = state !== "running";
   const items = [
     { label: "Repository", value: header.repository, mono: true },
     { label: "Branch", value: header.branch, icon: <GitBranch className="h-3 w-3" />, mono: true },
     { label: "Run", value: header.shortRunId, icon: <Hash className="h-3 w-3" />, mono: true },
-    { label: "Current Agent", value: done ? "Completed" : "Streaming…" },
+    { label: "Current Agent", value: CURRENT_AGENT_BY_STATE[state] ?? "Streaming…" },
     { label: "Retries", value: String(header.retries), icon: <RefreshCcw className="h-3 w-3" /> },
     { label: "Execution Time", value: header.executionTime, icon: <Clock className="h-3 w-3" /> },
   ];
@@ -616,10 +672,22 @@ function WorkspaceHeader({
           <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-ink-soft">
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                done ? "bg-status-completed" : "bg-status-running animate-soft-pulse"
+                state === "completed"
+                  ? "bg-status-completed"
+                  : state === "failed"
+                    ? "bg-status-failed"
+                    : state === "blocked"
+                      ? "bg-status-draft"
+                      : "bg-status-running animate-soft-pulse"
               }`}
             />
-            {done ? "Execution complete" : "Executing"}
+            {state === "completed"
+              ? "Execution complete"
+              : state === "failed"
+                ? "Execution stopped"
+                : state === "blocked"
+                  ? "Execution halted before repair"
+                  : "Executing"}
           </div>
           <h1 className="mt-1.5 text-2xl font-semibold tracking-tight text-ink">
             {header.repository} <span className="text-ink-soft">·</span>{" "}
@@ -628,13 +696,42 @@ function WorkspaceHeader({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge
-            status={done ? "completed" : "running"}
-            pulse={!done}
-            label={done ? "Status · Completed" : "Status · Running"}
+            status={state === "blocked" ? "draft" : state === "running" ? "running" : state}
+            pulse={!settled}
+            label={
+              state === "running"
+                ? "Status · Running"
+                : state === "completed"
+                  ? "Status · Completed"
+                  : state === "failed"
+                    ? "Status · Failed"
+                    : "Status · Blocked"
+            }
           />
-          <StatusBadge status="draft" label={`Decision · ${header.decisionLabel}`} />
+          <StatusBadge
+            status={state === "failed" ? "failed" : "draft"}
+            label={`Decision · ${lifecycle.terminal ? lifecycle.decisionLabel : header.decisionLabel}`}
+          />
         </div>
       </div>
+
+      {/* Why the run ended, in the backend's words. Only ever rendered when the
+          backend supplied a reason — there is no fallback sentence, because a
+          composed one would be this UI describing a verdict it did not reach. */}
+      {lifecycle.reason && (
+        <div
+          className={`mt-4 rounded-lg border px-3 py-2.5 ${
+            state === "failed"
+              ? "border-status-failed/30 bg-status-failed-bg/40"
+              : "border-status-draft/30 bg-status-draft-bg/40"
+          }`}
+        >
+          <div className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+            {state === "blocked" ? "Environment" : "Reason"}
+          </div>
+          <p className="mt-1 text-sm text-ink">{lifecycle.reason}</p>
+        </div>
+      )}
 
       <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {items.map((it) => (

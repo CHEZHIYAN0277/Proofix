@@ -1,8 +1,9 @@
 # Environment Precheck — design
 
-Written during the Workspace V2 Production QA sprint, in response to QA item 12.
-**No pipeline behaviour has been changed by this document.** It ends with a
-precise list of what I would change and why, for approval.
+Design record for the A0.7 environment precheck and the `blocked` terminal
+state. **Current and active** — the precheck it describes is implemented in
+`backend/agents/a0_7_environment.py` and its result is rendered by the V1
+workspace's `environment` agent card.
 
 ---
 

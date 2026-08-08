@@ -83,10 +83,22 @@ STAGE_REGISTRY: list[StageDefinition] = [
 
 STAGE_BY_ID = {stage.id: stage for stage in STAGE_REGISTRY}
 
-# Surfaces an agent is published to. V1 (`frontend/src/components/proofix`)
-# ships a fixed set of eleven agent cards with bespoke visualizations; handing it
-# entries it has no renderer for would add cards that never animate. V2 consumes
-# the full pipeline. One registry, two audiences.
+# Which surface an agent is published to.
+#
+# NOTE ON THE NAME: the frontend once called "Workspace V2" was cancelled and
+# deleted. These two values are an **API contract** — the `surface` query
+# parameter on `/agents` and `/stages` — and nothing here asks anyone to build
+# a second frontend. Read them as:
+#
+#   "v1" — the product surface: the agent cards the workspace renders today
+#          (`frontend/src/components/proofix`).
+#   "v2" — the full-pipeline surface: every agent the graph executes, including
+#          A0.5 and A5.5, which the product surface has no card for yet.
+#
+# The full-pipeline surface is retained because it is the only thing publishing
+# A0.5 and A5.5, which genuinely run. Collapsing the two — by giving the product
+# surface cards for those agents — is tracked as product work, not done here,
+# because it changes what the workspace renders.
 SURFACE_V1 = "v1"
 SURFACE_V2 = "v2"
 _BOTH = frozenset({SURFACE_V1, SURFACE_V2})
@@ -112,6 +124,15 @@ class AgentDefinition(NamedTuple):
 # The single source of truth for agent identity, ordering and stage membership.
 # Nothing downstream — backend or frontend — may hardcode this mapping.
 AGENT_REGISTRY: list[AgentDefinition] = [
+    AgentDefinition(
+        "environment",
+        "A0.7",
+        "Environment Precheck",
+        "Establish whether this repository's tests can execute here.",
+        "Environment Report",
+        "repository",
+        _BOTH,
+    ),
     AgentDefinition(
         "intelligence",
         "A0.5",
@@ -505,6 +526,28 @@ def _lines_for(card: str, state: RunStateModel, events_for_agent: list[AgentStat
 
 
 def _narrative_detail(card: str, state: RunStateModel) -> list[str]:
+    if card == "environment":
+        # The probe's own words. A blocked run's entire explanation is this
+        # `reason`, so it is rendered verbatim rather than re-composed here.
+        env = state.environment or {}
+        if not env:
+            return []
+        detail = [f"Language: {env.get('language') or 'undetermined'}."]
+        runner = env.get("test_runner")
+        if runner:
+            available = env.get("test_runner_available")
+            detail.append(
+                f"Test runner {runner} "
+                + ("is available." if available else "is not available.")
+            )
+        reason = env.get("reason")
+        if reason:
+            detail.append(str(reason))
+        command = env.get("suggested_command")
+        if command:
+            detail.append(f"Suggested command: {command}")
+        return detail
+
     if card == "repo-intel":
         sig = state.sig or {}
         files = sig.get("files") or {}
@@ -637,6 +680,17 @@ def _metrics_for(
         return {"label": label, "value": str(value)}
 
     events_for_agent = events_for_agent or []
+
+    if card == "environment":
+        env = state.environment or {}
+        if not env:
+            return [metric("Duration", duration)]
+        return [
+            metric("Environment", env.get("status") or "unknown"),
+            metric("Language", env.get("language") or "—"),
+            metric("Test Runner", env.get("test_runner") or "—"),
+            metric("Blocking", "yes" if env.get("blocking") else "no"),
+        ]
 
     if card == "intelligence":
         published = _latest_payload(events_for_agent, "repository_intelligence")
@@ -789,6 +843,26 @@ def _evidence_for(
         return {"label": label, "value": str(value), "mono": mono}
 
     events_for_agent = events_for_agent or []
+
+    if card == "environment":
+        env = state.environment or {}
+        if not env:
+            return payload("Environment Report", "The precheck did not run for this run.", [])
+        manifests = [
+            str(m.get("path")) for m in (env.get("manifests") or []) if m.get("path")
+        ]
+        return payload(
+            "Environment Report",
+            "Whether this repository's tests can execute here.",
+            [
+                field("Status", env.get("status") or "unknown", True),
+                field("Language", env.get("language") or "—", True),
+                field("Test runner", env.get("test_runner") or "—", True),
+                field("Reason", str(env.get("reason") or "—")),
+                field("Suggested command", str(env.get("suggested_command") or "—"), True),
+            ],
+            manifests or None,
+        )
 
     if card == "intelligence":
         published = _latest_payload(events_for_agent, "repository_intelligence")

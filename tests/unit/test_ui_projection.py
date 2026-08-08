@@ -356,3 +356,104 @@ def test_pytest_unavailability_is_read_from_the_recorded_fact():
     assert _pytest_unavailable(
         {"failure_brief": {"stack_trace": "No module named pytest"}}
     ) is True
+
+
+# -- the environment precheck must be visible on the V1 surface ---------------
+#
+# A blocked run reaches exactly one agent: A0.7. Before it was in the registry,
+# V1 published eleven cards none of which corresponded to the stage the run
+# actually stopped at, so the boundary was invisible and the journal read as a
+# pipeline still working through its first stage.
+
+
+def _blocked_state() -> RunStateModel:
+    state = RunStateModel(run_id=RUN_ID, repo_path="quant_med", status="blocked")
+    state.environment = {
+        "status": "blocked",
+        "language": "python",
+        "blocking": True,
+        "test_runner": "pytest",
+        "test_runner_available": False,
+        "reason": "No dependency manifest found in the repository.",
+        "suggested_command": "pip install -e .",
+        "manifests": [],
+    }
+    return state
+
+
+def _a07_events() -> list[AgentStatusEvent]:
+    return [
+        AgentStatusEvent(
+            run_id=RUN_ID,
+            agent_id="A0.7",
+            status="started",
+            message="Checking whether the test suite can run",
+        ),
+        AgentStatusEvent(
+            run_id=RUN_ID,
+            agent_id="A0.7",
+            status="failed",
+            message="No dependency manifest found in the repository.",
+        ),
+    ]
+
+
+def test_v1_publishes_an_environment_card_for_a_blocked_run():
+    entries = build_agent_entries(_blocked_state(), _a07_events(), surface=SURFACE_V1)
+    card = next(e for e in entries if e["id"] == "environment")
+
+    assert card["agentId"] == "A0.7"
+    assert card["index"] == 1  # first stage the pipeline executes
+    assert card["status"] == "failed"
+    # The reason is the probe's own sentence, rendered verbatim.
+    assert "No dependency manifest found in the repository." in card["lines"]
+
+
+def test_blocked_run_does_not_fabricate_downstream_agents():
+    entries = build_agent_entries(_blocked_state(), _a07_events(), surface=SURFACE_V1)
+    downstream = [e for e in entries if e["id"] != "environment"]
+
+    assert downstream, "the V1 rail still publishes the rest of the pipeline"
+    # Nothing after the precheck ran, and nothing claims it did.
+    assert {e["status"] for e in downstream} == {"skipped"}
+    assert not any(e["status"] == "completed" for e in downstream)
+
+
+def test_environment_card_reports_the_probe_verbatim():
+    entries = build_agent_entries(_blocked_state(), _a07_events(), surface=SURFACE_V1)
+    card = next(e for e in entries if e["id"] == "environment")
+
+    metrics = {m["label"]: m["value"] for m in card["metrics"]}
+    assert metrics["Environment"] == "blocked"
+    assert metrics["Test Runner"] == "pytest"
+
+    fields = {f["label"]: f["value"] for f in card["evidence"]["fields"]}
+    assert fields["Reason"] == "No dependency manifest found in the repository."
+    assert fields["Suggested command"] == "pip install -e ."
+
+
+def test_environment_card_says_nothing_when_the_precheck_did_not_run():
+    """Stub mode and a disabled precheck both leave `environment` empty. The
+    card must report absence rather than invent a verdict."""
+    state = RunStateModel(run_id=RUN_ID, repo_path="quant_med", status="completed")
+    entries = build_agent_entries(state, [], surface=SURFACE_V1)
+    card = next(e for e in entries if e["id"] == "environment")
+
+    assert card["status"] == "skipped"
+    assert card["evidence"]["fields"] == []
+
+
+def test_blocked_header_carries_the_status_and_the_environment_report():
+    """The client settles a blocked run from these two fields alone."""
+    header = build_workspace_header(_blocked_state(), _a07_events())
+
+    assert header["decisionLabel"] == "Environment not prepared"
+    assert header["environment"]["reason"] == (
+        "No dependency manifest found in the repository."
+    )
+
+
+def test_blocked_run_is_never_projected_as_running_or_completed():
+    state = _blocked_state()
+    assert sidebar_status(state) == "blocked"
+    assert run_decision(state) == ("blocked", "Environment not prepared")

@@ -106,7 +106,8 @@ export function ChatPanel({
             ) : (
               <div className="px-4 pt-3 pb-2">
                 <p className="mb-2 text-[13px] text-ink-soft">
-                  I'm reading the current evidence for this run. Ask me anything about what the agents found.
+                  I'm reading the current evidence for this run. Ask me anything about what the
+                  agents found.
                 </p>
                 <div className="flex flex-wrap gap-1.5">
                   {suggestions.map((s) => (

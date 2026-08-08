@@ -26,13 +26,7 @@ const toneClass: Record<Tone, { text: string; stroke: string }> = {
   unknown: { text: "text-ink-soft", stroke: "stroke-border" },
 };
 
-export function ProgressRing({
-  value,
-  label,
-  size = 72,
-  tone = "primary",
-  animate = true,
-}: Props) {
+export function ProgressRing({ value, label, size = 72, tone = "primary", animate = true }: Props) {
   const measured = value !== null;
   // The track still draws, so the layout is stable and the axis is visibly
   // present — it simply has no reading.
@@ -82,9 +76,7 @@ export function ProgressRing({
           {measured ? `${Math.round(v)}%` : "—"}
         </span>
       </div>
-      <div className="text-[10px] font-medium uppercase tracking-wider text-ink-soft">
-        {label}
-      </div>
+      <div className="text-[10px] font-medium uppercase tracking-wider text-ink-soft">{label}</div>
     </div>
   );
 }

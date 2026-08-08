@@ -20,11 +20,12 @@ from backend.services.ui_projection import (
     build_stage_registry,
 )
 
-# The pipeline as `orchestrator/graph.py` actually executes it. A0.5 runs at
-# `index_repository` and A5.5 at `engineer_context`; both emitted status events
-# long before the registry acknowledged them, which is what kept them invisible.
+# The pipeline as `orchestrator/graph.py` actually executes it. A0.7 runs at
+# `environment_precheck`, A0.5 at `index_repository` and A5.5 at
+# `engineer_context`; all three emitted status events long before the registry
+# acknowledged them, which is what kept them invisible.
 EXPECTED_AGENT_IDS = [
-    "A0.5", "A1", "A2", "A3", "A3.5", "A4", "A5", "A5.5", "A6", "A7", "A8", "A9", "A10",
+    "A0.7", "A0.5", "A1", "A2", "A3", "A3.5", "A4", "A5", "A5.5", "A6", "A7", "A8", "A9", "A10",
 ]
 
 
@@ -32,7 +33,7 @@ def test_registry_covers_every_pipeline_agent():
     assert [a.agent_id for a in AGENT_REGISTRY] == EXPECTED_AGENT_IDS
 
 
-@pytest.mark.parametrize("agent_id", ["A0.5", "A5.5"])
+@pytest.mark.parametrize("agent_id", ["A0.7", "A0.5", "A5.5"])
 def test_new_agents_are_registered_with_full_display_information(agent_id):
     definition = AGENT_BY_BACKEND_ID[agent_id]
     assert definition.card
@@ -62,7 +63,7 @@ def test_lookup_tables_agree_with_the_registry():
 def test_registry_entries_remain_positionally_unpackable():
     # Existing consumers unpack the first five fields positionally. Adding stage
     # and surface must not break them.
-    card, agent_id, name, purpose, handoff = AGENT_REGISTRY[1][:5]
+    card, agent_id, name, purpose, handoff = AGENT_REGISTRY[2][:5]
     assert (card, agent_id) == ("repo-intel", "A1")
     assert name and purpose and handoff
 
@@ -72,6 +73,9 @@ def test_v1_surface_excludes_the_agents_v1_cannot_render():
     assert "A0.5" not in v1_ids
     assert "A5.5" not in v1_ids
     assert "A1" in v1_ids and "A10" in v1_ids
+    # A0.7 is the exception: a run the precheck blocks reaches no other agent,
+    # so without it V1 has nothing to show for the stage where the run stopped.
+    assert "A0.7" in v1_ids
 
 
 def test_v2_surface_publishes_the_whole_pipeline():
@@ -103,7 +107,7 @@ def test_stage_registry_is_ordered_and_complete():
 def test_build_stage_registry_groups_agents_under_their_stage():
     stages = {s["id"]: s for s in build_stage_registry(SURFACE_V2)}
 
-    assert [a["agentId"] for a in stages["repository"]["agents"]] == ["A0.5", "A1", "A2", "A3"]
+    assert [a["agentId"] for a in stages["repository"]["agents"]] == ["A0.7", "A0.5", "A1", "A2", "A3"]
     assert [a["agentId"] for a in stages["investigation"]["agents"]] == ["A3.5", "A4", "A5"]
     assert [a["agentId"] for a in stages["context"]["agents"]] == ["A5.5"]
     assert [a["agentId"] for a in stages["validation"]["agents"]] == ["A8", "A9", "A10"]

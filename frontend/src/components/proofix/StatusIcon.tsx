@@ -21,11 +21,7 @@ export function StatusIcon({ ok, size = "md", className = "" }: Props) {
     <span
       className={`inline-flex shrink-0 items-center justify-center rounded-full border-2 bg-transparent ${tone} ${box} ${className}`}
     >
-      {ok ? (
-        <Check className={glyph} strokeWidth={2} />
-      ) : (
-        <X className={glyph} strokeWidth={2} />
-      )}
+      {ok ? <Check className={glyph} strokeWidth={2} /> : <X className={glyph} strokeWidth={2} />}
     </span>
   );
 }

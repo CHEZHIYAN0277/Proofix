@@ -6,6 +6,20 @@ the Context Engineering layer (A5.5) as an addition that fits the real structure
 
 No code was changed to produce this review.
 
+> **Currency note (2026-08-08).** Parts of this document have been overtaken by
+> implementation. Corrections are marked inline and in §8; the roadmap in §8
+> carries a per-item status. Two things to know before reading further:
+>
+> 1. **Workspace V2 is cancelled and deleted.** V1
+>    (`frontend/src/components/proofix/**`) is the only frontend. Never create
+>    `src/components/v2`, `src/lib/v2`, `src/design`, or any `/v2/*` route.
+> 2. **The live plan is `docs/V1_COMPLETE_IMPLEMENTATION_PLAN.md`**, backed by
+>    `docs/V1_FRONTEND_AUDIT.md`, `docs/V1_BACKEND_AUDIT.md`,
+>    `docs/V1_API_DATA_CONTRACT.md`, `docs/V1_BUG_REGISTER.md`,
+>    `docs/V1_TEST_COVERAGE.md` and `docs/V1_PHASE_STATUS.md`. Where this
+>    document and those disagree, **those win** — they were written against the
+>    current tree.
+
 ---
 
 ## 1. What ProoFix is
@@ -158,15 +172,24 @@ A8 ──► if pytest_passed: mutmut run --paths-to-mutate <first patched file>
         └──► correctness_score ──► A9 security rescan ──► A10 axis scoring
 ```
 
-**The mutation score is fabricated.** `A8._run_mutmut` (`a8_mutation_validator.py:172-173`)
-returns `score = 0.5 if not survived else 0.0` — a hardcoded constant, never parsed from mutmut
-output. It flows into `correctness_score = min(100, 60 + 0.5*40) = 80.0`, and
+> **✅ FIXED since this review (2026-08-08).** The paragraph below described the
+> original defect and is kept because it explains *why* the current design is
+> shaped as it is. A8 now parses real mutmut output via
+> `services/mutation_parser.py`, reads `mutation_score` / `survived_mutants` /
+> `total_mutants` / `status`, and leaves `correctness_score = None` when there is
+> no patch to score. **The same class of defect is still open elsewhere:**
+> `security_score` defaults to `0.0` for a re-scan that never ran, and that zero
+> is averaged into the composite that gates auto-merge. See roadmap P0-7.
+
+~~**The mutation score is fabricated.**~~ `A8._run_mutmut` returned
+`score = 0.5 if not survived else 0.0` — a hardcoded constant, never parsed from mutmut
+output. It flowed into `correctness_score = min(100, 60 + 0.5*40) = 80.0`, and
 `a10_routing.SCORE_THRESHOLD = 80.0`, where the check is `axis.correctness < 80 → draft`.
-So **auto-merge eligibility rests on a literal `0.5` that measures nothing**. This is the single
-most serious finding in the audit: it contradicts "every merge decision must be evidence-backed"
-at exactly the point where the decision is made. Note also that `stderr` from `mutmut run` is
+So **auto-merge eligibility rested on a literal `0.5` that measured nothing** — it contradicted
+"every merge decision must be evidence-backed" at exactly the point where the decision is made.
+Note also that `stderr` from `mutmut run` was
 searched for the word "survived" alongside the results output, so a mutmut crash message
-containing that word reads as a surviving mutant.
+containing that word read as a surviving mutant.
 
 ### 2.5 Service dependency graph
 
@@ -863,38 +886,71 @@ Measured against the phase-0 baseline, not asserted:
 
 ## 8. Roadmap
 
+> **Status refreshed 2026-08-08.** The audit of the working tree
+> (`docs/V1_BACKEND_AUDIT.md` §4) found several P0 items already implemented;
+> they are marked ✅ below rather than deleted, so the record of what was fixed
+> survives. **The live plan is `docs/V1_COMPLETE_IMPLEMENTATION_PLAN.md`** — this
+> section is the backend-debt view feeding into it.
+>
+> **Workspace V2 is cancelled and removed.** V1
+> (`frontend/src/components/proofix/**`) is the only frontend. §6's Context
+> Engineering plan (A5.5) shipped as backend work and is unaffected, but no V2
+> frontend exists or will be built.
+
 **P0 — correctness and trust**
-1. Fix the fabricated mutation score. Parse `mutmut results` properly, or report
-   `mutation_score=None` and stop feeding a constant into the auto-merge gate. Until then,
-   auto-merge is not evidence-backed.
-2. Fix A3's stub-finding fallback — stubs only when the tool is genuinely absent.
-3. Remove repository-specific literals (T2).
-4. Extract `path_resolution` (T1).
-5. Fix A9's line-number-sensitive finding key (false rejections on any insertion).
-6. Extract the LLM gateway with token/cost accounting — prerequisite for measuring A5.5.
+1. ✅ **Done.** Mutation score is parsed for real — `services/mutation_parser.py`;
+   A8 reads `mutation_score` / `survived_mutants` / `total_mutants` and leaves
+   `correctness_score = None` when there is no patch.
+2. ✅ **Done.** A3's stub fallback is gated on `code == -1` (tool genuinely absent).
+3. 🟡 **Partial.** Repository-specific literals (T2): `config.py:20
+   github_repo_name = "vulnapi"` and the JWT/expiry literals in
+   `runtime_patch_prompt.py` / `retry_brief_builder.py` remain.
+4. ✅ **Done.** `services/path_resolution.py` extracted, with tests.
+5. 🔴 **Open.** A9's finding key still includes the line number
+   (`a9_security_rescan.py:34`) — any insertion above an existing finding
+   produces a false rejection.
+6. ✅ **Done.** `services/llm_gateway.py` extracted with token/cost telemetry.
+7. 🔴 **Open — new, highest severity.** Unmeasured axes render as measured
+   zeros: `security_score` defaults to `0.0` and `_pct(default=0.0)`, so an axis
+   nobody measured contributes a zero to the composite that gates auto-merge.
+   Same class as item 1, and it changes routing outcomes.
+7a. 🔴 **Open (G9).** `run_id` never reaches `LLMGateway.complete()`, so every
+   `AuditEvent.run_id` is `""` and per-run cost/token attribution — the entire
+   justification for extracting the gateway (item 6) — is impossible.
+7b. 🔴 **Open (privacy guard gap).** A JWT reached `acceptance_criteria[2]` with
+   `privacy_guard_status: "clean"` and zero redactions. §6.4 specifies the guard
+   runs on *every* string leaving the process; it appears to cover extracted code
+   only. Criteria, constraints and tracebacks are unguarded.
+7c. 🔴 **Open (G11).** Per-citation `verified` and per-file
+   `propagation_confidence` are aggregated away before reaching any client, so
+   the UI cannot distinguish verified from asserted evidence.
 
 **P1 — architecture**
-7. Consolidate trust-gate authority into `trust_gating.py` (T3).
-8. Extract shared target resolution; make A5, A7, A5.5 agree.
-9. Extract `patch_integrity` from `runtime_patch_prompt`.
-10. Move `correctness_score` out of A8 into A10's scoring module.
-11. Split A10: mergeability decision vs. PR publication.
-12. Delete `a0_orchestrator.py` and `citation_validator.py`'s pass-through half.
-13. Add A7 rollback so a partial patch set cannot reach A8.
+8. 🔴 Consolidate trust-gate authority into `trust_gating.py` (T3).
+9. 🔴 Extract shared target resolution; make A5, A7, A5.5 agree.
+10. 🔴 Extract `patch_integrity` from `runtime_patch_prompt`.
+11. 🔴 Move `correctness_score` out of A8 into A10's scoring module.
+12. 🔴 Split A10: mergeability decision vs. PR publication.
+13. 🟡 **Partial.** `a0_orchestrator.py` is deleted ✅;
+    `citation_validator.py`'s pass-through half remains 🔴.
+14. 🔴 Add A7 rollback so a partial patch set cannot reach A8.
 
-**P2 — Context Engineering** — phases 0–4 of §6.7.
+**P2 — Context Engineering** — ✅ shipped. A5.5 executes in the graph
+(`engineer_context`) and publishes to `GET /api/runs/{id}/context`. It has no V1
+card yet; that is Phase 4 of the V1 plan.
 
 **P3 — scale**
-14. Redis-backed broadcaster and checkpointer; remove single-process assumptions.
-15. Job queue for run execution.
-16. Sandbox subprocess execution.
-17. Clean up repo clones; move patch bodies out of Redis state.
-18. Split `ui_projection.py` per agent (T8).
-19. Resolve `frontend/.git` (T9).
+15. 🔴 Redis-backed broadcaster and checkpointer; remove single-process assumptions.
+16. 🔴 Job queue for run execution.
+17. 🔴 Sandbox subprocess execution. **Blocks any hosted multi-tenant deployment.**
+18. 🔴 Clean up repo clones; move patch bodies out of Redis state.
+19. 🔴 Split `ui_projection.py` per agent (T8).
+20. ✅ **Done.** `frontend/.git` resolved (T9) — the frontend is tracked as an
+    ordinary subdirectory, no submodule, no gitlink.
 
 **P4 — reach**
-20. Non-`requirements.txt` dependency formats.
-21. Language support beyond Python — currently `ast`-bound end to end.
+21. 🔴 Non-`requirements.txt` dependency formats.
+22. 🔴 Language support beyond Python — currently `ast`-bound end to end.
 
 ---
 
