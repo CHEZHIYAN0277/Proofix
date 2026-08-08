@@ -1,0 +1,384 @@
+/* ============================================================================
+   ProoFix Design System — token layer  (Workspace V2, Phase 0)
+
+   EXTENDS `src/styles.css`. It never overrides a token V1 already relies on:
+   the oklch semantic palette, `--status-*`, `--shadow-sm|md|lg` and the
+   Geist / Inter / JetBrains Mono triple are inherited as-is.
+
+   Where the blueprint's scale disagrees with a token V1 already renders with
+   (radius), a *semantic* name is introduced instead of redefining the shared
+   one — `rounded-card` / `rounded-panel` / `rounded-overlay`. Nothing V1
+   paints changes.
+
+   Every token below is defined for BOTH themes.
+   ========================================================================= */
+
+@theme {
+  /* --- Radius (blueprint §3.3) --------------------------------------------
+     `--radius-sm|md|lg|xl` are already derived from `--radius` in styles.css
+     and are load-bearing for V1. These are the additions, named by surface. */
+  --radius-xs: 4px;
+  --radius-card: 10px; /* cards            (blueprint "md") */
+  --radius-panel: 14px; /* panels           (blueprint "lg") */
+  --radius-overlay: 20px; /* modals, palette  (blueprint "xl") */
+
+  /* --- Elevation (§3.3) — elevation encodes attention, per rule A1 --------
+     `--shadow-sm` (resting) / `--shadow-md` (active stage) / `--shadow-lg`
+     (overlays) already exist and carry exactly this meaning. Added here:
+     the flat peripheral level and the three status glows. */
+  --shadow-flat: none;
+  --shadow-glow-running:
+    0 0 0 1px color-mix(in srgb, var(--status-running) 38%, transparent),
+    0 0 24px -6px color-mix(in srgb, var(--status-running) 45%, transparent);
+  --shadow-glow-completed:
+    0 0 0 1px color-mix(in srgb, var(--status-completed) 38%, transparent),
+    0 0 24px -6px color-mix(in srgb, var(--status-completed) 40%, transparent);
+  --shadow-glow-failed:
+    0 0 0 1px color-mix(in srgb, var(--status-failed) 38%, transparent),
+    0 0 24px -6px color-mix(in srgb, var(--status-failed) 40%, transparent);
+
+  /* --- Status, sixth state (§3.5) ---------------------------------------- */
+  --color-status-waiting: var(--status-waiting);
+  --color-status-waiting-bg: var(--status-waiting-bg);
+
+  /* --- Data-state (§3.5) — the visual grammar of the primary rule ---------
+     Never colored as an error: absence of data is not failure. */
+  --color-data-waiting: var(--data-waiting);
+  --color-data-waiting-bg: var(--data-waiting-bg);
+  --color-data-pending: var(--data-pending);
+  --color-data-pending-bg: var(--data-pending-bg);
+  --color-data-unavailable: var(--data-unavailable);
+  --color-data-unavailable-bg: var(--data-unavailable-bg);
+
+  /* --- Graph palette (§3.5) — one fixed hue per node type ----------------- */
+  --color-node-module: var(--node-module);
+  --color-node-file: var(--node-file);
+  --color-node-function: var(--node-function);
+  --color-node-class: var(--node-class);
+  --color-node-test: var(--node-test);
+  --color-node-capability: var(--node-capability);
+  --color-node-memory: var(--node-memory);
+}
+
+/* ---------------------------------------------------------------------------
+   Light theme
+   ------------------------------------------------------------------------ */
+:root {
+  /* Spacing — 4px base, blueprint §3.2. Tailwind's numeric scale already
+     resolves these; exposed as vars for inline styles and canvas code. */
+  --space-0_5: 2px;
+  --space-1: 4px;
+  --space-1_5: 6px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+
+  /* Surface padding (§3.2) */
+  --pad-card: 20px;
+  --pad-card-compact: 16px;
+  --pad-panel: 24px;
+  --pad-stage-section: 28px;
+  --pad-rail-card: 16px;
+
+  /* Workspace grid (§3.2) */
+  --rail-width: 260px;
+  --mission-control-width: 360px;
+  --center-max-width: 1100px;
+  --center-min-width: 720px;
+  --workspace-gutter: 24px;
+  --stage-rhythm: 20px;
+  --workspace-header-height: 56px;
+
+  /* Motion (§3.4) — durations */
+  --motion-instant: 80ms;
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 320ms;
+  --motion-narrative: 500ms;
+  --motion-pulse: 1800ms;
+
+  /* Motion — easings */
+  --ease-instant: cubic-bezier(0, 0, 0.2, 1); /* ease-out */
+  --ease-fast: cubic-bezier(0.2, 0, 0, 1);
+  --ease-base: cubic-bezier(0.2, 0, 0, 1);
+  --ease-slow: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-narrative: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-pulse: cubic-bezier(0.4, 0, 0.6, 1); /* ease-in-out */
+
+  /* Attention (§1.2 rule A3) — peripheral ink while a stage is running */
+  --peripheral-opacity: 0.72;
+
+  /* Glass (§3.3) — permitted on four surfaces only */
+  --glass-blur: 12px;
+  --glass-surface: color-mix(in srgb, var(--surface) 72%, transparent);
+  --glass-border: color-mix(in srgb, var(--border) 80%, transparent);
+
+  /* Sixth status: waiting (neutral) */
+  --status-waiting: oklch(0.54 0.02 264);
+  --status-waiting-bg: color-mix(in srgb, oklch(0.54 0.02 264) 10%, white);
+
+  /* Data-state */
+  --data-waiting: oklch(0.54 0.02 264);
+  --data-waiting-bg: color-mix(in srgb, oklch(0.54 0.02 264) 7%, white);
+  --data-pending: oklch(0.46 0.02 264);
+  --data-pending-bg: color-mix(in srgb, oklch(0.46 0.02 264) 9%, white);
+  --data-unavailable: oklch(0.6 0.015 264);
+  --data-unavailable-bg: color-mix(in srgb, oklch(0.6 0.015 264) 6%, white);
+
+  /* Graph node hues — AA against `--surface` in this theme,
+     ordered for colorblind separability (see tokens/color.ts). */
+  --node-module: #1d4ed8;
+  --node-file: #0e7490;
+  --node-function: #6d28d9;
+  --node-class: #a16207;
+  --node-test: #15803d;
+  --node-capability: #be185d;
+  --node-memory: #475569;
+
+  /* Shimmer travel colour for skeletons / the Pending state */
+  --shimmer-highlight: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+   Dark theme
+   ------------------------------------------------------------------------ */
+.dark {
+  --peripheral-opacity: 0.72;
+
+  --glass-surface: color-mix(in srgb, var(--surface) 72%, transparent);
+  --glass-border: color-mix(in srgb, var(--border) 90%, transparent);
+
+  --status-waiting: #a1a1aa;
+  --status-waiting-bg: color-mix(in srgb, #a1a1aa 12%, transparent);
+
+  --data-waiting: #a1a1aa;
+  --data-waiting-bg: color-mix(in srgb, #a1a1aa 9%, transparent);
+  --data-pending: #d4d4d8;
+  --data-pending-bg: color-mix(in srgb, #d4d4d8 10%, transparent);
+  --data-unavailable: #8b8b93;
+  --data-unavailable-bg: color-mix(in srgb, #8b8b93 8%, transparent);
+
+  /* AA against `--surface: #141414` */
+  --node-module: #60a5fa;
+  --node-file: #22d3ee;
+  --node-function: #a78bfa;
+  --node-class: #fbbf24;
+  --node-test: #4ade80;
+  --node-capability: #f472b6;
+  --node-memory: #94a3b8;
+
+  --shimmer-highlight: color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+   Typography scale (§3.1)
+
+   Emitted as classes so the scale is enforceable: a surface picks a token, not
+   a size. Numerals are always tabular; identifiers, paths, SHAs and scores are
+   always mono.
+   ------------------------------------------------------------------------ */
+.type-display {
+  font-family: var(--font-heading);
+  font-size: 40px;
+  line-height: 44px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.type-title-1 {
+  font-family: var(--font-heading);
+  font-size: 28px;
+  line-height: 34px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+.type-title-2 {
+  font-family: var(--font-heading);
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+}
+.type-title-3 {
+  font-family: var(--font-heading);
+  font-size: 17px;
+  line-height: 24px;
+  font-weight: 600;
+  letter-spacing: -0.008em;
+}
+.type-body {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 23px;
+  font-weight: 400;
+}
+.type-body-sm {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 21px;
+  font-weight: 400;
+}
+.type-label {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+}
+.type-caption {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+}
+.type-eyebrow {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.type-mono-sm {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.type-mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Numerals are always tabular — a number that shifts width while it ticks
+   reads as instability. */
+.tabular,
+.type-display,
+.type-title-1,
+.type-title-2,
+.type-title-3,
+.type-label,
+.type-caption {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------------
+   Glass (§3.3) — Workspace Header, Command Palette, Chat Dock, Twin overlay.
+   Deliberately a single class so misuse is greppable.
+   ------------------------------------------------------------------------ */
+.ds-glass {
+  background-color: var(--glass-surface);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  border-color: var(--glass-border);
+}
+
+/* ---------------------------------------------------------------------------
+   Motion keyframes owned by the design system.
+   Consumed only through <Reveal> and the state components.
+   ------------------------------------------------------------------------ */
+@keyframes ds-shimmer {
+  from {
+    background-position: -160% 0;
+  }
+  to {
+    background-position: 260% 0;
+  }
+}
+
+/* The Why panel entering from the right. Transform and opacity only. */
+@keyframes why-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The single continuous "working" pulse — rule A4: at most one on screen. */
+@keyframes ds-working-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.88);
+  }
+}
+
+.ds-working-pulse {
+  animation: ds-working-pulse var(--motion-pulse) var(--ease-pulse) infinite;
+}
+
+/* Shape-preserving shimmer — genuine in-flight fetches only, never to
+   simulate work (§3.6). */
+.ds-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--shimmer-highlight) 45%,
+    var(--shimmer-highlight) 55%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: ds-shimmer 1600ms var(--ease-pulse) infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   Syntax tokens (<DiffView>, Phase 6).
+
+   Shiki resolves both themes at highlight time and emits them as custom
+   properties per token; these two rules are what choose between them. Doing it
+   in CSS rather than in JS means a theme switch costs a repaint, not a
+   re-highlight, and the highlighter is never re-entered for a colour change.
+   ------------------------------------------------------------------------ */
+.shiki-token {
+  color: var(--shiki-light);
+}
+
+.dark .shiki-token {
+  color: var(--shiki-dark);
+}
+
+/* ---------------------------------------------------------------------------
+   Reduced motion — THE single gate (§3.4 / §13 rule 3).
+
+   Every design-system duration collapses to 0ms here, and the two continuous
+   animations stop outright. <Reveal> mirrors this in JS for framer-motion.
+   ------------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  :root,
+  .dark {
+    --motion-instant: 0ms;
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+    --motion-narrative: 0ms;
+    --motion-pulse: 0ms;
+  }
+
+  .ds-working-pulse,
+  .ds-shimmer {
+    animation: none;
+  }
+
+  [style*="why-panel-in"] {
+    animation: none !important;
+  }
+}

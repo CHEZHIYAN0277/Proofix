@@ -1,0 +1,247 @@
+/**
+ * Typed models for the Run Report, Workspace Header, Executive Summary and
+ * Repair Attempts.
+ *
+ * The MOCK_* defaults match the values currently rendered in the UI so the
+ * visual output is identical until a backend supplies real data.
+ */
+/** `unknown` = the axis was never measured. Distinct from a measured bad score. */
+export type TrustTone = "ok" | "warn" | "bad" | "unknown";
+
+export interface TrustMetric {
+  label: string;
+  /**
+   * `null` when the pipeline never measured this axis.
+   *
+   * A skipped security re-scan used to arrive here as `0`, which rendered a
+   * full red ring — the product accusing the code of failing a check that never
+   * ran, and that same 0 was averaged into `trustScore`.
+   */
+  value: number | null;
+  tone: TrustTone;
+}
+
+export interface EvidenceFlag {
+  ok: boolean;
+  text: string;
+}
+
+/**
+ * `blocked` is the environment precheck's outcome: A0.7 found the repository's
+ * dependencies missing, so the pipeline stopped before it could reproduce
+ * anything. It was absent from this union, so every consumer's fall-through
+ * branch rendered it as "Draft PR" — a decision the run never reached.
+ */
+export type RunDecision = "merge" | "draft" | "failed" | "blocked";
+
+export interface RunReportModel {
+  runId: string;
+  shortRunId: string;
+  repository: string;
+  branch: string;
+  decision: RunDecision;
+  decisionLabel: string;
+  /** `null` when no axis was measured — never 0. */
+  trustScore: number | null;
+  trustThreshold: number;
+  rootCause: {
+    /** Full analyst narrative. Rendered verbatim — never slotted into a template. */
+    summary: string;
+    /** One-line statement of the defect, when the analysis produced one. */
+    statement: string;
+    /** "path/to/file.py:123" from the primary citation. */
+    location: string;
+    /** What the citation asserts about that location. */
+    claim: string;
+    /** Whether the citation was machine-verified against the source. */
+    verified: boolean;
+  };
+  rejection: {
+    attempts: number;
+    survivors: number;
+    /** `null` when mutation testing never ran — distinct from a measured 0. */
+    score: number | null;
+    /**
+     * The gate A10 actually routes on: the correctness axis against
+     * `SCORE_THRESHOLD`.
+     *
+     * There is deliberately **no** mutation-score threshold here. The pipeline
+     * has never had one — the figure that used to be printed beside the
+     * mutation score was invented — so the score is reported unqualified and
+     * the real gate is reported separately.
+     */
+    /** `null` when validation never ran — A8 records no score in that case. */
+    correctnessScore: number | null;
+    correctnessThreshold: number;
+    /** Backend-authored explanation of why no patch cleared validation. */
+    reason: string;
+  };
+  /** Why the run routed the way it did, in the router's own words. */
+  decisionReason: string;
+  trust: TrustMetric[];
+  files: string[];
+  evidence: EvidenceFlag[];
+  proofBundle: string;
+  /** Total number of agents executed (used in the report footer). */
+  agentCount: number;
+  /** Aggregate execution duration in seconds. */
+  totalDurationSeconds: number;
+}
+
+export interface WorkspaceHeaderModel {
+  repository: string;
+  branch: string;
+  shortRunId: string;
+  retries: number;
+  executionTime: string;
+  decisionLabel: string;
+}
+
+export interface ExecutiveSummaryModel {
+  repository: string;
+  bug: string;
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  rootCause: string;
+  confidence: string;
+  filesAffected: number;
+  attempts: number;
+  mutationScore: string;
+  runtime: string;
+  trustScore: string;
+  decision: RunDecision;
+  decisionReason: string;
+}
+
+export interface RetryAttempt {
+  n: number;
+  action: string;
+  detail: string;
+  result: string;
+  mutation: number;
+  /**
+   * What to render next to the result. The backend decides the wording because
+   * only it knows which score was actually measured: mutation testing only runs
+   * once pytest passes, so a failed attempt has no mutation score and must not
+   * be shown as `mutation 0.00`.
+   */
+  scoreLabel?: string;
+}
+
+export interface RepairAttemptsModel {
+  attempts: RetryAttempt[];
+  failureMessage: string;
+  nextStepLabel: string;
+}
+
+export interface RepoMetadata {
+  owner: string;
+  name: string;
+  language: string | null;
+  /** `null` when the branch could not be determined without contacting the host. */
+  branch: string | null;
+  /** "Unknown" when nothing has actually checked the repository's visibility. */
+  visibility: "Public" | "Private" | "Unknown";
+  htmlUrl: string;
+}
+
+export const MOCK_RUN_REPORT: RunReportModel = {
+  runId: "11b8-3a91",
+  shortRunId: "11b8…3a91",
+  repository: "vulnapi",
+  branch: "main",
+  decision: "draft",
+  decisionLabel: "Draft PR",
+  trustScore: 0.83,
+  // Matches the real gate: A10's SCORE_THRESHOLD of 80, normalised to the 0-1
+  // scale the trust score uses. The 0.9 here before corresponded to no
+  // threshold in the pipeline — the same invented figure the backend removed.
+  trustThreshold: 0.8,
+  rootCause: {
+    summary:
+      "Missing expiry comparison branch in validate_token() — the expired_at field is read but never compared against the current time, so expired tokens were treated as valid.",
+    statement: "Missing expiry comparison branch in validate_token()",
+    location: "auth/token.py:142",
+    claim: "expired_at < now",
+    verified: true,
+  },
+  rejection: {
+    attempts: 3,
+    survivors: 7,
+    score: 0.81,
+    correctnessScore: 62,
+    correctnessThreshold: 80,
+    reason:
+      "3 patch attempts were rejected by mutation testing — 7 mutants survived, meaning the tests do not actually constrain the repaired behaviour.",
+  },
+  trust: [
+    { label: "Correctness", value: 78, tone: "warn" },
+    { label: "Security", value: 91, tone: "ok" },
+    { label: "Fidelity", value: 74, tone: "warn" },
+    { label: "Scope Safety", value: 88, tone: "ok" },
+  ],
+  decisionReason:
+    "The repair touches authentication logic, so ProoFix routed to a Draft PR for human review rather than auto-merging.",
+  files: ["auth/token.py", "api/session.py", "tests/test_auth.py"],
+  evidence: [
+    { ok: true, text: "Runtime reproduced" },
+    { ok: true, text: "Root cause confirmed" },
+    { ok: true, text: "Blast radius analyzed" },
+    { ok: false, text: "Mutation validation failed" },
+    { ok: false, text: "Retry exhausted (3/3)" },
+  ],
+  proofBundle: "sha256:7a31…b4e2",
+  agentCount: 10,
+  totalDurationSeconds: 69.5,
+};
+
+export const MOCK_WORKSPACE_HEADER: WorkspaceHeaderModel = {
+  repository: "vulnapi",
+  branch: "main",
+  shortRunId: "11b8…3a91",
+  retries: 3,
+  executionTime: "1m 12s",
+  decisionLabel: "Draft PR",
+};
+
+export const MOCK_EXECUTIVE_SUMMARY: ExecutiveSummaryModel = {
+  repository: "Secure-auth",
+  bug: "JWT Validation",
+  severity: "HIGH",
+  rootCause: "Missing expiry check",
+  confidence: "97%",
+  filesAffected: 5,
+  attempts: 3,
+  mutationScore: "0.61 / 0.85",
+  runtime: "69.5 s",
+  trustScore: "0.83",
+  decision: "draft",
+  decisionReason: "Mutation threshold not satisfied after 3 repair attempts.",
+};
+
+export const MOCK_REPAIR_ATTEMPTS: RepairAttemptsModel = {
+  attempts: [
+    {
+      n: 1,
+      action: "Generate Patch",
+      detail: "Tightened expiry check inside validate_token()",
+      result: "Validation Failed",
+      mutation: 0.42,
+    },
+    {
+      n: 2,
+      action: "Generate Patch",
+      detail: "Added pre-check guard before _decode()",
+      result: "Validation Failed",
+      mutation: 0.55,
+    },
+    {
+      n: 3,
+      action: "Generate Patch",
+      detail: "Refactored middleware to short-circuit expired tokens",
+      result: "Validation Failed",
+      mutation: 0.61,
+    },
+  ],
+  failureMessage: "Mutation threshold of 0.85 not satisfied after 3 attempts.",
+  nextStepLabel: "Proceed to Mergeability Assessment",
+};
