@@ -35,9 +35,17 @@ class RetryBrief(BaseModel):
 
 class MutationValidationResult(BaseModel):
     pytest_passed: bool = False
+    #: Whether pytest executed at all. `pytest_passed=False` covers both "the
+    #: suite ran and failed" and "pytest was never importable in the target
+    #: repository"; only this field separates them, and the difference decides
+    #: whether `correctness_score` is a measurement or an absence. Defaults True
+    #: so states persisted before this existed keep their original meaning.
+    pytest_available: bool = True
     mutation_score: float | None = None
     mutant_survived: bool = False
-    correctness_score: float = 0.0
+    #: `None` until scoped validation actually ran. A measured 0.0 means the
+    #: patch scored zero; absent means nothing scored it.
+    correctness_score: float | None = None
 
     # Real mutation evidence. All additive and defaulted, so states persisted
     # before mutation parsing existed still deserialize. `mutation_status`
@@ -65,7 +73,9 @@ class MutationValidationResult(BaseModel):
 class SecurityRescanResult(BaseModel):
     new_findings: list = Field(default_factory=list)
     rejected: bool = False
-    security_score: float = 0.0
+    #: `None` until the re-scan actually ran. A measured 0.0 means four or more
+    #: new findings; absent means A9 was skipped and nothing was scanned.
+    security_score: float | None = None
     failure_brief: RetryBrief | None = None
     validation_failure: ValidationFailure | None = None
     reexecution_command: str = ""

@@ -133,3 +133,32 @@ async def test_pre_existing_config_failure_does_not_trigger_patch_retry(tmp_path
     assert outcome.failure_brief_needed is False
     assert outcome.new_failures == []
     assert call_count["n"] == 2
+
+
+# -- pytest ran, or pytest could not run --------------------------------------
+
+
+def test_pytest_ran_distinguishes_a_failure_from_an_absence():
+    """The distinction A8's correctness score depends on.
+
+    Exit code 1 with real output is a verdict about the code. Exit code 1 with
+    "No module named pytest" is the absence of a verdict, and scoring it as one
+    published a hard zero for a patch nothing had examined.
+    """
+    from backend.services.scoped_validation import pytest_ran
+
+    # A genuine test failure — pytest ran and reported.
+    assert pytest_ran(1, "1 failed, 3 passed in 0.4s", "") is True
+    assert pytest_ran(0, "4 passed in 0.3s", "") is True
+
+    # pytest was never importable in the target repository.
+    assert pytest_ran(1, "", "/usr/bin/python3: No module named pytest") is False
+    assert pytest_ran(1, "", "ModuleNotFoundError: No module named 'pytest'") is False
+
+    # pytest's own "I could not run" exit codes: 4 usage error, 5 nothing collected.
+    assert pytest_ran(4, "", "") is False
+    assert pytest_ran(5, "no tests ran in 0.01s", "") is False
+
+    # An interrupted or crashed run did execute; it is not an absence of pytest.
+    assert pytest_ran(2, "", "KeyboardInterrupt") is True
+    assert pytest_ran(3, "", "INTERNALERROR") is True

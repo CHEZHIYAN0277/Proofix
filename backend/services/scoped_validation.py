@@ -22,6 +22,34 @@ def compare_new_failures(current_failures: set[str], baseline_failures: set[str]
     return sorted(current_failures - baseline_failures)
 
 
+#: pytest itself never started. `python -m pytest` exits 1 with this on stderr
+#: when the target repository has no pytest installed, which is the ordinary
+#: case for a cloned repository whose dependencies were never installed.
+_PYTEST_MISSING_MARKERS = (
+    "No module named pytest",
+    "No module named 'pytest'",
+)
+
+#: pytest's own exit codes for "I could not run", as opposed to "tests failed":
+#: 4 is a usage error, 5 is "no tests collected". Neither is evidence about a
+#: patch. (0 pass, 1 tests failed, 2 interrupted, 3 internal error.)
+_PYTEST_CANNOT_RUN_CODES = frozenset({4, 5})
+
+
+def pytest_ran(exit_code: int, stdout: str, stderr: str) -> bool:
+    """Did pytest actually execute tests?
+
+    A non-zero exit is not by itself a verdict on a patch. If pytest was never
+    importable, or collected nothing, then nothing was measured — and a score
+    derived from it would be a failing grade for work that was never examined.
+    This is the distinction A8 needs and could not previously make.
+    """
+    if exit_code in _PYTEST_CANNOT_RUN_CODES:
+        return False
+    blob = f"{stdout}\n{stderr}"
+    return not any(marker in blob for marker in _PYTEST_MISSING_MARKERS)
+
+
 @dataclass
 class ScopedValidationOutcome:
     target_test_passed: bool | None
@@ -37,6 +65,10 @@ class ScopedValidationOutcome:
     target_stderr: str = ""
     regression_stdout: str = ""
     regression_stderr: str = ""
+    #: False when pytest never ran. `pytest_passed` is False in that case too,
+    #: but for a different reason, and only this field tells them apart.
+    #: Defaults True so an outcome built by an older caller is unchanged.
+    pytest_available: bool = True
 
 
 async def run_scoped_validation(
@@ -100,6 +132,7 @@ async def run_scoped_validation(
             pytest_reexecution_command=target_cmd,
             target_stdout=target_stdout,
             target_stderr=target_stderr,
+            pytest_available=pytest_ran(target_code, target_stdout, target_stderr),
         )
 
     regression_report_path = validation_regression_report_path(run_id)
@@ -227,4 +260,5 @@ async def _run_full_suite_fallback(
         pytest_reexecution_command=FULL_SUITE_COMMAND,
         regression_stdout=stdout,
         regression_stderr=stderr,
+        pytest_available=pytest_ran(code, stdout, stderr),
     )

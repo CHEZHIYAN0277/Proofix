@@ -4,7 +4,18 @@ from __future__ import annotations
 
 from backend.models.pr import AxisScores
 from backend.orchestrator.trust_gating import full_suite_review_note
+from backend.services.measurement import Score, below_threshold, meets_threshold
 from backend.state.schema import RunStateModel
+
+
+def axis_pairs(axis: AxisScores) -> list[tuple[str, Score]]:
+    """The four axes as `(name, score)`, in the order they are reported."""
+    return [
+        ("correctness", axis.correctness),
+        ("security", axis.security),
+        ("fidelity", axis.fidelity),
+        ("scope_risk", axis.scope_risk),
+    ]
 
 SCORE_THRESHOLD = 80.0
 SECURITY_TECHNICAL_THRESHOLD = 90.0
@@ -41,9 +52,14 @@ def technical_validation_passed(
         return False
     if security.get("rejected"):
         return False
-    if (security.get("security_score") or 0.0) < SECURITY_TECHNICAL_THRESHOLD:
+
+    # `meets_threshold` is false for an unmeasured score, which is the correct
+    # answer here: a gate exists to require evidence, and absent evidence cannot
+    # satisfy it. The previous `or 0.0` reached the same verdict by accident,
+    # via a fabricated zero that then leaked into the user-facing scores.
+    if not meets_threshold(security.get("security_score"), SECURITY_TECHNICAL_THRESHOLD):
         return False
-    if (mutation.get("correctness_score") or 0.0) < SCORE_THRESHOLD:
+    if not meets_threshold(mutation.get("correctness_score"), SCORE_THRESHOLD):
         return False
     if phantoms:
         return False
@@ -110,11 +126,22 @@ def hard_draft_reason(
             "Manual verification required before merge."
         )
 
-    if axis.correctness < SCORE_THRESHOLD:
+    # Measured-and-low is an accusation and reads as one. Unmeasured is handled
+    # below, where the note says what actually happened instead of naming a
+    # score the pipeline never computed.
+    if below_threshold(axis.correctness, SCORE_THRESHOLD):
         return True, f"Low axis scores: correctness={axis.correctness:.0f}. Manual review required."
 
-    if axis.security < SCORE_THRESHOLD:
+    if below_threshold(axis.security, SCORE_THRESHOLD):
         return True, f"Low axis scores: security={axis.security:.0f}. Manual review required."
+
+    unmeasured = [name for name, value in axis_pairs(axis) if value is None]
+    if unmeasured:
+        return True, (
+            f"Not measured: {', '.join(unmeasured)}. "
+            "The pipeline did not produce these scores, so merge readiness could not be "
+            "established. Manual verification required before merge."
+        )
 
     repro_failed, repro_note = reproduction_gate_failed(state)
     if repro_failed:
@@ -142,18 +169,19 @@ def route_pr_decision(
             return "diff_only", full_suite_review_note()
         return "auto_mergeable", None
 
-    failing = []
-    for name, val in [
-        ("correctness", axis.correctness),
-        ("security", axis.security),
-        ("fidelity", axis.fidelity),
-        ("scope_risk", axis.scope_risk),
-    ]:
-        if val < SCORE_THRESHOLD:
-            failing.append(f"{name}={val:.0f}")
+    failing = [
+        f"{name}={value:.0f}"
+        for name, value in axis_pairs(axis)
+        if below_threshold(value, SCORE_THRESHOLD)
+    ]
+    absent = [name for name, value in axis_pairs(axis) if value is None]
 
     if failing:
         return "draft", f"Low axis scores: {', '.join(failing)}. Manual review required."
+    if absent:
+        return "draft", (
+            f"Not measured: {', '.join(absent)}. Manual review required."
+        )
 
     return "diff_only", full_suite_review_note()
 

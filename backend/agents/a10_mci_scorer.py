@@ -30,8 +30,15 @@ class A10MCIScorerAgent(AgentBase):
 
         fidelity_ok, phantoms = verify_mci(description_why + " " + description_what, diff_text)
 
-        correctness = mutation.get("correctness_score", 0.0)
-        security_score = security.get("security_score", 0.0)
+        # No `0.0` defaults. An agent that never ran leaves its result empty,
+        # and `.get(key, 0.0)` turned that absence into the worst possible
+        # measured score — which was then averaged into the trust score and
+        # printed as "security=0" for a scan that never happened.
+        correctness = mutation.get("correctness_score")
+        security_score = security.get("security_score")
+
+        # Fidelity and scope risk are derived from state A10 always holds, so
+        # they are measured whenever A10 runs. They take no absent branch.
         fidelity = compute_fidelity_score(fidelity_ok, state)
         scope_risk = compute_scope_risk(blast, state)
 
