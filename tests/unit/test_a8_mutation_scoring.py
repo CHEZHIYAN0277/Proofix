@@ -182,6 +182,10 @@ async def test_empty_patch_bundle_is_unavailable_not_scored(monkeypatch, tmp_pat
     assert result["mutation_status"] == "unavailable"
     assert result["mutation_unavailable_reason"] == "no patches to mutate"
     assert result["mutation_score"] is None
+    # Nor is correctness scored. With no patch there is nothing to be correct
+    # about; the previous 70 was a grade for work never attempted, and it was
+    # averaged into the trust score that gates merges.
+    assert result["correctness_score"] is None
 
 
 @pytest.mark.asyncio
@@ -192,3 +196,72 @@ async def test_mutation_evidence_is_emitted_for_downstream_consumers(monkeypatch
 
     assert result["mutants_by_status"] == {"killed": 1, "survived": 1}
     assert json.dumps(result)  # must stay JSON-serialisable for Redis
+
+
+def pytest_missing_scope() -> ScopedValidationOutcome:
+    """pytest never ran: the target repository has no pytest installed.
+
+    `pytest_passed` is False exactly as it is for a genuine test failure, which
+    is why the two were conflated.
+    """
+    from backend.models.validation import ValidationFailure
+
+    return ScopedValidationOutcome(
+        target_test_passed=False,
+        regression_tests_passed=None,
+        pytest_passed=False,
+        patch_retry_required=True,
+        new_failures=[],
+        pre_existing_failures=[],
+        validation_failure=ValidationFailure(
+            failing_test=None,
+            assertion_message=None,
+            traceback="/usr/bin/python3: No module named pytest\n",
+        ),
+        failure_brief_needed=True,
+        pytest_reexecution_command="pytest tests/test_auth.py",
+        pytest_available=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unrunnable_pytest_is_unmeasured_not_a_zero(monkeypatch, tmp_path):
+    """A patch nothing could execute is unmeasured, not failed.
+
+    A cloned repository whose dependencies were never installed cannot run a
+    single test. Scoring that as CORRECTNESS_TESTS_FAILED published a hard 0 —
+    a failing grade for a patch nothing had examined — and the report then
+    printed "correctness 0 / 80" directly above its own sentence saying that
+    validation never ran.
+    """
+    agent = make_agent(monkeypatch, scope=pytest_missing_scope())
+    result = (await agent.run(make_state(tmp_path))).mutation_result
+
+    assert result["correctness_score"] is None
+    assert result["pytest_available"] is False
+    assert result["pytest_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_real_test_failure_still_scores_zero(monkeypatch, tmp_path):
+    """The opposite case must keep its measurement.
+
+    pytest ran, the suite failed, and that is a verdict about the patch. If this
+    also became `None` the fix would have replaced one wrong answer with another.
+    """
+    agent = make_agent(monkeypatch, scope=failing_scope())
+    result = (await agent.run(make_state(tmp_path))).mutation_result
+
+    assert result["correctness_score"] == 0.0
+    assert result["pytest_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_unrunnable_pytest_cannot_clear_the_merge_threshold(monkeypatch, tmp_path):
+    """An unmeasured axis must not read as a passing one either."""
+    from backend.services.measurement import meets_threshold
+
+    agent = make_agent(monkeypatch, scope=pytest_missing_scope())
+    result = (await agent.run(make_state(tmp_path))).mutation_result
+
+    assert not meets_threshold(result["correctness_score"], SCORE_THRESHOLD)

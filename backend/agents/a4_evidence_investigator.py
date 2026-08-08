@@ -51,10 +51,30 @@ class A4EvidenceInvestigatorAgent(AgentBase):
                 stack, findings, repo, reproduction, evidence_refs, cve_context, draft_citations
             )
         else:
-            brief = await self._llm_brief(
-                stack, findings, cve_report, reproduction, evidence_refs, cve_context, repo,
-                run_id=state.run_id, retry_count=state.retry_count,
-            )
+            try:
+                brief = await self._llm_brief(
+                    stack, findings, cve_report, reproduction, evidence_refs, cve_context, repo,
+                    run_id=state.run_id, retry_count=state.retry_count,
+                )
+            except Exception as exc:  # noqa: BLE001 — degrade, never fail the run
+                # A4 was the only LLM agent without this guard, and it cost a
+                # whole run: Django's prompt tripped the firewall
+                # (`SecurityRejection: host_path`) and the exception propagated
+                # out of the graph, failing a repository that had been analysed
+                # successfully up to that point. A6 and A7 already fall back;
+                # the deterministic brief is right here and produces real
+                # evidence refs and citations.
+                state.errors.append({"agent": "A4", "error": f"{type(exc).__name__}: {exc}"})
+                await self.emit_status(
+                    state,
+                    "retry",
+                    f"LLM investigation unavailable ({type(exc).__name__}); "
+                    "falling back to deterministic root-cause analysis",
+                )
+                brief = self._stub_brief(
+                    stack, findings, repo, reproduction, evidence_refs, cve_context,
+                    draft_citations,
+                )
 
         brief.reinvestigation_count = prior_count
         brief.evidence_refs = evidence_refs

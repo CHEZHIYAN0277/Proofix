@@ -50,9 +50,31 @@ class A8MutationValidatorAgent(AgentBase):
         failure_brief_needed = scoped.failure_brief_needed
 
         outcome = MutationOutcome(status="not_run", unavailable_reason=None)
-        correctness_score = 100.0 if pytest_passed else CORRECTNESS_TESTS_FAILED
+
+        # Correctness scores a *patch*. With no patch there is nothing to score:
+        # pytest still runs and still reports, but it is describing the
+        # repository, not a repair. Scoring it anyway produced the "correctness
+        # 0 / 80" seen on runs that generated zero patches — a failing grade for
+        # work that was never attempted.
+        has_patch = bool(patch_bundle.get("patches"))
+        # `pytest_passed` is False both when the suite ran and failed and when
+        # pytest never ran at all — a cloned repository whose dependencies were
+        # never installed cannot execute a single test. Scoring the second case
+        # as CORRECTNESS_TESTS_FAILED published a hard 0 for a patch nothing had
+        # examined, and the report then printed "correctness 0 / 80" directly
+        # above its own sentence explaining that nothing had been measured.
+        pytest_available = scoped.pytest_available
+        correctness_score: float | None
+        if not has_patch or not pytest_available:
+            correctness_score = None
+        else:
+            correctness_score = 100.0 if pytest_passed else CORRECTNESS_TESTS_FAILED
 
         if pytest_passed:
+            # Still called with no patches: `_run_mutmut` reports *why* mutation
+            # produced nothing, and that reason is worth publishing. Only the
+            # score assignments below are gated on `has_patch` — the status
+            # contract is unchanged.
             outcome, mutmut_cmd = await self._run_mutmut(repo, patch_bundle)
 
             if outcome.mutant_survived:
@@ -84,11 +106,14 @@ class A8MutationValidatorAgent(AgentBase):
                     100.0,
                     CORRECTNESS_MUTATION_BASE + outcome.mutation_score * CORRECTNESS_MUTATION_RANGE,
                 )
-            else:
-                # No mutation evidence. Score below the auto-merge threshold so
-                # the absence of proof forces manual review rather than passing
-                # on a substituted value.
+            elif has_patch:
+                # Mutation ran against a real patch and produced no verdict.
+                # Score below the auto-merge threshold so the absence of proof
+                # forces manual review rather than passing on a substituted
+                # value — that is a judgement *about a patch*, so it needs one.
                 correctness_score = CORRECTNESS_MUTATION_UNAVAILABLE
+            # With no patch, `correctness_score` stays `None`. There is nothing
+            # to judge, and 70 would be a grade for work never attempted.
         elif failure_brief_needed and validation_failure:
             failure_brief = build_retry_brief(
                 validation_failure,
@@ -99,6 +124,7 @@ class A8MutationValidatorAgent(AgentBase):
 
         result = MutationValidationResult(
             pytest_passed=pytest_passed,
+            pytest_available=pytest_available,
             mutation_score=outcome.mutation_score,
             mutant_survived=outcome.mutant_survived,
             mutation_status=outcome.status,
@@ -181,6 +207,63 @@ class A8MutationValidatorAgent(AgentBase):
         )
         return state
 
+    @staticmethod
+    def _configure_mutmut_paths(repo: Path, patch_file: str) -> None:
+        """Point mutmut at the patched file through `setup.cfg`.
+
+        Both keys are written because both majors are permitted by the project's
+        dependency range: mutmut 2 reads `paths_to_mutate`, mutmut 3 reads
+        `source_paths` (and treats the former as deprecated but valid). Writing
+        both means the invocation is correct on either without version sniffing.
+
+        Two things this is careful about:
+
+        - **It merges.** A repository may already have a `setup.cfg` carrying
+          packaging metadata, and clobbering it would break the very test run
+          being validated.
+        - **It defers to the repository.** If the project already configures
+          mutmut in `pyproject.toml`, mutmut reads that and never looks at
+          `setup.cfg`; the project's own choice of what to mutate is better than
+          ours, so nothing here tries to override it.
+
+        Writing into the repository is acceptable only because this is a
+        disposable clone (`repo_clone_path`), never the user's checkout.
+        """
+        from configparser import ConfigParser
+
+        pyproject = repo / "pyproject.toml"
+        if pyproject.is_file():
+            try:
+                import tomllib
+
+                with pyproject.open("rb") as handle:
+                    if "mutmut" in (tomllib.load(handle).get("tool") or {}):
+                        return  # the project configures mutmut itself
+            except Exception:  # noqa: BLE001 — unreadable config is not fatal
+                pass
+
+        config_path = repo / "setup.cfg"
+        parser = ConfigParser()
+        if config_path.is_file():
+            try:
+                parser.read(config_path)
+            except Exception:  # noqa: BLE001 — a malformed setup.cfg is the
+                # repository's problem, not a reason to skip mutation testing.
+                parser = ConfigParser()
+
+        if not parser.has_section("mutmut"):
+            parser.add_section("mutmut")
+        parser.set("mutmut", "source_paths", patch_file)
+        parser.set("mutmut", "paths_to_mutate", patch_file)
+
+        try:
+            with config_path.open("w", encoding="utf-8") as handle:
+                parser.write(handle)
+        except OSError:
+            # An unwritable clone leaves mutmut to guess; it will report
+            # `unavailable` rather than a substituted score.
+            pass
+
     async def _run_mutmut(self, repo: Path, patch_bundle: dict) -> tuple[MutationOutcome, str]:
         """Run mutmut and parse its real output. Never returns a substituted score."""
         patches = patch_bundle.get("patches", [])
@@ -203,13 +286,27 @@ class A8MutationValidatorAgent(AgentBase):
                 "",
             )
 
+        # `--paths-to-mutate` is a mutmut 2 flag. **mutmut 3 rejects it**
+        # ("Error: No such option"), and it loads its config at import time —
+        # before argparse runs — so no CLI flag can reach it at all. The project
+        # declares `mutmut>=2.5.0`, so both majors are in scope, and against the
+        # installed 3.6 every invocation failed. That is why mutation testing
+        # had *never* produced a score: `run_code` was always non-zero,
+        # `correctness_score` always fell back to 70, and 70 is below the
+        # auto-merge threshold of 80 — making `auto_mergeable` unreachable for
+        # reasons that had nothing to do with patch quality.
+        #
+        # Config is the only channel both versions read, so point them at the
+        # patched file that way and drop the flag.
+        self._configure_mutmut_paths(repo, patch_file)
+
         mutmut_cmd = (
-            f"python -m mutmut run --paths-to-mutate {patch_file}"
+            f"python -m mutmut run   # source_paths={patch_file} via setup.cfg"
             " && python -m mutmut results --all true"
         )
 
         run_code, run_stdout, run_stderr = await run_command(
-            ["python", "-m", "mutmut", "run", "--paths-to-mutate", patch_file],
+            ["python", "-m", "mutmut", "run"],
             cwd=repo,
             timeout=self.settings.mutmut_timeout_seconds,
         )
