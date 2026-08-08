@@ -1623,8 +1623,18 @@ def build_workspace_header(
 
 
 def _severity_label(state: RunStateModel) -> str:
+    """Severity of the top-ranked static finding, or absence when none exist.
+
+    The old floor was `"LOW"`, returned both for a genuine low-severity finding
+    and for a run where A3 never produced one — a run blocked at A0.7 reported
+    `LOW` severity for a scan that never happened. Same class of defect as the
+    `0.0` axis defaults: an unmeasured value rendered as a measured one. An
+    empty `prioritized` list now says so.
+    """
     findings = (state.static_report or {}).get("prioritized") or []
-    top = float(findings[0].get("severity") or 0) if findings else 0.0
+    if not findings:
+        return NOT_MEASURED
+    top = float(findings[0].get("severity") or 0)
     for threshold, label in _SEVERITY_BY_SCORE:
         if top >= threshold:
             return label

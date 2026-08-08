@@ -31,7 +31,7 @@ export const EMPTY_WORKSPACE_HEADER: WorkspaceHeaderModel = {
 export const EMPTY_EXECUTIVE_SUMMARY: ExecutiveSummaryModel = {
   repository: "",
   bug: "",
-  severity: "LOW",
+  severity: "not measured",
   rootCause: "",
   confidence: "—",
   filesAffected: 0,

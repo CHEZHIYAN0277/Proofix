@@ -82,7 +82,7 @@ const BADGE_BY_STATE: Record<RunLifecycleState, AgentStatus> = {
   running: "running",
   completed: "completed",
   failed: "failed",
-  blocked: "draft",
+  blocked: "blocked",
 };
 
 const STATUS_TEXT: Record<RunLifecycleState, string> = {

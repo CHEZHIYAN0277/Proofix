@@ -5,11 +5,20 @@
  * renders identically with no backend running. In API mode the models are
  * polled while the run is live so header, summary and report stay current as
  * agents progress.
+ *
+ * Each model carries its own `{data, error, loading}` (B-F01, B-F08). The
+ * previous version awaited a single `Promise.allSettled` and read only the
+ * fulfilled results, so a rejected `/report` was indistinguishable from a run
+ * that produced none: the panel rendered the empty model and said nothing. That
+ * is the same defect class as the fabricated values already removed from this
+ * codebase — the UI asserting a fact it does not have. A failed fetch is now a
+ * reportable state with a retry, and one model failing never blanks the others.
  */
 import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type Dispatch,
   type SetStateAction,
@@ -50,6 +59,36 @@ const POLL_INTERVAL_MS = 2500;
 /** Fixture run id — requesting it from a real backend would always 404. */
 const MOCK_RUN_ID = "vulnapi-live";
 
+/** The run-scoped models, each independently fetchable and independently failable. */
+export type RunModelKey = "agents" | "header" | "summary" | "report" | "attempts";
+
+/**
+ * Load state for one model.
+ *
+ * `error` and `data` are not exclusive. A poll that fails after a successful
+ * one keeps the last good data on screen and raises the error beside it —
+ * blanking a panel because the newest refresh failed loses information the user
+ * already had.
+ */
+export interface ModelState {
+  error: string | null;
+  loading: boolean;
+  /**
+   * True once this model has been fetched successfully at least once, so a
+   * panel can distinguish "failed and I have nothing to show" from "failed but
+   * what is on screen is real, just stale".
+   */
+  loaded: boolean;
+}
+
+const PENDING: ModelState = { error: null, loading: true, loaded: false };
+const SETTLED: ModelState = { error: null, loading: false, loaded: true };
+
+function messageOf(reason: unknown): string {
+  if (reason instanceof Error) return reason.message;
+  return typeof reason === "string" && reason ? reason : "Request failed";
+}
+
 /**
  * Replace state only when the payload actually changed.
  *
@@ -73,6 +112,15 @@ export interface RunData {
   setRepositories: (next: SidebarRepo[] | ((prev: SidebarRepo[]) => SidebarRepo[])) => void;
   /** Re-fetch the sidebar from the backend, e.g. after starting a run. */
   refreshRepositories: () => void;
+  /** Per-model load state. Panels read their own entry to show error/skeleton. */
+  status: Record<RunModelKey, ModelState>;
+  /**
+   * Re-fetch every run-scoped model now. Bound to the retry control that
+   * appears whenever a panel is in error — including after the run has settled,
+   * where polling has stopped and a retry is the only way to recover.
+   */
+  retry: () => void;
+  /** True until the first load of a fresh run resolves, for the page-level splash. */
   loading: boolean;
 }
 
@@ -91,10 +139,29 @@ export function useRunData(runId: string, done: boolean): RunData {
     isLive ? EMPTY_REPAIR_ATTEMPTS : MOCK_REPAIR_ATTEMPTS,
   );
   const [repositories, setRepositories] = useState<SidebarRepo[]>(isLive ? [] : MOCK_REPOSITORIES);
-  const [loading, setLoading] = useState(isLive);
+
+  const [status, setStatus] = useState<Record<RunModelKey, ModelState>>(() => {
+    const initial = isLive ? PENDING : SETTLED;
+    return {
+      agents: initial,
+      header: initial,
+      summary: initial,
+      report: initial,
+      attempts: initial,
+    };
+  });
 
   const [repoRefreshToken, setRepoRefreshToken] = useState(0);
   const refreshRepositories = useCallback(() => setRepoRefreshToken((t) => t + 1), []);
+
+  const [retryToken, setRetryToken] = useState(0);
+  const retry = useCallback(() => setRetryToken((t) => t + 1), []);
+
+  // Only the *first* load of a given run shows the page-level splash. Later
+  // polls and retries update in place; swapping the whole workspace back to a
+  // splash every 2.5s would be worse than showing slightly stale data.
+  const firstLoadDone = useRef(false);
+  const [loading, setLoading] = useState(isLive);
 
   // Repository list — refreshed when a run finishes so statuses stay accurate.
   useEffect(() => {
@@ -112,32 +179,81 @@ export function useRunData(runId: string, done: boolean): RunData {
     };
   }, [done, repoRefreshToken]);
 
+  // A fresh run id is a fresh load: re-arm the splash.
+  useEffect(() => {
+    firstLoadDone.current = false;
+  }, [runId]);
+
   // Run-scoped models. Polled while the run is in flight, fetched once after.
   useEffect(() => {
     if (!isLive || !runId || runId === MOCK_RUN_ID) {
       setLoading(false);
+      setStatus({
+        agents: SETTLED,
+        header: SETTLED,
+        summary: SETTLED,
+        report: SETTLED,
+        attempts: SETTLED,
+      });
       return;
     }
 
     let cancelled = false;
 
     const load = async () => {
+      // Mark loading only on the first pass. Flagging every poll as `loading`
+      // would make panels flicker into skeletons twice a second.
+      if (!firstLoadDone.current) {
+        setStatus((prev) => ({
+          agents: { ...prev.agents, loading: true },
+          header: { ...prev.header, loading: true },
+          summary: { ...prev.summary, loading: true },
+          report: { ...prev.report, loading: true },
+          attempts: { ...prev.attempts, loading: true },
+        }));
+      }
+
       const results = await Promise.allSettled([
         getRunAgents(runId),
         getWorkspaceHeader(runId),
         getExecutiveSummary(runId),
-        getRunReport(runId),
         getRepairAttempts(runId),
+        getRunReport(runId),
       ]);
       if (cancelled) return;
 
-      const [agentsRes, headerRes, summaryRes, reportRes, attemptsRes] = results;
+      const [agentsRes, headerRes, summaryRes, attemptsRes, reportRes] = results;
+
+      // An empty agent list is not an answer worth adopting — the backend
+      // returns one before the registry is populated — but it is not a failure
+      // either, so the model settles clean.
       if (agentsRes.status === "fulfilled" && agentsRes.value.length)
         setIfChanged(setAgents, agentsRes.value);
       if (headerRes.status === "fulfilled") setIfChanged(setHeader, headerRes.value);
       if (summaryRes.status === "fulfilled") setIfChanged(setSummary, summaryRes.value);
-      if (reportRes.status === "fulfilled") setIfChanged(setReport, reportRes.value);
       if (attemptsRes.status === "fulfilled") setIfChanged(setAttempts, attemptsRes.value);
+      if (reportRes.status === "fulfilled") setIfChanged(setReport, reportRes.value);
+
+      setStatus((prev) => {
+        const settle = (key: RunModelKey, r: PromiseSettledResult<unknown>): ModelState =>
+          r.status === "fulfilled"
+            ? SETTLED
+            : {
+                error: messageOf((r as PromiseRejectedResult).reason),
+                loading: false,
+                // A failed refresh does not un-load data an earlier poll got.
+                loaded: prev[key].loaded,
+              };
+        return {
+          agents: settle("agents", agentsRes),
+          header: settle("header", headerRes),
+          summary: settle("summary", summaryRes),
+          attempts: settle("attempts", attemptsRes),
+          report: settle("report", reportRes),
+        };
+      });
+
+      firstLoadDone.current = true;
       setLoading(false);
     };
 
@@ -152,7 +268,7 @@ export function useRunData(runId: string, done: boolean): RunData {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [runId, done]);
+  }, [runId, done, retryToken]);
 
   return useMemo(
     () => ({
@@ -164,8 +280,21 @@ export function useRunData(runId: string, done: boolean): RunData {
       repositories,
       setRepositories,
       refreshRepositories,
+      status,
+      retry,
       loading,
     }),
-    [agents, header, summary, report, attempts, repositories, refreshRepositories, loading],
+    [
+      agents,
+      header,
+      summary,
+      report,
+      attempts,
+      repositories,
+      refreshRepositories,
+      status,
+      retry,
+      loading,
+    ],
   );
 }

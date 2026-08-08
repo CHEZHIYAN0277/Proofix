@@ -7,7 +7,13 @@ export type AgentStatus =
   | "failed"
   | "draft"
   /** Stage the pipeline routed around (e.g. security re-scan after a failed validation). */
-  | "skipped";
+  | "skipped"
+  /**
+   * The run halted before the pipeline could start — A0.7 found the repository's
+   * tests unrunnable. Distinct from `failed` (the run tried and could not) and
+   * from `draft` (a PR exists but wants review); blocked produced neither.
+   */
+  | "blocked";
 
 export interface ExecutionLine {
   text: string;

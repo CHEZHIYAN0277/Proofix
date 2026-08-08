@@ -44,6 +44,8 @@
   --color-status-failed-bg: var(--status-failed-bg);
   --color-status-draft: var(--status-draft);
   --color-status-draft-bg: var(--status-draft-bg);
+  --color-status-blocked: var(--status-blocked);
+  --color-status-blocked-bg: var(--status-blocked-bg);
 
   --font-sans: "Inter", "SF Pro Display", ui-sans-serif, system-ui, sans-serif;
   --font-heading: "Geist", "Inter", ui-sans-serif, system-ui, sans-serif;
@@ -92,6 +94,10 @@
   --status-failed-bg: color-mix(in srgb, #ef4444 12%, white);
   --status-draft: #0891b2;
   --status-draft-bg: color-mix(in srgb, #06b6d4 14%, white);
+  /* Blocked is not a failure and not a draft: the run never got to try. Violet
+     keeps it distinct from failed-red, retry-amber and draft-cyan. */
+  --status-blocked: #7c3aed;
+  --status-blocked-bg: color-mix(in srgb, #8b5cf6 14%, white);
 }
 
 .dark {
@@ -131,6 +137,8 @@
   --status-failed-bg: color-mix(in srgb, #ef4444 14%, transparent);
   --status-draft: #06b6d4;
   --status-draft-bg: color-mix(in srgb, #06b6d4 14%, transparent);
+  --status-blocked: #a78bfa;
+  --status-blocked-bg: color-mix(in srgb, #8b5cf6 16%, transparent);
 }
 
 @keyframes line-in {

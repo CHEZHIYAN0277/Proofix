@@ -4,26 +4,30 @@ import { StatusBadge } from "./StatusBadge";
 import { StatusIcon } from "./StatusIcon";
 import { ProgressRing } from "./ProgressRing";
 import { AnimatedNumber } from "./AnimatedNumber";
-import { MOCK_RUN_REPORT, type RunReportModel } from "@/mocks";
+import { type RunReportModel } from "@/mocks";
 
 export function RunReport({
   done,
   agents,
   activeIndex,
-  report = MOCK_RUN_REPORT,
+  report,
 }: {
   done: boolean;
   agents?: LiveAgent[];
   activeIndex?: number;
-  /** Optional run-report model. Falls back to the bundled mock. */
-  report?: RunReportModel;
+  /**
+   * The run's report. Required (B-F02): this used to default to
+   * `MOCK_RUN_REPORT`, so omitting the prop rendered another repository's trust
+   * scores, file list and PR decision as if they belonged to this run. There is
+   * no safe default for a component whose whole job is reporting measurements.
+   */
+  report: RunReportModel;
 }) {
   const decision = report.decision;
-  // A blocked run produced no PR of any kind, so it borrows the draft badge's
-  // neutral treatment rather than a pass/fail one. The label beside it is the
-  // backend's own wording ("Environment not prepared").
-  const decisionBadge =
-    decision === "merge" ? "completed" : decision === "blocked" ? "draft" : decision;
+  // `blocked` now has its own badge tone (B-F05) — it used to borrow `draft`,
+  // which said "a PR is waiting for review" about a run that produced no PR at
+  // all. The label beside it is the backend's own wording.
+  const decisionBadge = decision === "merge" ? "completed" : decision;
   const current = !done && agents && activeIndex !== undefined ? agents[activeIndex] : null;
 
   const copyJson = () => {

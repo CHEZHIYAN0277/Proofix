@@ -169,3 +169,121 @@ describe("createLiveEventSource terminal detection", () => {
     ]);
   });
 });
+
+/**
+ * Reconnect (B-F03).
+ *
+ * A close used to be terminal for the transport: the socket dropped, nothing
+ * re-attached, and the run silently fell back to the 2.5s REST poll — updating
+ * but no longer narrating. The invariant that must survive reconnect is the one
+ * the original `onclose` omission protected: a close is never evidence the run
+ * finished.
+ */
+describe("createLiveEventSource reconnect", () => {
+  /** Minimal socket double that records instances and lets tests drive events. */
+  class FakeSocket {
+    static instances: FakeSocket[] = [];
+    onmessage: ((e: { data: string }) => void) | null = null;
+    onclose: (() => void) | null = null;
+    onopen: (() => void) | null = null;
+    closed = false;
+
+    constructor() {
+      FakeSocket.instances.push(this);
+    }
+    close() {
+      this.closed = true;
+      this.onclose?.();
+    }
+    /** Simulate a transport-level drop, as distinct from our own dispose. */
+    drop() {
+      this.onclose?.();
+    }
+  }
+
+  beforeEach(() => {
+    FakeSocket.instances = [];
+    vi.stubGlobal("WebSocket", FakeSocket);
+  });
+
+  /** A run the backend still reports as live, so the socket path is taken. */
+  const liveBackend = (events: unknown[] = []) =>
+    apiFetch.mockImplementation(async (url: string) =>
+      url.endsWith("/events") ? events : { status: "running", lifecycle: [] },
+    );
+
+  it("re-attaches after the socket drops mid-run", async () => {
+    liveBackend();
+    const { dispose } = collect("run-rc1");
+    await drain();
+
+    expect(FakeSocket.instances).toHaveLength(1);
+    FakeSocket.instances[0].drop();
+    await drain();
+
+    expect(FakeSocket.instances.length).toBeGreaterThan(1);
+    dispose();
+  });
+
+  it("never emits run.settled because the socket closed", async () => {
+    liveBackend();
+    const { events, dispose } = collect("run-rc2");
+    await drain();
+
+    FakeSocket.instances[0].drop();
+    await drain();
+
+    expect(events.some((e) => e.type === "run.settled")).toBe(false);
+    dispose();
+  });
+
+  it("does not duplicate journal lines when history replays on reconnect", async () => {
+    // The same history is served on both fetches — exactly what a real backend
+    // returns when nothing new happened while the socket was down.
+    liveBackend([
+      { agent_id: "A0.7", status: "completed", message: "", sequence: 1 },
+      { agent_id: "A1", status: "completed", message: "", sequence: 2 },
+    ]);
+
+    const { events, dispose } = collect("run-rc3");
+    await drain();
+    const before = events.length;
+
+    FakeSocket.instances[0].drop();
+    await drain();
+
+    expect(events).toHaveLength(before);
+    dispose();
+  });
+
+  it("stops reconnecting once the run has settled", async () => {
+    apiFetch.mockImplementation(async (url: string) =>
+      url.endsWith("/events") ? [] : { status: "running", lifecycle: [] },
+    );
+    const { dispose } = collect("run-rc4");
+    await drain();
+
+    const socket = FakeSocket.instances[0];
+    socket.onmessage?.({ data: JSON.stringify({ type: "run.completed", status: "completed" }) });
+    await drain();
+
+    const afterSettle = FakeSocket.instances.length;
+    socket.drop();
+    await drain();
+
+    expect(FakeSocket.instances).toHaveLength(afterSettle);
+    dispose();
+  });
+
+  it("does not reconnect after dispose", async () => {
+    liveBackend();
+    const { dispose } = collect("run-rc5");
+    await drain();
+
+    const count = FakeSocket.instances.length;
+    dispose();
+    await drain();
+
+    expect(FakeSocket.instances).toHaveLength(count);
+  });
+});

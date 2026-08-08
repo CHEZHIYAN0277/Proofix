@@ -338,6 +338,28 @@ def test_confidence_is_not_measured_when_a4_never_ran():
     assert build_executive_summary(state, [])["confidence"] == "not measured"
 
 
+def test_severity_is_not_measured_when_no_static_findings_exist():
+    """The old floor was "LOW", which a run blocked before A3 ever ran reported
+    as though a scan had come back clean."""
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="blocked")
+
+    assert build_executive_summary(state, [])["severity"] == "not measured"
+
+
+def test_severity_of_a_real_low_finding_is_still_low():
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="completed")
+    state.static_report = {"prioritized": [{"severity": 0.1}]}
+
+    assert build_executive_summary(state, [])["severity"] == "LOW"
+
+
+def test_severity_reads_the_top_ranked_finding():
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="completed")
+    state.static_report = {"prioritized": [{"severity": 0.95}, {"severity": 0.1}]}
+
+    assert build_executive_summary(state, [])["severity"] == "CRITICAL"
+
+
 def test_a_real_zero_confidence_is_still_reported_as_a_number():
     state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="completed")
     state.root_cause = {"root_cause": "unclear", "confidence": 0.0}

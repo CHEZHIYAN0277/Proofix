@@ -115,7 +115,12 @@ export interface WorkspaceHeaderModel {
 export interface ExecutiveSummaryModel {
   repository: string;
   bug: string;
-  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  /**
+   * `"not measured"` when A3 produced no ranked findings — a run blocked at
+   * A0.7 has no scan to report a severity for, and the old `"LOW"` floor
+   * claimed one came back clean. Render it neutrally, not as a red chip.
+   */
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" | "not measured";
   rootCause: string;
   confidence: string;
   filesAffected: number;

@@ -6,7 +6,7 @@
  * is that affordance: a dense, glanceable record of what has run, where each
  * chip re-opens its agent on the stage.
  */
-import { Check, Minus, X, RotateCcw } from "lucide-react";
+import { Check, Minus, X, RotateCcw, Ban } from "lucide-react";
 import type { LiveAgent } from "./useExecutionRun";
 import type { AgentStatus } from "./data";
 
@@ -24,6 +24,7 @@ interface Props {
 /** Chip glyph per outcome. Running has no glyph — the pulsing dot carries it. */
 function StatusGlyph({ status }: { status: AgentStatus }) {
   if (status === "failed") return <X className="h-3 w-3" strokeWidth={2.5} />;
+  if (status === "blocked") return <Ban className="h-3 w-3" strokeWidth={2.5} />;
   if (status === "skipped") return <Minus className="h-3 w-3" strokeWidth={2.5} />;
   if (status === "retry") return <RotateCcw className="h-3 w-3" strokeWidth={2.5} />;
   if (status === "running")
@@ -40,6 +41,7 @@ const TONE: Record<AgentStatus, string> = {
   retry: "border-status-retry/40 text-status-retry bg-status-retry-bg",
   failed: "border-status-failed/40 text-status-failed bg-status-failed-bg",
   skipped: "border-border text-ink-soft bg-surface-muted",
+  blocked: "border-status-blocked/40 text-status-blocked bg-status-blocked-bg",
 };
 
 export function AgentRail({ agents, activeIndex, focusIndex, onFocus, done }: Props) {

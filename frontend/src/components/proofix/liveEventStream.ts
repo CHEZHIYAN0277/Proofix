@@ -84,6 +84,20 @@ const MIN_INTERVAL_MS = 60;
 /** Backlog beyond which the queue starts draining faster than real time. */
 const CATCH_UP_THRESHOLD = 6;
 
+/**
+ * Reconnect backoff (B-F03).
+ *
+ * A dropped socket used to be permanent: the stream silently degraded to the
+ * 2.5s REST poll, so a live run kept updating but stopped narrating, and the
+ * user had no way to tell a quiet pipeline from a dead transport. These bound
+ * an exponential backoff that gives up after `WS_MAX_RETRIES` attempts —
+ * polling remains the floor, so failing to reconnect degrades rather than
+ * breaks.
+ */
+const WS_RETRY_BASE_MS = 500;
+const WS_RETRY_MAX_MS = 15_000;
+const WS_MAX_RETRIES = 8;
+
 function websocketUrl(runId: string): string {
   const base = API_BASE_URL || (typeof window !== "undefined" ? window.location.origin : "");
   const url = new URL(`/ws/runs/${encodeURIComponent(runId)}`, base || "http://127.0.0.1:8000");
@@ -205,13 +219,52 @@ export function createLiveEventSource(runId: string): EventSourceFactory {
       }
     };
 
+    // Once the run has settled there is nothing left to stream, so a close is
+    // expected and must not trigger a reconnect.
+    let settledSeen = false;
+    let retries = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleReconnect = () => {
+      if (disposed || settledSeen || reconnectTimer) return;
+      if (retries >= WS_MAX_RETRIES) return;
+      const delay = Math.min(WS_RETRY_MAX_MS, WS_RETRY_BASE_MS * 2 ** retries);
+      retries += 1;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (disposed || settledSeen) return;
+        // Replay history before re-attaching: frames published while the socket
+        // was down exist only in the event log. `applyEvent` is idempotent —
+        // it skips any card whose lines are already queued — so replaying the
+        // whole log cannot duplicate journal lines.
+        void (async () => {
+          try {
+            const history = await apiFetch<BackendAgentEvent[]>(ENDPOINTS.runEvents(runId));
+            if (disposed || settledSeen) return;
+            history.forEach(applyEvent);
+          } catch {
+            /* best-effort; the socket may still catch up */
+          }
+          if (disposed || settledSeen) return;
+          attachSocket();
+        })();
+      }, delay);
+    };
+
     const attachSocket = () => {
-      if (disposed || typeof WebSocket === "undefined") return;
+      if (disposed || settledSeen || typeof WebSocket === "undefined") return;
       try {
         socket = new WebSocket(websocketUrl(runId));
       } catch {
+        scheduleReconnect();
         return;
       }
+
+      // A clean attach resets the backoff, so a run that drops once an hour
+      // never accumulates its way to the retry ceiling.
+      socket.onopen = () => {
+        retries = 0;
+      };
 
       socket.onmessage = (message) => {
         try {
@@ -228,7 +281,10 @@ export function createLiveEventSource(runId: string): EventSourceFactory {
             // completed one, so `status` wins whenever it is present.
             const state =
               statusToLifecycleState(parsed?.status) ?? stateForFrameType(parsed.type as string);
-            if (state) enqueue({ type: "run.settled", state });
+            if (state) {
+              settledSeen = true;
+              enqueue({ type: "run.settled", state });
+            }
             return;
           }
           // `run.started` and any future non-terminal lifecycle frame carry no
@@ -240,11 +296,16 @@ export function createLiveEventSource(runId: string): EventSourceFactory {
         }
       };
 
-      // Deliberately no `onclose` handler: a close is not evidence the run
-      // finished. Dropped wifi, a backend restart and a proxy timeout all close
-      // the socket mid-run, and treating that as completion showed the user a
-      // final report for a run that was still going. Completion arrives only as
-      // the explicit frame above, or from the history replay below.
+      // A close is *not* evidence the run finished. Dropped wifi, a backend
+      // restart and a proxy timeout all close the socket mid-run, and treating
+      // that as completion once showed the user a final report for a run that
+      // was still going. So `onclose` reconnects and nothing more — it never
+      // emits `run.settled`. Completion arrives only as the explicit frame
+      // above, or from the lifecycle read below.
+      socket.onclose = () => {
+        socket = null;
+        scheduleReconnect();
+      };
     };
 
     // Replay history first so a mid-run attach still shows everything.
@@ -276,6 +337,7 @@ export function createLiveEventSource(runId: string): EventSourceFactory {
 
       if (disposed) return;
       if (settled) {
+        settledSeen = true;
         enqueue({ type: "run.settled", state: settled });
         return;
       }
@@ -286,11 +348,16 @@ export function createLiveEventSource(runId: string): EventSourceFactory {
       disposed = true;
       if (timer) clearTimeout(timer);
       timer = null;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = null;
       queue.length = 0;
       // Anything still queued never reached the reducer. Forget it so the next
       // subscription re-queues it instead of skipping it as already shown.
       queuedLines = new Map(emittedLines);
       queuedFinal = new Set(emittedFinal);
+      // Null the handler first: `close()` fires `onclose`, which would
+      // otherwise schedule a reconnect for a subscription being torn down.
+      if (socket) socket.onclose = null;
       socket?.close();
       socket = null;
     };

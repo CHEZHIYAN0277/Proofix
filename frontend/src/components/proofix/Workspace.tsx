@@ -442,8 +442,22 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
         {view === "execution" && !(isLive && runData.loading) && (
           <div className="mx-auto flex max-w-[1480px] gap-6 px-6 py-6">
             <div className={`min-w-0 flex-1 space-y-6 ${done ? "pb-[160px]" : "pb-24"}`}>
+              {runData.status.header.error && (
+                <PanelError
+                  panel="run header"
+                  message={runData.status.header.error}
+                  onRetry={runData.retry}
+                />
+              )}
               <WorkspaceHeader done={done} header={runData.header} lifecycle={lifecycle} />
-              <div ref={executiveSummaryRef} className="scroll-mt-6">
+              <div ref={executiveSummaryRef} className="scroll-mt-6 space-y-3">
+                {runData.status.summary.error && (
+                  <PanelError
+                    panel="executive summary"
+                    message={runData.status.summary.error}
+                    onRetry={runData.retry}
+                  />
+                )}
                 <ExecutiveSummary
                   agents={agents}
                   activeIndex={activeIndex}
@@ -458,6 +472,16 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
                   eyebrow="Execution Journal"
                   title={done ? "Full execution timeline" : "Live execution timeline"}
                 />
+
+                {runData.status.agents.error && (
+                  <div className="mt-4">
+                    <PanelError
+                      panel="the execution journal"
+                      message={runData.status.agents.error}
+                      onRetry={runData.retry}
+                    />
+                  </div>
+                )}
 
                 {/* Stages already passed. Mid-run this is the only way back to
                     them, since the stage below shows one agent at a time. */}
@@ -561,7 +585,14 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
                 const mutationIdx = agents.findIndex((a) => a.id === "mutation");
                 const showRetries = mutationIdx >= 0 && activeIndex >= mutationIdx;
                 return showRetries ? (
-                  <div ref={repairAttemptsRef} className="scroll-mt-6">
+                  <div ref={repairAttemptsRef} className="scroll-mt-6 space-y-3">
+                    {runData.status.attempts.error && (
+                      <PanelError
+                        panel="repair attempts"
+                        message={runData.status.attempts.error}
+                        onRetry={runData.retry}
+                      />
+                    )}
                     <RetrySequence model={runData.attempts} />
                   </div>
                 ) : null;
@@ -572,14 +603,37 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
               </footer>
             </div>
 
-            {done && showRunReport && (
-              <RunReport
-                done={done}
-                agents={agents}
-                activeIndex={activeIndex}
-                report={runData.report}
-              />
-            )}
+            {done &&
+              showRunReport &&
+              // A report that never loaded must not render as an empty one —
+              // "0 files changed, no trust score" is a claim, and we do not
+              // have it. Once a report *has* loaded, a later failed poll shows
+              // the stale-but-real report with the error beside it.
+              (runData.status.report.error && !runData.status.report.loaded ? (
+                <aside className="w-[380px] shrink-0">
+                  <PanelError
+                    panel="the run report"
+                    message={runData.status.report.error}
+                    onRetry={runData.retry}
+                  />
+                </aside>
+              ) : (
+                <div className="contents">
+                  {runData.status.report.error && (
+                    <PanelError
+                      panel="the latest run report"
+                      message={runData.status.report.error}
+                      onRetry={runData.retry}
+                    />
+                  )}
+                  <RunReport
+                    done={done}
+                    agents={agents}
+                    activeIndex={activeIndex}
+                    report={runData.report}
+                  />
+                </div>
+              ))}
           </div>
         )}
       </main>
@@ -631,6 +685,40 @@ function WorkspaceLoading() {
         <span className="h-1.5 w-1.5 animate-soft-pulse rounded-full bg-status-running" />
         Loading run…
       </div>
+    </div>
+  );
+}
+
+/**
+ * Shown in place of, or above, a panel whose model failed to load (B-F01).
+ *
+ * The point is that the user can tell a fetch that failed from a run that
+ * genuinely produced nothing. Without this a broken `/report` and a run with no
+ * report render identically — the empty model, silently.
+ */
+function PanelError({
+  panel,
+  message,
+  onRetry,
+}: {
+  panel: string;
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-status-failed/30 bg-status-failed-bg/40 px-3 py-2 text-xs text-ink"
+    >
+      <span className="font-medium text-status-failed">Could not load {panel}</span>
+      <span className="font-mono text-ink-soft">{message}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="ml-auto rounded-md border border-border px-2 py-0.5 font-medium text-ink transition-colors hover:bg-surface-muted"
+      >
+        Retry
+      </button>
     </div>
   );
 }
@@ -696,7 +784,7 @@ function WorkspaceHeader({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge
-            status={state === "blocked" ? "draft" : state === "running" ? "running" : state}
+            status={state}
             pulse={!settled}
             label={
               state === "running"
@@ -709,7 +797,10 @@ function WorkspaceHeader({
             }
           />
           <StatusBadge
-            status={state === "failed" ? "failed" : "draft"}
+            // `blocked` has its own tone now (B-F05). It used to fall into the
+            // draft branch here, painting "a PR awaits review" over a run that
+            // never produced one.
+            status={state === "failed" || state === "blocked" ? state : "draft"}
             label={`Decision · ${lifecycle.terminal ? lifecycle.decisionLabel : header.decisionLabel}`}
           />
         </div>
@@ -723,7 +814,9 @@ function WorkspaceHeader({
           className={`mt-4 rounded-lg border px-3 py-2.5 ${
             state === "failed"
               ? "border-status-failed/30 bg-status-failed-bg/40"
-              : "border-status-draft/30 bg-status-draft-bg/40"
+              : state === "blocked"
+                ? "border-status-blocked/30 bg-status-blocked-bg/40"
+                : "border-status-draft/30 bg-status-draft-bg/40"
           }`}
         >
           <div className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
@@ -804,9 +897,9 @@ function ExecutiveSummary({
           decision === "blocked"
           ? {
               label: "Environment not prepared",
-              tint: "bg-status-draft-bg/40 border-status-draft/30",
-              dot: "bg-status-draft",
-              text: "text-status-draft",
+              tint: "bg-status-blocked-bg/40 border-status-blocked/30",
+              dot: "bg-status-blocked",
+              text: "text-status-blocked",
             }
           : {
               label: "Draft PR",
@@ -828,12 +921,19 @@ function ExecutiveSummary({
     { label: "Bug", value: summary.bug, show: activeIndex >= 2 },
     {
       label: "Severity",
-      value: (
-        <span className="inline-flex items-center gap-1.5 rounded-md border border-status-failed/30 bg-status-failed-bg/50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-status-failed">
-          <span className="h-1.5 w-1.5 rounded-full bg-status-failed" />
-          {summary.severity}
-        </span>
-      ),
+      // A severity nobody measured must not wear the red chip — that is the
+      // visual claim "we scanned and it was bad". Absence renders muted.
+      value:
+        summary.severity === "not measured" ? (
+          <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            {summary.severity}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-status-failed/30 bg-status-failed-bg/50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-status-failed">
+            <span className="h-1.5 w-1.5 rounded-full bg-status-failed" />
+            {summary.severity}
+          </span>
+        ),
       show: activeIndex >= 2,
     },
     { label: "Root Cause", value: summary.rootCause, show: activeIndex >= 4 },

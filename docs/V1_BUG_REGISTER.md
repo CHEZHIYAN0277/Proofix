@@ -33,15 +33,15 @@ or missing · **S3** quality/robustness · **S4** cosmetic.
 
 | ID | Sev | Layer | Description | Root cause | Evidence | Status | Required fix | Phase |
 |---|---|---|---|---|---|---|---|---|
-| **B-F01** | **S1** | data | Every REST failure is silently swallowed; a failed `/report` is indistinguishable from a run that produced none. No retry once the run settles | `Promise.allSettled` with no rejection surface | `useRunData.ts:125` | 🔴 open | Per-model error state + visible retry | 1 |
-| **B-F02** | S2 | fixtures | `RunReport` defaults its `report` prop to `MOCK_RUN_REPORT` — another repo's trust scores render as real if the prop is ever omitted | Default parameter | `RunReport.tsx:13` | 🔴 latent | Require the prop; render an empty state | 1 |
-| **B-F03** | S2 | transport | No WebSocket reconnect. A dropped socket silently degrades to 2.5 s polling | `onclose` deliberately unhandled | `liveEventStream.ts` | 🔴 open | Backoff reconnect that never infers completion from a close | 1 |
-| **B-F04** | S3 | fixtures | `AGENT_SUMMARY_BULLETS` (11 hardcoded `{text, ok:true}` claims) and `RETRY_ATTEMPTS` exported, imported by nothing | Leftover from the pre-backend UI | `data.ts:571,597` | 🔴 open | Delete both | 0 |
-| **B-F05** | S3 | types | `AgentStatus` has no `blocked` member; blocked runs borrow the `draft` tone | Union predates the state | `data.ts:3`, `StatusBadge.tsx` | 🟡 open | Add `blocked` with its own tone | 1 |
+| **B-F01** | **S1** | data | Every REST failure is silently swallowed; a failed `/report` is indistinguishable from a run that produced none. No retry once the run settles | `Promise.allSettled` with no rejection surface | `useRunData.ts:125` | ✅ fixed | Per-model error state + visible retry | 1 |
+| **B-F02** | S2 | fixtures | `RunReport` defaults its `report` prop to `MOCK_RUN_REPORT` — another repo's trust scores render as real if the prop is ever omitted | Default parameter | `RunReport.tsx:13` | ✅ fixed | Require the prop; render an empty state | 1 |
+| **B-F03** | S2 | transport | No WebSocket reconnect. A dropped socket silently degrades to 2.5 s polling | `onclose` deliberately unhandled | `liveEventStream.ts` | ✅ fixed | Backoff reconnect that never infers completion from a close | 1 |
+| **B-F04** | S3 | fixtures | `AGENT_SUMMARY_BULLETS` (11 hardcoded `{text, ok:true}` claims) and `RETRY_ATTEMPTS` exported, imported by nothing | Leftover from the pre-backend UI | `data.ts:571,597` | ✅ fixed | Delete both | 0 |
+| **B-F05** | S3 | types | `AgentStatus` has no `blocked` member; blocked runs borrow the `draft` tone | Union predates the state | `data.ts:3`, `StatusBadge.tsx` | ✅ fixed | Add `blocked` with its own tone | 1 |
 | **B-F06** | S3 | a11y | No `prefers-reduced-motion` handling; continuous pulses + scroll choreography | Never implemented | repo-wide | 🔴 open | Honour the query | 8 |
-| **B-F07** | S4 | lint | 435 pre-existing prettier errors (`components/ui/**`, `__root.tsx`, `mocks/repositories.ts`) | Repo never formatted | `npm run lint` | 🔴 open | One `--fix` commit | 0 |
-| **B-F08** | S3 | UX | One page-level loading state; no per-panel skeletons or empty-vs-failed distinction | Single `loading` boolean | `useRunData.ts` | 🔴 open | Per-model states | 1 |
-| **B-F09** | S2 | UX | `severity` renders `"LOW"` when nothing was scanned — asserts a measurement never taken | `_severity_label` defaults | `ui_projection.py` | 🔴 open | "Not measured" when `prioritized` is empty | 1 |
+| **B-F07** | S4 | lint | 435 pre-existing prettier errors (`components/ui/**`, `__root.tsx`, `mocks/repositories.ts`) | Repo never formatted | `npm run lint` | ✅ fixed | One `--fix` commit | 0 |
+| **B-F08** | S3 | UX | One page-level loading state; no per-panel skeletons or empty-vs-failed distinction | Single `loading` boolean | `useRunData.ts` | 🟡 partial | Per-model states ✅; per-panel **skeletons** still not built — a loading panel shows stale/empty content, it just no longer hides a failure | 1 |
+| **B-F09** | S2 | UX | `severity` renders `"LOW"` when nothing was scanned — asserts a measurement never taken | `_severity_label` defaults | `ui_projection.py` | ✅ fixed | "Not measured" when `prioritized` is empty | 1 |
 | **B-F10** | S3 | perf | Every 2.5 s poll re-fetches 5 endpoints and JSON-stringifies each for change detection | `setIfChanged` deep compare | `useRunData.ts:63` | 🟡 open | Cheaper comparison; back off when idle | 8 |
 
 ## Resolved this session (do not re-open)
@@ -53,3 +53,5 @@ or missing · **S3** quality/robustness · **S4** cosmetic.
 | R-03 | A0.7 invisible in V1 | `environment` card registered |
 | R-04 | `write EPIPE` traceback on normal browser disconnect | `ws.py` quiet-disconnect handling |
 | R-05 | Blocked runs kept the socket open forever | `blocked` added to terminal sets |
+| R-06 | Severity floor of `"LOW"` claimed a clean scan on runs where A3 never ran | `_severity_label` returns `NOT_MEASURED` |
+| R-07 | Blocked runs wore the draft badge in four places (header status, header decision, executive-summary chip, run report) | `blocked` `AgentStatus` + `--status-blocked` tokens |

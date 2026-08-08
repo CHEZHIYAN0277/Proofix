@@ -7,6 +7,7 @@ const STATUS_LABEL: Record<AgentStatus, string> = {
   failed: "Failed",
   draft: "Draft PR",
   skipped: "Skipped",
+  blocked: "Blocked",
 };
 
 const STATUS_CLASSES: Record<AgentStatus, string> = {
@@ -16,6 +17,7 @@ const STATUS_CLASSES: Record<AgentStatus, string> = {
   failed: "bg-status-failed-bg text-status-failed",
   draft: "bg-status-draft-bg text-status-draft",
   skipped: "bg-surface-muted text-ink-soft",
+  blocked: "bg-status-blocked-bg text-status-blocked",
 };
 
 export function StatusBadge({
