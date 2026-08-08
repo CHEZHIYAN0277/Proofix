@@ -281,7 +281,10 @@ def test_run_report_survives_an_empty_run():
     summary = build_executive_summary(state, [])
 
     assert report["decision"] == "failed"
-    assert report["trustScore"] == 0.0
+    # `None`, not 0.0. A run that failed before any agent produced output has no
+    # measurements, and reporting 0.0 asserted it scored the worst possible
+    # result on four axes nobody evaluated.
+    assert report["trustScore"] is None
     assert report["proofBundle"] == "—"
     assert summary["repository"] == "vulnapi"
 
@@ -296,3 +299,60 @@ def test_group_runs_by_repository_buckets_by_repo():
 
     assert set(grouped) == {"vulnapi", "llm-shield"}
     assert len(grouped["vulnapi"]) == 2
+
+
+# -- the summary must not claim gates a run never reached ---------------------
+
+
+def test_blocked_run_does_not_claim_trust_gates_were_satisfied():
+    """"All trust gates satisfied" was the default for any run with no review
+    note — including one that stopped at the environment precheck, before a
+    single gate existed to satisfy."""
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="blocked")
+    state.environment = {"status": "not_prepared", "reason": "pytest is not importable"}
+
+    summary = build_executive_summary(state, [])
+
+    assert summary["decision"] == "blocked"
+    assert "All trust gates satisfied" not in summary["decisionReason"]
+    assert summary["decisionReason"]
+
+
+def test_auto_mergeable_run_may_still_say_gates_were_satisfied():
+    """The sentence is true of exactly one outcome, and that one keeps it."""
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="completed")
+    state.pr_decision = {"pr_type": "auto_mergeable", "axis_scores": {}}
+
+    summary = build_executive_summary(state, [])
+
+    # `run_decision` speaks the UI's vocabulary: `auto_mergeable` is "merge".
+    assert summary["decision"] == "merge"
+    assert summary["decisionReason"] == "All trust gates satisfied."
+
+
+def test_confidence_is_not_measured_when_a4_never_ran():
+    """`(confidence or 0) * 100` rendered "0.0%" for an investigation that never
+    happened, which reads as a measured no-confidence verdict."""
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="blocked")
+
+    assert build_executive_summary(state, [])["confidence"] == "not measured"
+
+
+def test_a_real_zero_confidence_is_still_reported_as_a_number():
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="completed")
+    state.root_cause = {"root_cause": "unclear", "confidence": 0.0}
+
+    assert build_executive_summary(state, [])["confidence"] == "0.0%"
+
+
+def test_pytest_unavailability_is_read_from_the_recorded_fact():
+    """A8 decides this where pytest is invoked; the projection must not have to
+    guess it from a traceback string it never saw."""
+    from backend.services.ui_projection import _pytest_unavailable
+
+    assert _pytest_unavailable({"pytest_available": False}) is True
+    assert _pytest_unavailable({"pytest_available": True}) is False
+    # Runs stored before the field existed still resolve through the old path.
+    assert _pytest_unavailable(
+        {"failure_brief": {"stack_trace": "No module named pytest"}}
+    ) is True

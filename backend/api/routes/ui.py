@@ -274,6 +274,61 @@ async def get_run_context(
     return package.to_storage_dict()
 
 
+@router.get("/runs/{run_id}/plan")
+async def get_run_plan(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+    """The repair plan A6 sequenced for this run.
+
+    Returns `state.fix_dag` verbatim: fix nodes with their files and
+    dependencies, the execution order, the dependency edges with the reason
+    each was drawn, and the conflict batches. The agent projection publishes
+    only counts and a six-node visualization, so this is the sole route by
+    which the full plan reaches a client.
+
+    Nothing is recomputed. A 404 means A6 has not produced a plan, which the
+    caller renders as absent rather than substituting an empty one — an empty
+    DAG and a stage that never ran are different facts.
+    """
+    state = await _load_run(store, run_id)
+    if not state.fix_dag:
+        raise HTTPException(
+            status_code=404,
+            detail="No repair plan for this run — A6 has not completed",
+        )
+    return state.fix_dag
+
+
+@router.get("/runs/{run_id}/patch")
+async def get_run_patch(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+    """The patch bundle A7 generated for this run.
+
+    Returns `state.patch_bundle` verbatim: every candidate with its original
+    and patched source, the write method A7 actually used, the behavioural
+    contracts it recorded, the unified diff it generated and the style exemplar
+    commit it learned from. The agent projection publishes an eight-line diff
+    preview and two filenames, so this is the sole route by which the full
+    patch reaches a client.
+
+    Nothing is recomputed or summarised — in particular the `method` field is
+    passed through untouched, because it is what the integrity badges are
+    allowed to claim. A 404 means A7 produced no bundle, which is a different
+    fact from a bundle containing no patches: the first is "generation never
+    completed", the second is "generation completed and changed nothing".
+    """
+    state = await _load_run(store, run_id)
+    if not state.patch_bundle:
+        raise HTTPException(
+            status_code=404,
+            detail="No patch bundle for this run — A7 has not completed",
+        )
+    return state.patch_bundle
+
+
 @router.get("/runs/{run_id}/attempts")
 async def get_repair_attempts(
     run_id: str,

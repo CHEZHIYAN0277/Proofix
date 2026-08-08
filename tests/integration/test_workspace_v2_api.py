@@ -18,6 +18,8 @@ from backend.agents.repository_intelligence import INTELLIGENCE_STORE_KEY
 from backend.config import Settings
 from backend.main import create_app
 from backend.models.context import ContextMetrics, ContextPackage, RankedContextFile, Redaction
+from backend.models.fix_dag import DependencyEdge, FixDAGPlan, FixNode
+from backend.models.patch import BehavioralContract, PatchBundle, PatchCandidate
 from backend.state.events import AgentStatusEvent, RunLifecycleEvent
 from backend.state.redis_store import RedisStore
 
@@ -204,6 +206,174 @@ async def test_context_endpoint_does_not_recompute(client):
     assert body["metrics"]["files_ranked"] == 999
 
 
+# -- Phase 5: repair plan endpoint -----------------------------------------
+
+
+def _plan() -> FixDAGPlan:
+    return FixDAGPlan(
+        nodes=[
+            FixNode(issue_id="cve-pyjwt", files=["requirements.txt"]),
+            FixNode(issue_id="fix-auth", files=["vulnapi/auth.py"], depends_on=["cve-pyjwt"]),
+            FixNode(issue_id="fix-routes", files=["vulnapi/auth.py", "vulnapi/routes.py"]),
+        ],
+        execution_order=["cve-pyjwt", "fix-auth", "fix-routes"],
+        conflict_batches=[["fix-auth", "fix-routes"]],
+        dependency_edges=[
+            DependencyEdge(
+                from_issue="cve-pyjwt",
+                to_issue="fix-auth",
+                reason="dependency upgrade precedes the code that imports it",
+            )
+        ],
+    )
+
+
+async def _seed_plan(store: RedisStore, plan: FixDAGPlan) -> None:
+    state = await store.load_state(RUN_ID)
+    assert state is not None
+    state.fix_dag = plan.model_dump(mode="json")
+    await store.save_state(state)
+
+
+async def test_plan_endpoint_returns_the_stored_dag(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_plan(store, _plan())
+
+    response = await http.get(f"/api/runs/{RUN_ID}/plan")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["execution_order"] == ["cve-pyjwt", "fix-auth", "fix-routes"]
+    assert body["conflict_batches"] == [["fix-auth", "fix-routes"]]
+    # The per-edge reason and per-node files are the fields the agent
+    # projection never publishes; the stage is unbuildable without them.
+    assert body["dependency_edges"][0]["reason"].startswith("dependency upgrade")
+    assert body["nodes"][1]["depends_on"] == ["cve-pyjwt"]
+    assert body["nodes"][2]["files"] == ["vulnapi/auth.py", "vulnapi/routes.py"]
+
+
+async def test_plan_endpoint_404s_before_a6_completes(client):
+    http, store = client
+    await _seed_run(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/plan")
+    assert response.status_code == 404
+    assert "repair plan" in response.json()["detail"].lower()
+
+
+async def test_plan_endpoint_404s_for_an_unknown_run(client):
+    http, _store = client
+    response = await http.get(f"/api/runs/{MISSING_RUN_ID}/plan")
+    assert response.status_code == 404
+
+
+async def test_plan_endpoint_does_not_recompute(client):
+    """A plan whose order contradicts its edges comes back unchanged — proof
+    the route reads A6's output rather than re-deriving one."""
+    http, store = client
+    await _seed_run(store)
+    plan = _plan()
+    plan.execution_order = ["fix-auth", "cve-pyjwt", "fix-routes"]
+    await _seed_plan(store, plan)
+
+    body = (await http.get(f"/api/runs/{RUN_ID}/plan")).json()
+    assert body["execution_order"] == ["fix-auth", "cve-pyjwt", "fix-routes"]
+
+
+# -- Phase 6: patch bundle endpoint ----------------------------------------
+
+
+def _bundle() -> PatchBundle:
+    return PatchBundle(
+        issue_id="fix-auth",
+        patches=[
+            PatchCandidate(
+                file="vulnapi/auth.py",
+                original="def validate_token(t):\n    return decode(t)\n",
+                patched="def validate_token(t):\n    claims = decode(t)\n    check_exp(claims)\n    return claims\n",
+                method="ast_validated_write",
+            )
+        ],
+        contracts=[
+            BehavioralContract(
+                assertion="a token whose exp is in the past is rejected",
+                location="vulnapi/auth.py::validate_token",
+            )
+        ],
+        style_exemplar_commit="deadbeef",
+        diff_text="--- a/vulnapi/auth.py\n+++ b/vulnapi/auth.py\n-    return decode(t)\n+    claims = decode(t)\n",
+    )
+
+
+async def _seed_bundle(store: RedisStore, bundle: PatchBundle) -> None:
+    state = await store.load_state(RUN_ID)
+    assert state is not None
+    state.patch_bundle = bundle.model_dump(mode="json")
+    await store.save_state(state)
+
+
+async def test_patch_endpoint_returns_the_stored_bundle(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_bundle(store, _bundle())
+
+    response = await http.get(f"/api/runs/{RUN_ID}/patch")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["issue_id"] == "fix-auth"
+    assert body["style_exemplar_commit"] == "deadbeef"
+    # Original and patched source are the fields the agent projection never
+    # publishes — it emits eight preview lines — so the diff view is
+    # unbuildable without them.
+    assert body["patches"][0]["original"].startswith("def validate_token")
+    assert "check_exp" in body["patches"][0]["patched"]
+    assert body["contracts"][0]["location"] == "vulnapi/auth.py::validate_token"
+    assert body["diff_text"].startswith("--- a/vulnapi/auth.py")
+
+
+async def test_patch_endpoint_passes_the_write_method_through(client):
+    """The integrity badge may claim only what A7 stamped, so `method` has to
+    survive the route unaltered — including a value the UI has no badge for."""
+    http, store = client
+    await _seed_run(store)
+    bundle = _bundle()
+    bundle.patches[0].method = "libcst"
+    await _seed_bundle(store, bundle)
+
+    body = (await http.get(f"/api/runs/{RUN_ID}/patch")).json()
+    assert body["patches"][0]["method"] == "libcst"
+
+
+async def test_patch_endpoint_404s_before_a7_completes(client):
+    http, store = client
+    await _seed_run(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/patch")
+    assert response.status_code == 404
+    assert "patch bundle" in response.json()["detail"].lower()
+
+
+async def test_patch_endpoint_distinguishes_no_bundle_from_an_empty_one(client):
+    """A7 completing with zero patches is a result, not an absence: every plan
+    failed the integrity check. That has to reach the client as a 200 with an
+    empty list, or the stage reports "not generated yet" for a run that did."""
+    http, store = client
+    await _seed_run(store)
+    await _seed_bundle(store, PatchBundle(issue_id="fix-auth"))
+
+    response = await http.get(f"/api/runs/{RUN_ID}/patch")
+    assert response.status_code == 200
+    assert response.json()["patches"] == []
+
+
+async def test_patch_endpoint_404s_for_an_unknown_run(client):
+    http, _store = client
+    response = await http.get(f"/api/runs/{MISSING_RUN_ID}/patch")
+    assert response.status_code == 404
+
+
 # -- G4: repository metadata -----------------------------------------------
 
 
@@ -295,7 +465,13 @@ async def test_agent_timeline_excludes_lifecycle_frames(client):
 
 @pytest.mark.parametrize(
     "path",
-    ["/api/runs/{run_id}/context", "/api/runs/{run_id}/stages", "/api/runs/{run_id}/agents"],
+    [
+        "/api/runs/{run_id}/context",
+        "/api/runs/{run_id}/plan",
+        "/api/runs/{run_id}/patch",
+        "/api/runs/{run_id}/stages",
+        "/api/runs/{run_id}/agents",
+    ],
 )
 async def test_new_routes_are_registered_in_openapi(client, path):
     http, _store = client

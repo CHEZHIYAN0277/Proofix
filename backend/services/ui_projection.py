@@ -17,6 +17,7 @@ from typing import Any, NamedTuple
 
 from backend.agents.a10_routing import SCORE_THRESHOLD
 from backend.state.events import AgentStatusEvent
+from backend.services.measurement import measured_mean
 from backend.state.schema import RunStateModel
 
 # ---------------------------------------------------------------- registry --
@@ -314,9 +315,40 @@ def _pct(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _tone(value: float) -> str:
+def _score(value: Any) -> float | None:
+    """A score, or `None` when it was never measured.
+
+    The nullable counterpart to `_pct`. `_pct` substitutes `0.0` for anything
+    unparseable, which is right for a value that is genuinely zero and wrong for
+    one that does not exist — a security re-scan that never ran was reported as
+    scoring 0%, and that fabricated zero was averaged into the trust score.
+
+    Use this for anything the pipeline may not have measured. `_pct` remains for
+    values already coerced upstream (confidences, counts).
+    """
+    if value is None:
+        return None
+    try:
+        return round(float(value), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _score_text(value: Any) -> str:
+    """A score for display, never inventing a number."""
+    scored = _score(value)
+    return "Not measured" if scored is None else f"{scored:g}"
+
+
+def _tone(value: float | None) -> str:
     # "ok" is tied to the gate A10 actually applies, so a green ring never
     # disagrees with the router's own verdict on the same number.
+    #
+    # An unmeasured axis is deliberately neither "ok" nor "bad": it has not
+    # scored well and it has not scored badly. Painting it red said the run
+    # failed a check that never ran.
+    if value is None:
+        return "unknown"
     if value >= SCORE_THRESHOLD:
         return "ok"
     if value >= SCORE_THRESHOLD * 0.75:
@@ -359,6 +391,11 @@ def run_decision(state: RunStateModel) -> tuple[str, str]:
     """Return (decision, human label) in the UI's vocabulary."""
     if state.status == "failed":
         return "failed", "Failed"
+    # A blocked run is not a failure and not a routing outcome. It never
+    # produced a patch, so there is no PR type to read — reporting "Pending"
+    # here (the old fallthrough) implied work still in progress.
+    if state.status == "blocked":
+        return "blocked", "Environment not prepared"
     decision = (state.pr_decision or {}).get("pr_type")
     if decision == "auto_mergeable":
         return "merge", "Auto Merge"
@@ -372,6 +409,8 @@ def run_decision(state: RunStateModel) -> tuple[str, str]:
 def sidebar_status(state: RunStateModel) -> str:
     if state.status == "failed":
         return "failed"
+    if state.status == "blocked":
+        return "blocked"
     if state.status in ("pending", "running", "validation_retry"):
         return "running"
     decision, _label = run_decision(state)
@@ -417,7 +456,9 @@ def _event_index(events: list[AgentStatusEvent]) -> dict[str, list[AgentStatusEv
     return grouped
 
 
-RUN_TERMINAL_STATES = ("completed", "failed")
+# `blocked` is terminal: the run is over and nothing further will be emitted.
+# Omitting it left downstream stages rendering as still-running forever.
+RUN_TERMINAL_STATES = ("completed", "failed", "blocked")
 
 
 def _agent_status(events_for_agent: list[AgentStatusEvent], state: RunStateModel, card: str) -> str:
@@ -708,7 +749,7 @@ def _metrics_for(
         mutation = state.mutation_result or {}
         score = mutation.get("mutation_score")
         return [
-            metric("Correctness", f"{_pct(mutation.get('correctness_score'))}"),
+            metric("Correctness", _score_text(mutation.get("correctness_score"))),
             metric("Mutation Score", "—" if score is None else f"{float(score):.2f}"),
             metric("New Failures", len(mutation.get("new_failures") or [])),
             metric("Duration", duration),
@@ -716,7 +757,7 @@ def _metrics_for(
     if card == "security":
         security = state.security_result or {}
         return [
-            metric("Security Score", f"{_pct(security.get('security_score'))}"),
+            metric("Security Score", _score_text(security.get("security_score"))),
             metric("New Findings", len(security.get("new_findings") or [])),
             metric("Rejected", "yes" if security.get("rejected") else "no"),
             metric("Duration", duration),
@@ -725,9 +766,9 @@ def _metrics_for(
         axis = (state.pr_decision or {}).get("axis_scores") or {}
         _decision, label = run_decision(state)
         return [
-            metric("Correctness", _pct(axis.get("correctness"))),
-            metric("Security", _pct(axis.get("security"))),
-            metric("Fidelity", _pct(axis.get("fidelity"))),
+            metric("Correctness", _score_text(axis.get("correctness"))),
+            metric("Security", _score_text(axis.get("security"))),
+            metric("Fidelity", _score_text(axis.get("fidelity"))),
             metric("Decision", label),
         ]
     return [metric("Duration", duration)]
@@ -949,7 +990,7 @@ def _evidence_for(
             "Security Delta",
             "Post-patch scan compared against the pre-patch baseline.",
             [
-                field("Security score", _pct(security.get("security_score")), True),
+                field("Security score", _score_text(security.get("security_score")), True),
                 field("New findings", len(new_findings), True),
                 field("Verdict", "rejected" if security.get("rejected") else "accepted", True),
                 field("Top finding", str(new_findings[0].get("message"))[:100] if new_findings else "—"),
@@ -967,7 +1008,7 @@ def _evidence_for(
             "Trust axes plus the proof bundle shipped with the PR.",
             [
                 field("Decision", label, True),
-                field("Scope risk", _pct(axis.get("scope_risk")), True),
+                field("Scope risk", _score_text(axis.get("scope_risk")), True),
                 field("Proof bundle", str(proof.get("bundle_hash") or "—")[:20], True),
                 field("Review note", str(decision_data.get("review_note") or "—")[:110]),
             ],
@@ -1225,31 +1266,39 @@ def _visualization_for(card: str, state: RunStateModel) -> dict | None:
         # The literal 80s here duplicated A10's gate by coincidence rather than
         # by reference, so changing SCORE_THRESHOLD would have left the card
         # marking axes "ok" that the router had just rejected.
-        scope = _pct(axis.get("scope_risk"))
+        scope = _score(axis.get("scope_risk"))
+        # `value: null` is the honest answer for an axis nobody measured, and
+        # `ok` is only true for a measurement that actually cleared the bar —
+        # never for a substituted zero, and never for an absence.
         metrics = [
             {
-                "label": "Correctness",
-                "value": _pct(axis.get("correctness")),
-                "ok": _pct(axis.get("correctness")) >= SCORE_THRESHOLD,
-            },
-            {
-                "label": "Security",
-                "value": _pct(axis.get("security")),
-                "ok": _pct(axis.get("security")) >= SCORE_THRESHOLD,
-            },
-            {
-                "label": "Fidelity",
-                "value": _pct(axis.get("fidelity")),
-                "ok": _pct(axis.get("fidelity")) >= SCORE_THRESHOLD,
-            },
+                "label": label,
+                "value": value,
+                "ok": value is not None and value >= SCORE_THRESHOLD,
+                "measured": value is not None,
+            }
+            for label, value in [
+                ("Correctness", _score(axis.get("correctness"))),
+                ("Security", _score(axis.get("security"))),
+                ("Fidelity", _score(axis.get("fidelity"))),
+            ]
+        ]
+        metrics.append(
             {
                 # High is good on this axis — see build_run_report.
                 "label": "Scope Safety",
                 "value": scope,
-                "ok": scope >= SCORE_THRESHOLD,
-                "scopeLabel": "Contained" if scope >= SCORE_THRESHOLD else "Elevated risk",
-            },
-        ]
+                "ok": scope is not None and scope >= SCORE_THRESHOLD,
+                "measured": scope is not None,
+                "scopeLabel": (
+                    "Not measured"
+                    if scope is None
+                    else "Contained"
+                    if scope >= SCORE_THRESHOLD
+                    else "Elevated risk"
+                ),
+            }
+        )
         return {
             "kind": "merge",
             "data": {
@@ -1491,6 +1540,10 @@ def build_workspace_header(
         "retries": state.retry_count,
         "executionTime": _fmt_duration(elapsed_seconds(state, events)),
         "decisionLabel": label,
+        # The precheck's report, published verbatim. A blocked run's entire
+        # explanation lives here — without it the client knows the run stopped
+        # and not why, which is the state this sprint was meant to remove.
+        "environment": state.environment,
         **repository_identity(state, index_pointer),
     }
 
@@ -1504,17 +1557,31 @@ def _severity_label(state: RunStateModel) -> str:
     return "LOW"
 
 
-def _trust_score(state: RunStateModel) -> float:
+def _trust_score(state: RunStateModel) -> float | None:
+    """The composite trust score, or `None` when nothing was measured.
+
+    Previously this summed four axes and divided by four regardless of how many
+    had been measured, with `_pct` substituting `0.0` for the rest. A run whose
+    security re-scan was skipped was therefore penalised for it twice: the axis
+    showed 0%, and that 0 dragged the composite down by a quarter. The score
+    that gates merges was being reduced by work nobody performed.
+
+    Now the denominator is the number of real measurements. A measured zero
+    still counts — it is a result.
+    """
     axis = (state.pr_decision or {}).get("axis_scores") or {}
     if not axis:
-        return 0.0
-    values = [
-        _pct(axis.get("correctness")),
-        _pct(axis.get("security")),
-        _pct(axis.get("fidelity")),
-        _pct(axis.get("scope_risk")),
-    ]
-    return round(sum(values) / len(values) / 100, 2)
+        return None
+
+    mean = measured_mean(
+        [
+            _score(axis.get("correctness")),
+            _score(axis.get("security")),
+            _score(axis.get("fidelity")),
+            _score(axis.get("scope_risk")),
+        ]
+    )
+    return None if mean is None else round(mean / 100, 2)
 
 
 def build_executive_summary(state: RunStateModel, events: list[AgentStatusEvent]) -> dict:
@@ -1534,7 +1601,12 @@ def build_executive_summary(state: RunStateModel, events: list[AgentStatusEvent]
         "bug": bug[:48],
         "severity": _severity_label(state),
         "rootCause": str(root.get("root_cause") or root.get("summary") or "Pending analysis")[:80],
-        "confidence": f"{_pct((root.get('confidence') or 0) * 100)}%",
+        # A4 publishes a confidence; a run where A4 never ran has none. The
+        # `or 0` turned that absence into "0.0%", which reads as a measured
+        # no-confidence verdict rather than an investigation that never happened.
+        "confidence": (
+            "not measured" if root.get("confidence") is None else f"{_pct(root['confidence'] * 100)}%"
+        ),
         "filesAffected": len(blast.get("scope") or []),
         "attempts": total_attempts(state),
         # No 0.85 mutation gate exists anywhere in the pipeline — that figure was
@@ -1542,12 +1614,33 @@ def build_executive_summary(state: RunStateModel, events: list[AgentStatusEvent]
         # score against SCORE_THRESHOLD, so show the measurement unqualified.
         "mutationScore": ("not scored" if score is None else f"{float(score):.2f}"),
         "runtime": _fmt_duration(elapsed_seconds(state, events)),
-        "trustScore": f"{_trust_score(state):.2f}",
+        # `_trust_score` is now nullable — formatting it unconditionally would
+        # raise on a run where no axis was measured.
+        "trustScore": (lambda t: "not measured" if t is None else f"{t:.2f}")(_trust_score(state)),
         "decision": decision,
-        "decisionReason": str(
-            (state.pr_decision or {}).get("review_note") or "All trust gates satisfied."
-        )[:160],
+        "decisionReason": _summary_decision_reason(state, decision),
     }
+
+
+def _summary_decision_reason(state: RunStateModel, decision: str) -> str:
+    """Why the run ended where it did.
+
+    "All trust gates satisfied" was the default for *any* run with no review
+    note — including a blocked run that never reached a trust gate, and a draft
+    PR that was drafted precisely because a gate was not satisfied. It is only
+    true of an auto-mergeable run, so only an auto-mergeable run may say it.
+    """
+    note = str((state.pr_decision or {}).get("review_note") or "").strip()
+    if note:
+        return note[:160]
+    # `run_decision` speaks the UI's vocabulary, where `auto_mergeable` is
+    # "merge". Testing for the router's word here would have meant the sentence
+    # never appeared on the one run entitled to it.
+    if decision == "merge":
+        return "All trust gates satisfied."
+    if decision == "blocked":
+        return "The repository's environment was not prepared, so the pipeline stopped before validation."
+    return "No review note was recorded for this decision."
 
 
 def _pytest_unavailable(mutation: dict) -> bool:
@@ -1555,7 +1648,16 @@ def _pytest_unavailable(mutation: dict) -> bool:
 
     This is the difference between "the patch is wrong" and "we could not tell",
     and the report must not present the second as the first.
+
+    A8 now records this as a fact (`pytest_available`), decided where pytest is
+    actually invoked. The string search below is retained only for runs stored
+    before that field existed — deciding it here was always a guess about a
+    subprocess this layer never saw, and it left the projection printing an
+    explanation that contradicted the score sitting next to it.
     """
+    if mutation.get("pytest_available") is False:
+        return True
+
     brief = mutation.get("failure_brief") or {}
     failure = brief.get("validation_failure") or {}
     blob = " ".join(
@@ -1694,16 +1796,24 @@ def build_run_report(state: RunStateModel, events: list[AgentStatusEvent]) -> di
             "reason": _rejection_reason(state, mutation),
         },
         "decisionReason": _decision_reason(state),
+        # `value: null` where the pipeline measured nothing, and tone
+        # `"unknown"` alongside it. An axis that never ran is neither passing
+        # nor failing, and colouring it red accused the run of failing a check
+        # nobody performed.
+        #
+        # Scope Safety note: `compute_scope_risk` returns 90 when nothing needs
+        # human review and falls toward 20 as review items pile up, so high is
+        # good — the same direction as the other three axes, and the same
+        # direction A10 gates on. Labelling it "Scope Risk" inverted that: 20%
+        # read as low risk when it actually meant the scope was barely contained.
         "trust": [
-            {"label": "Correctness", "value": _pct(axis.get("correctness")), "tone": _tone(_pct(axis.get("correctness")))},
-            {"label": "Security", "value": _pct(axis.get("security")), "tone": _tone(_pct(axis.get("security")))},
-            {"label": "Fidelity", "value": _pct(axis.get("fidelity")), "tone": _tone(_pct(axis.get("fidelity")))},
-            # `compute_scope_risk` returns 90 when nothing needs human review and
-            # falls toward 20 as review items pile up, so high is good — the same
-            # direction as the other three axes, and the same direction A10 gates
-            # on. Labelling it "Scope Risk" inverted that: 20% read as low risk
-            # when it actually meant the scope was barely contained.
-            {"label": "Scope Safety", "value": _pct(axis.get("scope_risk")), "tone": _tone(_pct(axis.get("scope_risk")))},
+            {"label": label, "value": value, "tone": _tone(value)}
+            for label, value in [
+                ("Correctness", _score(axis.get("correctness"))),
+                ("Security", _score(axis.get("security"))),
+                ("Fidelity", _score(axis.get("fidelity"))),
+                ("Scope Safety", _score(axis.get("scope_risk"))),
+            ]
         ],
         "files": [p.get("file") for p in (state.patch_bundle or {}).get("patches", []) if p.get("file")],
         "evidence": evidence,
