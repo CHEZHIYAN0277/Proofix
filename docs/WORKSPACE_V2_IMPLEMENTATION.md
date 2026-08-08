@@ -779,7 +779,7 @@ G9 and G4 degrade gracefully to `Unavailable` — they gate *completeness*, not 
 | `framer-motion` | 0 | all motion, behind `<Reveal>` |
 | `@xyflow/react` | 3 | React Flow v12; client-only under SSR |
 | `d3-hierarchy`, `d3-shape`, `d3-scale`, `d3-force` | 2/4/9 | submodules only |
-| `shiki` | 6 | read-only diff highlighting |
+| `shiki` | 6 | read-only diff highlighting — installed at v3 (current major); imported via `shiki/core` with explicit grammars, never the bundled entry |
 | `json-schema-to-typescript` (dev) | Track B | backend type generation |
 
 `cmdk`, `recharts`, `lucide-react`, Radix, `@tanstack/react-query` already installed.
@@ -858,10 +858,31 @@ the performance budget, and adds **zero** hardcoded values.
 - [ ] Execution order, dependency edges, conflict batches, planning confidence
 
 ### Phase 6 · Patch Generation
-- [ ] `<DiffView>` (Shiki, lazy, client-only)
-- [ ] Streaming reveal paced by frames — never a synthetic typewriter
-- [ ] Acceptance criteria from `ContextPackage.acceptance_criteria`
-- [ ] Contracts, integrity badges (only those A7 actually stamped), patch bundle
+- [x] `<DiffView>` (Shiki, lazy, client-only)
+- [x] Streaming reveal paced by frames — never a synthetic typewriter
+- [x] Acceptance criteria from `ContextPackage.acceptance_criteria`
+- [x] Contracts, integrity badges (only those A7 actually stamped), patch bundle
+
+**Backend unblock this phase needed** — `GET /api/runs/{run_id}/patch`, the same
+contract as `/context` and `/plan`: `state.patch_bundle` verbatim, 404 when A7 has not
+completed. The agent projection publishes an eight-line diff preview and two filenames,
+which is not a diff. Three outcomes stay distinct at the route: 404 (never completed),
+200 with `patches: []` (completed, every plan rejected), 200 with patches.
+
+**Shiki is loaded through `shiki/core`, not the bundled entry.** The bundled entry
+registers every grammar it ships — 371 chunks and 11MB of build output for a product
+that patches Python. The core entry takes only the grammars listed in `DiffView`'s
+`GRAMMARS` map, with the JavaScript regex engine rather than the Oniguruma WASM binary:
+83 chunks, 2.4MB, and the highlighter (~48KB gzip) is fetched only when a diff renders.
+Initial JS 91KB gzip; the patch stage chunk 4.5KB gzip.
+
+**The diff is parsed, never recomputed.** Both sides of every file are in the bundle, so
+the client could diff them itself — and a client-side diff could disagree with the one
+A10's MCI check read and the proof bundle recorded. `diff.ts` parses A7's `diff_text`.
+Its one piece of repair work is documented there: `difflib.unified_diff` emits lines
+exactly as it finds them, so a file with no trailing newline puts two diff entries on one
+physical line (`-x = 1+x = 2`), and the split is resolved by matching against the stored
+source rather than by guessing.
 
 ### Phase 7 · Validation
 - [ ] Pipeline rail: Target → Regression → Mutation → Security → Decision
