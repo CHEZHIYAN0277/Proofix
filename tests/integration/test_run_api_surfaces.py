@@ -93,19 +93,27 @@ async def test_agents_endpoint_defaults_to_the_v1_surface(client):
     assert response.status_code == 200
 
     agent_ids = [entry["agentId"] for entry in response.json()]
-    # A5.5 is the one agent V1 still has no renderer for; handing it over would
-    # add a card that never animates. A0.5 gained one in Phase 2.
-    assert "A5.5" not in agent_ids
+    # The default surface publishes the whole pipeline. A0.5 gained a card in
+    # Phase 2 and A5.5 in Phase 4, which closed the split.
     assert "A0.5" in agent_ids
+    assert "A5.5" in agent_ids
     assert "A1" in agent_ids
 
 
-async def test_agents_endpoint_publishes_the_full_pipeline_on_v2(client):
+async def test_the_surface_parameter_no_longer_changes_the_response(client):
+    """Still accepted, still validated, no longer selective.
+
+    Removing it would break a client that sends it; leaving it *doing*
+    something it no longer does would be worse.
+    """
     http, store = client
     await _seed_run(store)
 
+    default = await http.get(f"/api/runs/{RUN_ID}/agents")
+    v1 = await http.get(f"/api/runs/{RUN_ID}/agents", params={"surface": "v1"})
     response = await http.get(f"/api/runs/{RUN_ID}/agents", params={"surface": "v2"})
     assert response.status_code == 200
+    assert default.json() == v1.json() == response.json()
 
     entries = response.json()
     agent_ids = [e["agentId"] for e in entries]

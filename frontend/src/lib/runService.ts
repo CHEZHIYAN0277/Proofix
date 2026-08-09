@@ -5,7 +5,7 @@
  * backend, set VITE_DATA_SOURCE=api in .env. No UI component should ever
  * need to change.
  */
-import { DATA_SOURCE, ENDPOINTS, apiFetch } from "./api";
+import { DATA_SOURCE, ENDPOINTS, apiFetch, isStatus } from "./api";
 import {
   createMockEventSource,
   type EventSourceFactory,
@@ -23,6 +23,7 @@ import {
   type ExecutiveSummaryModel,
   type RepairAttemptsModel,
   type RepoMetadata,
+  type ContextPackageModel,
 } from "@/mocks";
 import type { SidebarRepo } from "@/components/proofix/Sidebar";
 import type { AgentEntry } from "@/components/proofix/data";
@@ -108,6 +109,30 @@ export async function getRepairAttempts(runId: string): Promise<RepairAttemptsMo
     return apiFetch<RepairAttemptsModel>(ENDPOINTS.retryAttempts(runId));
   }
   return MOCK_REPAIR_ATTEMPTS;
+}
+
+/**
+ * A5.5's context package, or `null` when the stage has not produced one.
+ *
+ * The endpoint 404s until A5.5 completes and resolves a target, and that 404 is
+ * an answer, not a failure — "no package yet", which the caller renders as
+ * absence. Every other status still rejects, so a real outage is still an
+ * outage. Collapsing the two would put "Could not load. Retry" on screen for a
+ * stage that simply had not run, which is the same class of lie as rendering a
+ * failed fetch as an empty one (B-F01).
+ *
+ * Mock mode has no fixture: inventing a ranking and a redaction list would put
+ * fabricated privacy evidence on screen, which is the one thing this card
+ * exists to make trustworthy.
+ */
+export async function getRunContext(runId: string): Promise<ContextPackageModel | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<ContextPackageModel>(ENDPOINTS.runContext(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
 }
 
 /**

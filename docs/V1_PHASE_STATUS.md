@@ -12,7 +12,7 @@ Audit date: 2026-08-08. Legend: ✅ COMPLETE · 🟡 PARTIAL · 🔴 MISSING · 
 | **1** | Run lifecycle & execution experience | 🟡 PARTIAL | terminal states ✅; error/retry ✅; reconnect ✅; **skeletons 🔴** (B-F08) | lifecycle events ✅; severity absence ✅ | mapping ✅, rendering ✅ (17 component tests) | none |
 | **2** | Repository Intelligence surface | ✅ COMPLETE | A0.5 card + visualization ✅; header identity strip ✅ | A0.5 on the `v1` surface ✅ | 19 card tests + 3 identity tests | none |
 | **3** | Investigation / Evidence / Blast Radius | ✅ COMPLETE | A3.5/A4/A5 cards + visualizations | agents + citation verification ✅ | ✅ | none |
-| **4** | Context Engineering / Repair Planning | 🔴 MISSING (frontend) | **no context card; planner shows summary only** | A5.5 + A6 + `/context` + `/plan` ✅ | backend ✅ | none |
+| **4** | Context Engineering / Repair Planning | ✅ COMPLETE | A5.5 card + viz ✅; context panel (ranking, redactions) ✅; planner shows edge reasons ✅ | A5.5 on the `v1` surface ✅ | 15 card tests + 6 panel tests | none |
 | **5** | Patch Generation | 🟡 PARTIAL | filenames only, **no diff view** | A7 + `/patch` ✅ but B-B03/06/07/08 open | integrity ✅, rollback 🔴 | none |
 | **6** | Validation & scoring correctness | ✅ COMPLETE | mutation card ✅; null axes render "Not measured" | B-B01 ✅ (`measurement.py`); B-B02 ✅ (line-free finding key); B-B16 ✅ (absent scanner ≠ 100) | 15 A9 tests + `measured_mean` arithmetic + projection | none |
 | **7** | Final decision & report | 🟡 PARTIAL | report renders, nullable-aware ✅ | routing ✅; B-B09/10/11 open | routing ✅ | depends on 6 |
@@ -36,6 +36,43 @@ WebSocket reconnect that never infers completion from a close (B-F03), the
 `severity: "not measured"` (B-F09). What remains of B-F08 is cosmetic: there are
 still no per-panel loading skeletons. The honesty defect it was filed for — a
 failed fetch rendering as an empty one — is fixed; the polish is not.
+
+**Phase 4 ✅** (closed 2026-08-09) — A5.5 is the pipeline's **privacy
+boundary**: the only point where secrets are masked before an LLM call. It ran
+on every run and published to the `v2` surface alone, so the evidence that
+nothing secret reached the model had no consumer at all.
+
+Split by cost, deliberately:
+
+* The **card** summarises from the agent's event payload — target, token
+  reduction, guard status, counts — so the polled `/agents` response stays
+  small. `token_reduction` is `null` rather than `0.0` when unmeasured, and
+  `privacy_guard_status: "failed"` is never rounded to `clean`: it means the
+  guard itself errored, so nothing may be assumed about what got through.
+* The **context panel** reads `/runs/{id}/context` once and renders the full
+  ranking with its per-signal breakdown, plus the redaction ledger. A ranking
+  you cannot inspect is an oracle, and A5.5's whole design is that its
+  selection is deterministic and reviewable.
+
+**A 404 is an answer, not a failure.** `/context` 404s until A5.5 publishes.
+`apiFetch` now throws a typed `ApiError` carrying the status, and
+`getRunContext` maps 404 to `null` while every other status still rejects. The
+panel renders three distinct states — error (retryable), pending (404), loaded
+— because "Could not load. Retry" over a stage that had not run is the same
+class of lie as a failed fetch rendering as an empty one (B-F01).
+
+The package is fetched write-once: A5.5 runs a single time per run, so once
+read the poll skips the request rather than growing by a round trip for an
+answer that cannot change.
+
+A6's planner card now publishes the *reason* recorded for each dependency edge
+and names the conflicting fixes. Only counts were published before, and a
+number cannot be disagreed with.
+
+**`surface` is now inert.** Both values return the same cards. The parameter is
+still accepted and validated because it is in the published schema, but
+`_V2_ONLY` is deleted rather than left as an empty category, and a registry test
+asserts the two surfaces stay identical so the split cannot quietly reopen.
 
 **Phase 2 ✅** (closed 2026-08-09) — A0.5 moved from the `v2`-only surface onto
 the product surface, so the layer whose entire purpose is reusing work across
@@ -95,12 +132,12 @@ What closed the phase:
 
 ## Test suites
 
-- **Backend** — 1995 pass, 4 skipped. One pre-existing environmental failure:
+- **Backend** — 2011 pass, 4 skipped. One pre-existing environmental failure:
   `test_reproduction_stability_gate` asserts `get_head_sha(vulnapi)` is
   non-empty, but the `vulnapi/` fixture has no `.git`, so it returns `""`. The
   test's skip guard only checks that the directory exists, not that it is a git
   repo, so it fails rather than skipping. Not caused by any phase work.
-- **Frontend** — 40 pass across 5 files. Component tests run on jsdom, opted
+- **Frontend** — 46 pass across 5 files. Component tests run on jsdom, opted
   into per file with a `// @vitest-environment jsdom` docblock; shared shims
   live in `src/test/setup.ts`. Test config is `vitest.config.ts`, separate from
   `vite.config.ts` because the TanStack Start plugin must not run under Vitest

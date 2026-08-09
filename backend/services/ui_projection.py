@@ -88,21 +88,21 @@ STAGE_BY_ID = {stage.id: stage for stage in STAGE_REGISTRY}
 # NOTE ON THE NAME: the frontend once called "Workspace V2" was cancelled and
 # deleted. These two values are an **API contract** — the `surface` query
 # parameter on `/agents` and `/stages` — and nothing here asks anyone to build
-# a second frontend. Read them as:
+# a second frontend.
 #
-#   "v1" — the product surface: the agent cards the workspace renders today
-#          (`frontend/src/components/proofix`).
-#   "v2" — the full-pipeline surface: every agent the graph executes.
+# **They now select the same thing.** The split existed because the product
+# surface had no cards for A0.5 and A5.5, so publishing them would have added
+# cards that never rendered. A0.5 gained one in Phase 2 and A5.5 in Phase 4, and
+# with that the distinction is gone: every agent the graph executes has a card.
 #
-# The two now differ by exactly one entry: A5.5 (`context`), which runs but has
-# no product card yet — Phase 4. A0.5 moved onto the product surface in Phase 2,
-# so the layer whose entire purpose is reusing work across runs is no longer
-# invisible to the person paying for it. When A5.5 gains a card these collapse
-# to one value and the `surface` parameter can be retired.
+# The parameter is kept, accepted and validated, because it is published in the
+# OpenAPI schema and a client may still send it — but it no longer changes the
+# response, and `_V2_ONLY` is deleted rather than left as an empty category
+# waiting to be repopulated. A registry test asserts the two surfaces stay
+# identical, so a future entry cannot quietly resurrect the split.
 SURFACE_V1 = "v1"
 SURFACE_V2 = "v2"
 _BOTH = frozenset({SURFACE_V1, SURFACE_V2})
-_V2_ONLY = frozenset({SURFACE_V2})
 
 
 class AgentDefinition(NamedTuple):
@@ -203,7 +203,7 @@ AGENT_REGISTRY: list[AgentDefinition] = [
         "Reduce the repository to the minimal context a repair needs.",
         "Context Package",
         "context",
-        _V2_ONLY,
+        _BOTH,
     ),
     AgentDefinition(
         "planner",
@@ -1055,14 +1055,32 @@ def _evidence_for(
 
     if card == "planner":
         dag = state.fix_dag or {}
+        edges = dag.get("dependency_edges") or []
+        batches = dag.get("conflict_batches") or []
+        # A6 records *why* it drew each edge. Reporting only the count made the
+        # ordering unreviewable — a number cannot be disagreed with, and the
+        # reasons were sitting in state with no consumer but `/plan`.
+        why = [
+            f"{e.get('from_issue')} → {e.get('to_issue')}: {e.get('reason')}"
+            for e in edges[:4]
+            if e.get("reason")
+        ]
         return payload(
             "Repair DAG",
             "Dependency-ordered repair sequence.",
             [
                 field("Steps", len(dag.get("execution_order") or []), True),
-                field("Dependency edges", len(dag.get("dependency_edges") or []), True),
-                field("Conflict batches", len(dag.get("conflict_batches") or []), True),
+                field("Dependency edges", len(edges), True),
+                field("Conflict batches", len(batches), True),
                 field("First step", (dag.get("execution_order") or ["—"])[0], True),
+                # Conflict batches are fixes that touch the same file and cannot
+                # be applied independently — the reason a plan is a DAG rather
+                # than a list. Named, not counted.
+                field(
+                    "Conflicting fixes",
+                    "; ".join(", ".join(b) for b in batches[:2]) if batches else "none",
+                ),
+                *([field("Ordering", " · ".join(why))] if why else []),
             ],
             list(dag.get("execution_order") or [])[:6],
         )
@@ -1180,6 +1198,56 @@ def _visualization_for(
     emitted event, which is why this takes the agent's events too.
     """
     events_for_agent = events_for_agent or []
+
+    if card == "context":
+        published = _latest_payload(events_for_agent, "context_engineering")
+        if not published:
+            return None
+        if published.get("skipped"):
+            # A5.5 ran, resolved no target, and handed A7 nothing. There is no
+            # package to draw, and drawing an empty one would claim a reduction
+            # that never happened.
+            return {
+                "kind": "context",
+                "data": {
+                    "skipped": str(published.get("skipped")),
+                    "targetFile": "",
+                    "targetFunction": None,
+                    "originalTokens": 0,
+                    "reducedTokens": 0,
+                    "tokenReduction": None,
+                    "contextFiles": 0,
+                    "contextFunctions": 0,
+                    "filesRanked": 0,
+                    "privacyGuardStatus": published.get("privacy_guard_status") or "clean",
+                    "redactions": 0,
+                    "degraded": False,
+                },
+            }
+        reduction = published.get("token_reduction")
+        return {
+            "kind": "context",
+            "data": {
+                "skipped": None,
+                "targetFile": published.get("target_file") or "",
+                "targetFunction": published.get("target_function"),
+                "originalTokens": published.get("original_tokens", 0),
+                "reducedTokens": published.get("reduced_tokens", 0),
+                # Null rather than 0: a package that measured no reduction and
+                # one that never measured are different claims.
+                "tokenReduction": float(reduction) if reduction is not None else None,
+                "contextFiles": published.get("context_files", 0),
+                "contextFunctions": published.get("context_functions", 0),
+                "filesRanked": published.get("files_ranked", 0),
+                # The privacy boundary. `masked` means secrets were found and
+                # replaced before the prompt left the process; `failed` means the
+                # guard itself errored and nothing may be assumed about what got
+                # through. Neither is "clean", and the UI must not round them to it.
+                "privacyGuardStatus": published.get("privacy_guard_status") or "clean",
+                "redactions": published.get("privacy_redactions", 0),
+                "degraded": bool(published.get("degraded")),
+            },
+        }
 
     if card == "intelligence":
         published = _latest_payload(events_for_agent, "repository_intelligence")

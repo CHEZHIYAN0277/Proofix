@@ -939,8 +939,10 @@ Measured against the phase-0 baseline, not asserted:
 14. 🔴 Add A7 rollback so a partial patch set cannot reach A8.
 
 **P2 — Context Engineering** — ✅ shipped. A5.5 executes in the graph
-(`engineer_context`) and publishes to `GET /api/runs/{id}/context`. It has no V1
-card yet; that is Phase 4 of the V1 plan.
+(`engineer_context`), publishes to `GET /api/runs/{id}/context`, and has a V1
+card with a context panel rendering the ranking and the redaction ledger
+(Phase 4). The privacy guard's status is on screen, which was the point: it is
+the only evidence that secrets did not reach the LLM.
 
 **P3 — scale**
 15. 🔴 Redis-backed broadcaster and checkpointer; remove single-process assumptions.

@@ -4,6 +4,7 @@ import type { LiveAgent } from "./useExecutionRun";
 import type {
   AgentVisualizationPayload,
   BlastPayload,
+  ContextPayload,
   DepsPayload,
   IntelligencePayload,
   MergePayload,
@@ -39,6 +40,8 @@ export function AgentVisualization({ entry }: { entry: LiveAgent }) {
   switch (payload.kind) {
     case "intelligence":
       return <IntelligenceViz data={payload.data} progress={progress} done={done} />;
+    case "context":
+      return <ContextViz data={payload.data} progress={progress} done={done} />;
     case "repo-intel":
       return <RepoIntelViz data={payload.data} progress={progress} done={done} />;
     case "deps":
@@ -101,6 +104,132 @@ function useCountUp(value: number, active: boolean, duration = 700) {
     return () => cancelAnimationFrame(raf);
   }, [value, active, duration]);
   return n;
+}
+
+/* ============================================================
+ * A5.5 — Context Engineering
+ *
+ * Two claims, and the scene exists to make both checkable: the repository was
+ * reduced to this much, and nothing secret left the process. The second is why
+ * this card matters more than its size suggests — the privacy guard is the only
+ * point in the pipeline where secrets are masked before an LLM call, and its
+ * status is the evidence.
+ * ============================================================ */
+function ContextViz({
+  data,
+  progress,
+  done,
+}: {
+  data: ContextPayload;
+  progress: number;
+  done: boolean;
+}) {
+  const functions = useCountUp(data.contextFunctions, done);
+  const files = useCountUp(data.contextFiles, done);
+  const ranked = useCountUp(data.filesRanked, done);
+
+  if (data.skipped) {
+    return (
+      <Frame label="Context Package">
+        <div className="text-[11px] text-ink-soft">
+          No repair target resolved — the patch generator kept its own context path. Nothing was
+          reduced and nothing was scanned for secrets.
+        </div>
+      </Frame>
+    );
+  }
+
+  // `failed` is not a worse `masked`; it means the guard errored and nothing
+  // may be assumed about what reached the model. It gets the alarming tone.
+  const guard = {
+    clean: {
+      tone: "border-status-completed/30 bg-status-completed-bg text-status-completed",
+      icon: <ShieldCheck className="h-3 w-3" />,
+      text: "No secrets detected in the context sent to the model",
+    },
+    masked: {
+      tone: "border-status-retry/30 bg-status-retry-bg text-status-retry",
+      icon: <ShieldCheck className="h-3 w-3" />,
+      text: `${data.redactions} value(s) masked before the prompt left the process`,
+    },
+    failed: {
+      tone: "border-status-failed/30 bg-status-failed-bg text-status-failed",
+      icon: <AlertTriangle className="h-3 w-3" />,
+      text: "The privacy guard errored — no assurance can be given about this context",
+    },
+  }[data.privacyGuardStatus];
+
+  // Width of the kept portion. Guarded because a zero original would divide by
+  // zero, and an unmeasured reduction must not draw a full bar.
+  const keptFraction =
+    data.originalTokens > 0 ? Math.min(1, data.reducedTokens / data.originalTokens) : 1;
+  const shown = Math.min(1, progress / 0.8);
+
+  return (
+    <Frame label="Context Package">
+      <div className="font-mono text-[11px] text-ink">
+        {data.targetFile || "—"}
+        {data.targetFunction && <span className="text-ink-soft"> :: {data.targetFunction}</span>}
+      </div>
+
+      <div className="mt-3">
+        <div className="flex items-baseline justify-between text-[10px] text-ink-soft">
+          <span>Prompt context</span>
+          <span className="font-mono">
+            {data.originalTokens.toLocaleString()} → {data.reducedTokens.toLocaleString()} tokens
+          </span>
+        </div>
+        <div className="mt-1 h-2.5 w-full overflow-hidden rounded-full bg-surface-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-all duration-700"
+            style={{ width: `${keptFraction * shown * 100}%` }}
+          />
+        </div>
+        <div className="mt-1 text-[10px] text-ink-soft">
+          {data.tokenReduction === null ? (
+            "Reduction not measured"
+          ) : (
+            <>
+              <span className="font-mono text-ink">{Math.round(data.tokenReduction * 100)}%</span>{" "}
+              of the original context was left out
+            </>
+          )}
+        </div>
+      </div>
+
+      <div
+        className={`mt-3 flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-[11px] ${guard.tone}`}
+      >
+        {guard.icon}
+        <span className="font-medium">{guard.text}</span>
+      </div>
+
+      {data.degraded && (
+        <div className="mt-2 rounded-md border border-border bg-surface-muted/60 px-2 py-1.5 text-[10px] text-ink-soft">
+          Budget exceeded — the package was trimmed to fit, so it is smaller than the ranking asked
+          for.
+        </div>
+      )}
+
+      <div className="mt-3 grid grid-cols-3 gap-1.5">
+        {[
+          { label: "Files Ranked", value: ranked },
+          { label: "Context Files", value: files },
+          { label: "Functions", value: functions },
+        ].map((m) => (
+          <div
+            key={m.label}
+            className="rounded-md border border-border bg-surface-muted/60 px-2 py-1.5"
+          >
+            <div className="text-[9px] font-medium uppercase tracking-wider text-ink-soft">
+              {m.label}
+            </div>
+            <div className="font-mono text-xs font-semibold text-ink">{m.value}</div>
+          </div>
+        ))}
+      </div>
+    </Frame>
+  );
 }
 
 /* ============================================================

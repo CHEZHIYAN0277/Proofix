@@ -27,6 +27,7 @@ import {
   getExecutiveSummary,
   getRepairAttempts,
   getRunAgents,
+  getRunContext,
   getRunReport,
   getWorkspaceHeader,
   isLive,
@@ -48,6 +49,7 @@ import {
   MOCK_REPOSITORIES,
   MOCK_RUN_REPORT,
   MOCK_WORKSPACE_HEADER,
+  type ContextPackageModel,
   type ExecutiveSummaryModel,
   type RepairAttemptsModel,
   type RunReportModel,
@@ -60,7 +62,7 @@ const POLL_INTERVAL_MS = 2500;
 const MOCK_RUN_ID = "vulnapi-live";
 
 /** The run-scoped models, each independently fetchable and independently failable. */
-export type RunModelKey = "agents" | "header" | "summary" | "report" | "attempts";
+export type RunModelKey = "agents" | "header" | "summary" | "report" | "attempts" | "context";
 
 /**
  * Load state for one model.
@@ -104,6 +106,14 @@ function setIfChanged<T>(setter: Dispatch<SetStateAction<T>>, next: T) {
 
 export interface RunData {
   agents: AgentEntry[];
+  /**
+   * A5.5's context package, or `null` when the stage has not produced one.
+   *
+   * Null is a real answer here, not a placeholder: the endpoint 404s until A5.5
+   * completes and resolves a target. `status.context.loaded` distinguishes
+   * "asked, and there is none" from "not asked yet".
+   */
+  context: ContextPackageModel | null;
   header: WorkspaceHeaderModel;
   summary: ExecutiveSummaryModel;
   report: RunReportModel;
@@ -138,6 +148,7 @@ export function useRunData(runId: string, done: boolean): RunData {
   const [attempts, setAttempts] = useState<RepairAttemptsModel>(
     isLive ? EMPTY_REPAIR_ATTEMPTS : MOCK_REPAIR_ATTEMPTS,
   );
+  const [context, setContext] = useState<ContextPackageModel | null>(null);
   const [repositories, setRepositories] = useState<SidebarRepo[]>(isLive ? [] : MOCK_REPOSITORIES);
 
   const [status, setStatus] = useState<Record<RunModelKey, ModelState>>(() => {
@@ -148,6 +159,7 @@ export function useRunData(runId: string, done: boolean): RunData {
       summary: initial,
       report: initial,
       attempts: initial,
+      context: initial,
     };
   });
 
@@ -161,6 +173,8 @@ export function useRunData(runId: string, done: boolean): RunData {
   // polls and retries update in place; swapping the whole workspace back to a
   // splash every 2.5s would be worse than showing slightly stale data.
   const firstLoadDone = useRef(false);
+  // Holds the package once fetched, so later polls can skip the request.
+  const contextRef = useRef<ContextPackageModel | null>(null);
   const [loading, setLoading] = useState(isLive);
 
   // Repository list — refreshed when a run finishes so statuses stay accurate.
@@ -182,6 +196,8 @@ export function useRunData(runId: string, done: boolean): RunData {
   // A fresh run id is a fresh load: re-arm the splash.
   useEffect(() => {
     firstLoadDone.current = false;
+    contextRef.current = null;
+    setContext(null);
   }, [runId]);
 
   // Run-scoped models. Polled while the run is in flight, fetched once after.
@@ -194,6 +210,7 @@ export function useRunData(runId: string, done: boolean): RunData {
         summary: SETTLED,
         report: SETTLED,
         attempts: SETTLED,
+        context: SETTLED,
       });
       return;
     }
@@ -210,6 +227,7 @@ export function useRunData(runId: string, done: boolean): RunData {
           summary: { ...prev.summary, loading: true },
           report: { ...prev.report, loading: true },
           attempts: { ...prev.attempts, loading: true },
+          context: { ...prev.context, loading: true },
         }));
       }
 
@@ -219,10 +237,14 @@ export function useRunData(runId: string, done: boolean): RunData {
         getExecutiveSummary(runId),
         getRepairAttempts(runId),
         getRunReport(runId),
+        // Write-once: A5.5 runs a single time per run, so once a package has
+        // been read there is nothing to re-poll. Skipping the request keeps the
+        // poll from growing by a round trip for an answer that cannot change.
+        contextRef.current ? Promise.resolve(contextRef.current) : getRunContext(runId),
       ]);
       if (cancelled) return;
 
-      const [agentsRes, headerRes, summaryRes, attemptsRes, reportRes] = results;
+      const [agentsRes, headerRes, summaryRes, attemptsRes, reportRes, contextRes] = results;
 
       // An empty agent list is not an answer worth adopting — the backend
       // returns one before the registry is populated — but it is not a failure
@@ -233,6 +255,10 @@ export function useRunData(runId: string, done: boolean): RunData {
       if (summaryRes.status === "fulfilled") setIfChanged(setSummary, summaryRes.value);
       if (attemptsRes.status === "fulfilled") setIfChanged(setAttempts, attemptsRes.value);
       if (reportRes.status === "fulfilled") setIfChanged(setReport, reportRes.value);
+      if (contextRes.status === "fulfilled" && contextRes.value) {
+        contextRef.current = contextRes.value;
+        setIfChanged<ContextPackageModel | null>(setContext, contextRes.value);
+      }
 
       setStatus((prev) => {
         const settle = (key: RunModelKey, r: PromiseSettledResult<unknown>): ModelState =>
@@ -250,6 +276,7 @@ export function useRunData(runId: string, done: boolean): RunData {
           summary: settle("summary", summaryRes),
           attempts: settle("attempts", attemptsRes),
           report: settle("report", reportRes),
+          context: settle("context", contextRes),
         };
       });
 
@@ -273,6 +300,7 @@ export function useRunData(runId: string, done: boolean): RunData {
   return useMemo(
     () => ({
       agents,
+      context,
       header,
       summary,
       report,
@@ -286,6 +314,7 @@ export function useRunData(runId: string, done: boolean): RunData {
     }),
     [
       agents,
+      context,
       header,
       summary,
       report,

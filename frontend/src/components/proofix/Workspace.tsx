@@ -22,8 +22,9 @@ import {
   type WorkspaceHeaderModel,
   type ExecutiveSummaryModel,
   type RunReportModel,
+  type ContextPackageModel,
 } from "@/mocks";
-import { useRunData } from "@/components/proofix/useRunData";
+import { useRunData, type ModelState } from "@/components/proofix/useRunData";
 import { resolveRunLifecycle, type RunLifecycleView } from "@/components/proofix/runLifecycle";
 import { askChat, createRun, eventSourceFor, isLive } from "@/lib/runService";
 
@@ -581,6 +582,20 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
                 </div>
               </section>
 
+              {/* Only once the journal has reached context engineering. Showing
+                  it earlier would render "Pending" for a stage the pipeline has
+                  not yet arrived at, which reads as late rather than upcoming. */}
+              {(() => {
+                const contextIdx = agents.findIndex((a) => a.id === "context");
+                return contextIdx >= 0 && activeIndex >= contextIdx ? (
+                  <ContextPanel
+                    pkg={runData.context}
+                    state={runData.status.context}
+                    onRetry={runData.retry}
+                  />
+                ) : null;
+              })()}
+
               {(() => {
                 const mutationIdx = agents.findIndex((a) => a.id === "mutation");
                 const showRetries = mutationIdx >= 0 && activeIndex >= mutationIdx;
@@ -696,6 +711,170 @@ function WorkspaceLoading() {
  * genuinely produced nothing. Without this a broken `/report` and a run with no
  * report render identically — the empty model, silently.
  */
+/**
+ * A5.5's package in the detail the agent card cannot carry.
+ *
+ * The card's visualization is a summary built from the event payload, which is
+ * all the polled `/agents` response can afford. The ranking — every file A5.5
+ * scored, with the signals behind each score — and the redaction ledger come
+ * from `/runs/{id}/context`, fetched once. Until this existed they had no
+ * consumer at all: the pipeline recorded exactly which secrets it masked and
+ * nobody could see it.
+ *
+ * Three states, deliberately distinct:
+ *
+ *   error    the request failed. Reportable, retryable.
+ *   pending  the endpoint 404s because A5.5 has not produced a package yet.
+ *            That is a fact about the run, not a problem with the request, and
+ *            it must never render as "no secrets found".
+ *   loaded   the real package.
+ */
+function ContextPanel({
+  pkg,
+  state,
+  onRetry,
+}: {
+  pkg: ContextPackageModel | null;
+  state: ModelState;
+  onRetry: () => void;
+}) {
+  if (state.error && !state.loaded) {
+    return <PanelError panel="the context package" message={state.error} onRetry={onRetry} />;
+  }
+
+  if (!pkg) {
+    return (
+      <section className="rounded-2xl border border-border bg-surface p-4">
+        <h3 className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+          Context Package
+        </h3>
+        <p className="mt-1.5 text-xs text-ink-soft">
+          Pending — context engineering has not published a package for this run yet.
+        </p>
+      </section>
+    );
+  }
+
+  const ranked = [...pkg.ranked_files].sort((a, b) => b.score - a.score).slice(0, 8);
+  const topScore = ranked[0]?.score ?? 0;
+
+  return (
+    <section className="space-y-3 rounded-2xl border border-border bg-surface p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+          Context Package
+        </h3>
+        <span className="font-mono text-[11px] text-ink">
+          {pkg.target_file}
+          {pkg.target_function && <span className="text-ink-soft"> :: {pkg.target_function}</span>}
+        </span>
+      </div>
+
+      {/* The ranking. Every score is shown with the signals that produced it —
+          a ranking you cannot inspect is an oracle, and the whole design of
+          A5.5 is that its selection is deterministic and reviewable. */}
+      {ranked.length > 0 && (
+        <div>
+          <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
+            Ranked files ({pkg.metrics.files_ranked} scored, {pkg.metrics.context_files} included)
+          </div>
+          <ul className="space-y-1">
+            {ranked.map((f) => (
+              <li key={f.file} className="rounded-md border border-border bg-surface-muted/40 p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate font-mono text-[11px] text-ink" title={f.file}>
+                    {f.is_target && (
+                      <span className="mr-1.5 rounded bg-primary/15 px-1 text-[9px] font-semibold uppercase tracking-wider text-primary">
+                        target
+                      </span>
+                    )}
+                    {f.file}
+                  </span>
+                  <span className="shrink-0 font-mono text-[11px] text-ink-soft">
+                    {f.score.toFixed(2)}
+                  </span>
+                </div>
+                <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-surface-muted">
+                  <div
+                    className="h-full rounded-full bg-primary"
+                    style={{ width: `${topScore > 0 ? (f.score / topScore) * 100 : 0}%` }}
+                  />
+                </div>
+                {f.reason && <div className="mt-1 text-[10px] text-ink-soft">{f.reason}</div>}
+                {Object.keys(f.signals).length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {Object.entries(f.signals)
+                      .filter(([, v]) => v !== 0)
+                      .map(([name, value]) => (
+                        <span
+                          key={name}
+                          className="rounded bg-surface-muted px-1 font-mono text-[9px] text-ink-soft"
+                        >
+                          {name} {value > 0 ? "+" : ""}
+                          {value}
+                        </span>
+                      ))}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* The redaction ledger: enough to audit, never enough to recover a
+          value. An empty list under a `clean` guard is a real result; an empty
+          list under `failed` is not, and says so. */}
+      <div>
+        <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
+          Privacy guard · {pkg.privacy_guard_status}
+        </div>
+        {pkg.privacy_guard_status === "failed" ? (
+          <p className="rounded-md border border-status-failed/30 bg-status-failed-bg/40 px-2 py-1.5 text-[11px] text-ink">
+            The guard errored. No claim can be made about what this context contained.
+          </p>
+        ) : pkg.redactions.length === 0 ? (
+          <p className="text-[11px] text-ink-soft">
+            No secrets detected in the context handed to the patch generator.
+          </p>
+        ) : (
+          <ul className="space-y-1">
+            {pkg.redactions.map((r, i) => (
+              <li
+                key={`${r.file}:${r.line}:${i}`}
+                className="flex flex-wrap items-center gap-x-2 rounded-md border border-status-retry/30 bg-status-retry-bg/40 px-2 py-1 font-mono text-[10px] text-ink"
+              >
+                <span>
+                  {r.file}:{r.line}
+                </span>
+                <span className="text-ink-soft">{r.identifier || r.kind}</span>
+                <span className="ml-auto text-ink-soft">masked by {r.detector}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {pkg.acceptance_criteria.length > 0 && (
+        <div>
+          <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
+            Acceptance criteria
+          </div>
+          <ul className="list-inside list-disc space-y-0.5 text-[11px] text-ink-soft">
+            {pkg.acceptance_criteria.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {state.error && (
+        <PanelError panel="the latest context package" message={state.error} onRetry={onRetry} />
+      )}
+    </section>
+  );
+}
+
 function PanelError({
   panel,
   message,

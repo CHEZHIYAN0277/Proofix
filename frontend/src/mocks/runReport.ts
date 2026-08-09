@@ -122,6 +122,63 @@ export interface WorkspaceHeaderModel {
   } | null;
 }
 
+/**
+ * One file A5.5 scored while deciding what the patch generator gets to see.
+ * `signals` is the per-signal breakdown behind `score` — the reason the ranking
+ * is reviewable rather than an oracle.
+ */
+export interface RankedContextFile {
+  file: string;
+  score: number;
+  reason: string;
+  confidence: number;
+  signals: Record<string, number>;
+  is_target: boolean;
+  evidence: string[];
+}
+
+/**
+ * One masked secret. Deliberately enough to audit and never enough to recover
+ * the value — no placeholder, no prefix, no length.
+ */
+export interface ContextRedaction {
+  file: string;
+  line: number;
+  kind: string;
+  detector: string;
+  identifier: string;
+}
+
+/**
+ * A5.5's context package, from `/runs/{id}/context`.
+ *
+ * Partial by intent: the endpoint returns the full stored package, and this
+ * types only the fields the workspace renders. `privacy_guard_status` is the
+ * one that matters most — it is the evidence that secrets did not reach the
+ * LLM, and `failed` means the guard itself errored, so nothing may be assumed
+ * about what got through.
+ */
+export interface ContextPackageModel {
+  target_file: string;
+  target_function: string | null;
+  acceptance_criteria: string[];
+  patch_constraints: string[];
+  ranked_files: RankedContextFile[];
+  redactions: ContextRedaction[];
+  privacy_guard_status: "clean" | "masked" | "failed";
+  prefer_focused: boolean;
+  metrics: {
+    files_ranked: number;
+    context_files: number;
+    context_functions: number;
+    original_tokens: number;
+    reduced_tokens: number;
+    token_reduction: number;
+    privacy_redactions: number;
+    degraded: boolean;
+  };
+}
+
 export interface ExecutiveSummaryModel {
   repository: string;
   bug: string;

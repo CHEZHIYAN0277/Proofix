@@ -35,6 +35,7 @@ const getWorkspaceHeader = vi.fn();
 const getExecutiveSummary = vi.fn();
 const getRunReport = vi.fn();
 const getRepairAttempts = vi.fn();
+const getRunContext = vi.fn();
 const listRepositories = vi.fn();
 
 vi.mock("@/lib/runService", () => ({
@@ -44,6 +45,7 @@ vi.mock("@/lib/runService", () => ({
   getExecutiveSummary: (...a: unknown[]) => getExecutiveSummary(...a),
   getRunReport: (...a: unknown[]) => getRunReport(...a),
   getRepairAttempts: (...a: unknown[]) => getRepairAttempts(...a),
+  getRunContext: (...a: unknown[]) => getRunContext(...a),
   listRepositories: (...a: unknown[]) => listRepositories(...a),
   // No event source: the journal is driven by the agent list alone here.
   eventSourceFor: () => () => () => undefined,
@@ -92,6 +94,9 @@ function backendReturns(over: Record<string, unknown> = {}) {
   getExecutiveSummary.mockResolvedValue(over.summary ?? EMPTY_EXECUTIVE_SUMMARY);
   getRunReport.mockResolvedValue(over.report ?? EMPTY_RUN_REPORT);
   getRepairAttempts.mockResolvedValue(over.attempts ?? EMPTY_REPAIR_ATTEMPTS);
+  // `null` is the 404 case: A5.5 has not published a package. `runService`
+  // absorbs that status so absence never arrives as a rejection.
+  getRunContext.mockResolvedValue(over.context ?? null);
   listRepositories.mockResolvedValue([]);
 }
 
@@ -209,5 +214,130 @@ describe("Repository identity", () => {
     await screen.findByText(/Status · Completed/);
     expect(screen.queryByText("Repository ID")).toBeNull();
     expect(screen.queryByText("Index hash")).toBeNull();
+  });
+});
+
+describe("Context package panel", () => {
+  const CONTEXT_AGENTS = [agent("context", "Context Engineering"), agent("merge", "Mergeability")];
+
+  const PACKAGE = {
+    target_file: "vulnapi/auth.py",
+    target_function: "validate_token",
+    acceptance_criteria: ["Expired tokens must be rejected"],
+    patch_constraints: [],
+    prefer_focused: true,
+    privacy_guard_status: "masked" as const,
+    ranked_files: [
+      {
+        file: "vulnapi/auth.py",
+        score: 2.4,
+        reason: "contains the failing stack frame",
+        confidence: 0.9,
+        signals: { stack_frame: 1, verified_citation: 0.8, unused: 0 },
+        is_target: true,
+        evidence: [],
+      },
+      {
+        file: "vulnapi/tokens.py",
+        score: 0.6,
+        reason: "called by the target",
+        confidence: 0.4,
+        signals: { direct_callee: 0.5 },
+        is_target: false,
+        evidence: [],
+      },
+    ],
+    redactions: [
+      {
+        file: "vulnapi/config.py",
+        line: 12,
+        kind: "REDACTED_SECRET",
+        detector: "structural",
+        identifier: "SECRET_KEY",
+      },
+    ],
+    metrics: {
+      files_ranked: 12,
+      context_files: 2,
+      context_functions: 4,
+      original_tokens: 8000,
+      reduced_tokens: 2000,
+      token_reduction: 0.75,
+      privacy_redactions: 1,
+      degraded: false,
+    },
+  };
+
+  it("renders Pending when A5.5 has not published a package", async () => {
+    // The endpoint 404s, which `runService` turns into null. That is absence,
+    // not failure: no error, no retry, and above all no claim that the context
+    // was checked and found clean.
+    backendReturns({ agents: CONTEXT_AGENTS, context: null });
+
+    render(<Workspace runId="run-ctx-pending" />);
+
+    expect(await screen.findByText(/Pending — context engineering/)).toBeTruthy();
+    expect(screen.queryByText(/Could not load the context package/)).toBeNull();
+    expect(screen.queryByText(/No secrets detected/)).toBeNull();
+  });
+
+  it("lists the ranking with the signals behind each score", async () => {
+    backendReturns({ agents: CONTEXT_AGENTS, context: PACKAGE });
+
+    render(<Workspace runId="run-ctx" />);
+
+    // The target file names itself twice on purpose: once as the package's
+    // subject in the header, once as the top-ranked row.
+    await waitFor(() => expect(screen.getAllByText("vulnapi/auth.py").length).toBe(2));
+    expect(screen.getByText("vulnapi/tokens.py")).toBeTruthy();
+    expect(screen.getByText("target")).toBeTruthy();
+    expect(screen.getByText("2.40")).toBeTruthy();
+    expect(screen.getByText("contains the failing stack frame")).toBeTruthy();
+    // Zero-valued signals contribute nothing and are not drawn as if they did.
+    expect(screen.getByText(/stack_frame \+1/)).toBeTruthy();
+    expect(screen.queryByText(/unused/)).toBeNull();
+  });
+
+  it("lists every redaction so the masking is auditable", async () => {
+    backendReturns({ agents: CONTEXT_AGENTS, context: PACKAGE });
+
+    render(<Workspace runId="run-ctx-redactions" />);
+
+    expect(await screen.findByText("vulnapi/config.py:12")).toBeTruthy();
+    expect(screen.getByText("SECRET_KEY")).toBeTruthy();
+    expect(screen.getByText(/masked by structural/)).toBeTruthy();
+  });
+
+  it("a failed guard is not reported as a clean one", async () => {
+    backendReturns({
+      agents: CONTEXT_AGENTS,
+      context: { ...PACKAGE, privacy_guard_status: "failed", redactions: [] },
+    });
+
+    render(<Workspace runId="run-ctx-failed" />);
+
+    expect(await screen.findByText(/The guard errored/)).toBeTruthy();
+    // An empty redaction list under a failed guard means nothing was checked,
+    // not that nothing was found.
+    expect(screen.queryByText(/No secrets detected/)).toBeNull();
+  });
+
+  it("surfaces a real failure with a retry, unlike a 404", async () => {
+    backendReturns({ agents: CONTEXT_AGENTS });
+    getRunContext.mockRejectedValue(new Error("API 500: Internal Server Error"));
+
+    render(<Workspace runId="run-ctx-err" />);
+
+    expect(await screen.findByText(/Could not load the context package/)).toBeTruthy();
+    expect(screen.queryByText(/Pending — context engineering/)).toBeNull();
+  });
+
+  it("is not shown before the pipeline reaches context engineering", async () => {
+    backendReturns({ agents: AGENTS, context: PACKAGE });
+
+    render(<Workspace runId="run-ctx-early" />);
+
+    await screen.findByText(/Status · Completed/);
+    expect(screen.queryByText("Context Package")).toBeNull();
   });
 });

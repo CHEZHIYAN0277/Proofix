@@ -68,20 +68,25 @@ def test_registry_entries_remain_positionally_unpackable():
     assert name and purpose and handoff
 
 
-def test_v1_surface_excludes_only_the_agents_it_cannot_render():
-    """The product surface publishes everything it has a card for.
+def test_the_product_surface_publishes_the_whole_pipeline():
+    """The v1/v2 split is closed.
 
-    A0.5 joined it in Phase 2 — a layer whose whole purpose is reusing work
-    across runs was invisible to the person paying for it. A5.5 is the last
-    remaining gap (Phase 4); when it lands the two surfaces collapse to one.
+    It existed because the product surface had no cards for A0.5 and A5.5, so
+    publishing them would have added cards that never rendered. A0.5 gained one
+    in Phase 2 and A5.5 in Phase 4. Every agent the graph executes is now on the
+    surface the workspace reads.
     """
-    v1_ids = {a.agent_id for a in agents_for_surface(SURFACE_V1)}
-    assert "A5.5" not in v1_ids
-    assert "A0.5" in v1_ids
-    assert "A1" in v1_ids and "A10" in v1_ids
-    # A run the precheck blocks reaches no other agent, so without A0.7 V1 has
-    # nothing to show for the stage where the run stopped.
-    assert "A0.7" in v1_ids
+    assert [a.agent_id for a in agents_for_surface(SURFACE_V1)] == EXPECTED_AGENT_IDS
+
+
+def test_the_two_surfaces_stay_identical():
+    """The guard against the split quietly reopening.
+
+    `surface` is still accepted — it is in the published schema and a client may
+    send it — but it must not change the response. A new registry entry
+    published to only one surface would break this, which is the point.
+    """
+    assert agents_for_surface(SURFACE_V1) == agents_for_surface(SURFACE_V2)
 
 
 def test_v2_surface_publishes_the_whole_pipeline():

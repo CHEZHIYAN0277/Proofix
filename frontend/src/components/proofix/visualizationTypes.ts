@@ -7,6 +7,29 @@
  * verbatim per agent.
  */
 
+export interface ContextPayload {
+  /** Non-null when A5.5 resolved no target and handed A7 nothing. */
+  skipped: string | null;
+  targetFile: string;
+  targetFunction: string | null;
+  originalTokens: number;
+  reducedTokens: number;
+  /** Fraction saved (0-1), or `null` when no reduction was measured. */
+  tokenReduction: number | null;
+  contextFiles: number;
+  contextFunctions: number;
+  filesRanked: number;
+  /**
+   * The privacy boundary. `masked` means secrets were found and replaced before
+   * the prompt left the process; `failed` means the guard itself errored, so
+   * nothing may be assumed about what got through. Never round either to
+   * `clean`.
+   */
+  privacyGuardStatus: "clean" | "masked" | "failed";
+  redactions: number;
+  degraded: boolean;
+}
+
 /** One timed stage of A0.5's index build. Only stages that took time are sent. */
 export interface IndexPhase {
   label: string;
@@ -181,6 +204,7 @@ export interface MergePayload {
 
 export type AgentVisualizationPayload =
   | { kind: "intelligence"; data: IntelligencePayload }
+  | { kind: "context"; data: ContextPayload }
   | { kind: "repo-intel"; data: RepoIntelPayload }
   | { kind: "deps"; data: DepsPayload }
   | { kind: "static"; data: StaticPayload }

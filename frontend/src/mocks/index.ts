@@ -28,6 +28,9 @@ export type {
   RepairAttemptsModel,
   RetryAttempt,
   RepoMetadata,
+  ContextPackageModel,
+  ContextRedaction,
+  RankedContextFile,
 } from "./runReport";
 export { MOCK_CHAT_SUGGESTIONS, mockAnswerer } from "./chat";
 export { HANDOFF_LABELS } from "./handoff";
