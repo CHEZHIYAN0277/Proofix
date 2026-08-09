@@ -906,14 +906,17 @@ Measured against the phase-0 baseline, not asserted:
    github_repo_name = "vulnapi"` and the JWT/expiry literals in
    `runtime_patch_prompt.py` / `retry_brief_builder.py` remain.
 4. ✅ **Done.** `services/path_resolution.py` extracted, with tests.
-5. 🔴 **Open.** A9's finding key still includes the line number
-   (`a9_security_rescan.py:34`) — any insertion above an existing finding
-   produces a false rejection.
+5. ✅ **Done.** A9's finding identity is `(tool, normalized path, normalized
+   message)` — no line number, so an insertion above an existing finding no
+   longer produces a false rejection. Comparison is by multiplicity, so a
+   genuinely duplicated finding is still caught.
 6. ✅ **Done.** `services/llm_gateway.py` extracted with token/cost telemetry.
-7. 🔴 **Open — new, highest severity.** Unmeasured axes render as measured
-   zeros: `security_score` defaults to `0.0` and `_pct(default=0.0)`, so an axis
-   nobody measured contributes a zero to the composite that gates auto-merge.
-   Same class as item 1, and it changes routing outcomes.
+7. ✅ **Done.** Unmeasured axes are `None`, not zero — `services/measurement.py`
+   holds the tri-state semantics, `measured_mean` divides by the measurements
+   that exist, and `meets_threshold`/`below_threshold` are deliberately not each
+   other's negation. The inverse defect found alongside it is also closed: an
+   absent scanner used to score `security_score = 100.0` and clear the
+   auto-merge gate, and now scores `None`.
 7a. 🔴 **Open (G9).** `run_id` never reaches `LLMGateway.complete()`, so every
    `AuditEvent.run_id` is `""` and per-run cost/token attribution — the entire
    justification for extracting the gateway (item 6) — is impossible.

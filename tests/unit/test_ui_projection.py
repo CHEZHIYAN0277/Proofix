@@ -254,6 +254,22 @@ def test_skipped_security_scan_is_not_reported_as_clean():
     assert "Security re-scan clean" not in flags
 
 
+def test_rescan_with_no_scanner_available_is_not_reported_as_clean():
+    """A9 ran, found nothing, and verified nothing — `security_score is None`.
+
+    It rejects no findings because it examined no code, so `rejected: False`
+    must not be read as a clean bill of health.
+    """
+    state = _completed_state(
+        security_result={"security_score": None, "rejected": False, "new_findings": []}
+    )
+    report = build_run_report(state, [])
+    flags = {e["text"]: e["ok"] for e in report["evidence"]}
+
+    assert flags["Security re-scan not run"] is False
+    assert "Security re-scan clean" not in flags
+
+
 def test_clean_security_scan_is_reported_as_clean():
     report = build_run_report(_completed_state(), [])
     flags = {e["text"]: e["ok"] for e in report["evidence"]}

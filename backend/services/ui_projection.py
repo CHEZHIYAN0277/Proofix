@@ -637,13 +637,18 @@ def _narrative_detail(card: str, state: RunStateModel) -> list[str]:
     if card == "security":
         security = state.security_result or {}
         new_findings = security.get("new_findings") or []
-        if security:
-            return [
-                f"{len(new_findings)} new findings versus the pre-patch baseline."
-                if new_findings
-                else "No new findings versus the pre-patch baseline."
-            ]
-        return []
+        if not security:
+            return []
+        # A9 having produced a result is not the same as A9 having measured
+        # one. With no scanner available it finds zero findings by definition,
+        # and "no new findings" would read as a clean bill of health.
+        if security.get("security_score") is None:
+            return ["No scanner was available, so the patch was not re-scanned."]
+        return [
+            f"{len(new_findings)} new findings versus the pre-patch baseline."
+            if new_findings
+            else "No new findings versus the pre-patch baseline."
+        ]
 
     if card == "merge":
         decision, label = run_decision(state)
@@ -1827,9 +1832,11 @@ def build_run_report(state: RunStateModel, events: list[AgentStatusEvent]) -> di
         {"ok": bool(citations) and all(c.get("verified") for c in citations), "text": "Root cause confirmed"},
         {"ok": bool(state.blast_graph), "text": "Blast radius analyzed"},
         _mutation_evidence(mutation),
-        # A skipped re-scan is not a clean re-scan — report it as not run.
+        # A skipped re-scan is not a clean re-scan — report it as not run. The
+        # same applies when A9 ran but no scanner was installed: it rejects
+        # nothing because it examined nothing.
         {"ok": False, "text": "Security re-scan not run"}
-        if not security
+        if not security or security.get("security_score") is None
         else {"ok": not security.get("rejected"), "text": "Security re-scan clean"},
     ]
     if state.validation_exhausted:

@@ -1,13 +1,94 @@
+"""A9 — post-patch security re-scan.
+
+Answers one question: **did the patch introduce a vulnerability that was not
+there before?** It is a differential check, so the whole agent turns on what
+"the same finding" means across two scans of a file whose lines have moved.
+
+Two defects shaped the current form, both of the same family — a number that
+was not a measurement:
+
+* The finding key was ``file:line:message[:50]``. A patch that inserts a line
+  above a pre-existing finding shifts it down, the key changes, and the
+  unchanged finding is reported as newly introduced — a rejection, a retry, and
+  a draft PR, for code the patch never touched.
+* An absent scanner produced ``security_score = 100.0``. `bandit` not being
+  installed is not evidence that a patch is safe, but it scored higher than any
+  real scan can and cleared `SECURITY_TECHNICAL_THRESHOLD` outright.
+"""
+
+import re
+from collections import Counter
 from pathlib import Path
 
 from backend.agents.base import AgentBase
 from backend.models.findings import Finding
 from backend.models.validation import SecurityRescanResult, ValidationFailure
+from backend.services.path_resolution import normalize_path_token
 from backend.services.retry_brief_builder import build_retry_brief
 from backend.services.repo_layout import get_scan_targets, resolve_source_roots
 from backend.services.security_rescan_commands import build_security_rescan_command
 from backend.services.subprocess_runner import parse_json_safe, run_command
 from backend.state.schema import RunStateModel
+
+#: Points deducted per newly introduced finding.
+NEW_FINDING_PENALTY = 25.0
+
+_WHITESPACE = re.compile(r"\s+")
+
+#: A finding's identity for differential comparison: which tool said it, in
+#: which file, about what. **Not the line** — that is what moves under a patch.
+FindingKey = tuple[str, str, str]
+
+
+def finding_key(finding: dict, tool: str) -> FindingKey:
+    """What makes two findings across two scans *the same* finding.
+
+    The message is normalized only for whitespace and case, never truncated: the
+    old 50-character prefix collided distinct bandit issues that share an
+    opening clause, and a collision here is a real new vulnerability silently
+    accepted — the failure direction that matters most.
+    """
+    message = _WHITESPACE.sub(" ", str(finding.get("message", ""))).strip().casefold()
+    return (tool, normalize_path_token(str(finding.get("file", ""))), message)
+
+
+def new_findings_by_multiplicity(
+    baseline: list[tuple[FindingKey, dict]],
+    post: list[tuple[FindingKey, dict]],
+) -> list[dict]:
+    """Post-scan findings with no counterpart in the baseline.
+
+    Counting, not set difference. Set difference answers "does this kind of
+    finding exist in both scans", which drops a real regression: a file that had
+    one hardcoded password and now has two contains a new one, and both share a
+    key. Comparing *counts* per key catches that while still absorbing a pure
+    line shift, where the count is unchanged.
+
+    When a key has surplus occurrences, the ones reported are those whose line
+    is not already occupied in the baseline — so a genuinely-new second finding
+    is named at its own line rather than at the pre-existing one's.
+    """
+    baseline_counts = Counter(key for key, _ in baseline)
+    baseline_lines: dict[FindingKey, set[int]] = {}
+    for key, finding in baseline:
+        baseline_lines.setdefault(key, set()).add(int(finding.get("line", 0) or 0))
+
+    grouped: dict[FindingKey, list[dict]] = {}
+    for key, finding in post:
+        grouped.setdefault(key, []).append(finding)
+
+    introduced: list[dict] = []
+    for key, findings in grouped.items():
+        surplus = len(findings) - baseline_counts.get(key, 0)
+        if surplus <= 0:
+            continue
+        # Unmatched lines first: they are the occurrences the baseline cannot
+        # account for, and naming them points the retry at the right place.
+        known = baseline_lines.get(key, set())
+        ordered = sorted(findings, key=lambda f: int(f.get("line", 0) or 0) in known)
+        introduced.extend(ordered[:surplus])
+
+    return introduced
 
 
 class A9SecurityRescanAgent(AgentBase):
@@ -22,30 +103,43 @@ class A9SecurityRescanAgent(AgentBase):
         scan_targets = get_scan_targets(state, repo, sig_data)
         source_roots = resolve_source_roots(repo, state.source_roots or None, sig_data)
 
-        post_bandit = await self._run_bandit(repo, scan_targets)
-        post_semgrep = await self._run_semgrep(repo, scan_targets)
+        bandit_executed, post_bandit = await self._run_bandit(repo, scan_targets)
+        semgrep_executed, post_semgrep = await self._run_semgrep(repo, scan_targets)
+        scanners_run = [
+            tool
+            for tool, executed in (("bandit", bandit_executed), ("semgrep", semgrep_executed))
+            if executed
+        ]
 
-        baseline_keys = self._finding_keys(baseline.get("bandit", []) + baseline.get("semgrep", []))
-        post_keys = self._finding_keys(post_bandit + post_semgrep)
+        # Only tools that ran may contribute to the comparison. A baseline from a
+        # tool absent this time would make every one of its findings look
+        # resolved, and a post-scan from a tool absent at baseline would make
+        # every one of its findings look new.
+        baseline_pairs = self._keyed(baseline, scanners_run)
+        post_pairs = [(finding_key(f, "bandit"), f) for f in post_bandit] + [
+            (finding_key(f, "semgrep"), f) for f in post_semgrep
+        ]
 
-        new_keys = post_keys - baseline_keys
-        new_findings = []
-        for f in post_bandit + post_semgrep:
-            key = f"{f.get('file')}:{f.get('line')}:{f.get('message', '')[:50]}"
-            if key in new_keys:
-                new_findings.append(
-                    Finding(
-                        id=f"new-{len(new_findings)}",
-                        file=f.get("file", ""),
-                        line=f.get("line", 0),
-                        message=f.get("message", ""),
-                        tools=["bandit" if f in post_bandit else "semgrep"],
-                        severity=f.get("severity", 0.7),
-                    )
-                )
+        new_findings = [
+            Finding(
+                id=f"new-{index}",
+                file=f.get("file", ""),
+                line=f.get("line", 0),
+                message=f.get("message", ""),
+                tools=[f.get("tool", "")],
+                severity=f.get("severity", 0.7),
+            )
+            for index, f in enumerate(new_findings_by_multiplicity(baseline_pairs, post_pairs))
+        ]
 
         rejected = len(new_findings) > 0
-        security_score = max(0.0, 100.0 - len(new_findings) * 25)
+        # No scanner ran, so nothing was verified. A perfect score here would be
+        # `bandit is not installed` reported as `this patch is safe`, and it
+        # cleared the auto-merge security gate outright. Absent is not 100 for
+        # the same reason it is not 0 (`services/measurement.py`).
+        security_score = (
+            max(0.0, 100.0 - len(new_findings) * NEW_FINDING_PENALTY) if scanners_run else None
+        )
         reexecution_command, reexecution_timeout = build_security_rescan_command(scan_targets)
         failure_brief = None
         validation_failure = None
@@ -94,28 +188,51 @@ class A9SecurityRescanAgent(AgentBase):
         if validation_failure:
             state.validation_failure = validation_failure.model_dump(mode="json")
 
+        # The message is what the user reads on the card. "0 new findings" for a
+        # scan that never ran is the same lie the score used to tell.
+        message = (
+            f"Security scan: {len(new_findings)} new findings"
+            if scanners_run
+            else "Security re-scan did not run — no scanner was available"
+        )
+
         await self.emit_status(
             state,
             "completed",
-            f"Security scan: {len(new_findings)} new findings",
+            message,
             {
                 "rejected": rejected,
                 "security_score": security_score,
+                "scanners_run": scanners_run,
                 "source_roots": source_roots,
             },
         )
         return state
 
-    async def _run_bandit(self, repo: Path, scan_targets: list[Path]) -> list[dict]:
+    async def _run_bandit(self, repo: Path, scan_targets: list[Path]) -> tuple[bool, list[dict]]:
+        """`(executed, findings)`. Zero findings and *no scan* are not the same fact.
+
+        Mirrors A3's `ScanOutcome` detection (`code == -1` is the runner's
+        "could not execute"), deliberately without A3's stub fallback: a
+        differential check against fabricated findings would compare a real scan
+        to invented ones. The A3/A9 scanner duplication remains open as T5.
+        """
         if not scan_targets:
-            return []
+            return False, []
         cmd = ["bandit", "-f", "json", "-q"]
         for target in scan_targets:
             cmd.extend(["-r", str(target)])
-        _code, stdout, _ = await run_command(cmd, cwd=repo, timeout=60)
+        code, stdout, _ = await run_command(cmd, cwd=repo, timeout=60)
+        if code == -1:
+            return False, []
         data = parse_json_safe(stdout)
-        return [
+        # bandit exits 0 clean, 1 with issues; either way it emits a `results`
+        # envelope. Its absence means the scan did not complete.
+        if not isinstance(data, dict) or "results" not in data:
+            return False, []
+        return True, [
             {
+                "tool": "bandit",
                 "file": r.get("filename", "").replace(str(repo) + "/", ""),
                 "line": r.get("line_number", 0),
                 "message": r.get("issue_text", ""),
@@ -124,15 +241,20 @@ class A9SecurityRescanAgent(AgentBase):
             for r in data.get("results", [])
         ]
 
-    async def _run_semgrep(self, repo: Path, scan_targets: list[Path]) -> list[dict]:
+    async def _run_semgrep(self, repo: Path, scan_targets: list[Path]) -> tuple[bool, list[dict]]:
         if not scan_targets:
-            return []
+            return False, []
         cmd = ["semgrep", "--config=auto", "--json"]
         cmd.extend(str(t) for t in scan_targets)
-        _code, stdout, _ = await run_command(cmd, cwd=repo, timeout=90)
+        code, stdout, _ = await run_command(cmd, cwd=repo, timeout=90)
+        if code == -1:
+            return False, []
         data = parse_json_safe(stdout)
-        return [
+        if not isinstance(data, dict) or "results" not in data:
+            return False, []
+        return True, [
             {
+                "tool": "semgrep",
                 "file": r.get("path", "").replace(str(repo) + "/", ""),
                 "line": r.get("start", {}).get("line", 0),
                 "message": r.get("extra", {}).get("message", ""),
@@ -141,5 +263,10 @@ class A9SecurityRescanAgent(AgentBase):
             for r in data.get("results", [])
         ]
 
-    def _finding_keys(self, findings: list[dict]) -> set[str]:
-        return {f"{f.get('file')}:{f.get('line')}:{f.get('message', '')[:50]}" for f in findings}
+    def _keyed(self, baseline: dict, tools: list[str]) -> list[tuple[FindingKey, dict]]:
+        """A3's baseline, keyed per tool. `ruff` is style, not security — excluded."""
+        return [
+            (finding_key(finding, tool), finding)
+            for tool in tools
+            for finding in baseline.get(tool, []) or []
+        ]
