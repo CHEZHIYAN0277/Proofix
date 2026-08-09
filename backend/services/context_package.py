@@ -90,6 +90,32 @@ EXPECTED_OUTPUT_FORMAT = (
 )
 
 
+def _scan_strings(values: list[str], field: str) -> tuple[list[str], list[Redaction]]:
+    """Mask every string in a prompt-bound list, keeping what was masked.
+
+    `acceptance_criteria`, `contracts`, `validation_requirements` and
+    `patch_constraints` all reach the patch prompt and none of them were
+    scanned — a JWT reached `acceptance_criteria[2]` with the guard reporting
+    `clean` and zero redactions (B-B04). They are derived from exception
+    messages and failing-test names, which is exactly where a leaked credential
+    shows up.
+
+    `field` stands in for a filename in the ledger: these strings have no source
+    file, and recording a redaction with an empty path would make the audit
+    unreadable at the point it matters most.
+    """
+    cleaned: list[str] = []
+    redactions: list[Redaction] = []
+    for index, value in enumerate(values or []):
+        if not isinstance(value, str):
+            cleaned.append(value)
+            continue
+        result = scan_text(value, f"{field}[{index}]")
+        cleaned.append(result.source)
+        redactions.extend(result.redactions)
+    return cleaned, redactions
+
+
 def _sanitize_extraction(extraction: FileExtraction) -> tuple[FileExtraction, list[Redaction]]:
     """Mask secrets in every extracted span before it can leave the process."""
     redactions: list[Redaction] = []
@@ -306,24 +332,53 @@ def build_package(inputs: PackageInputs) -> ContextPackage:
         focused = masked_full.source
         metrics.degraded = True
 
+    # Every remaining string that reaches the prompt. The guard covered
+    # extracted code and nothing else, so these four lists — all derived from
+    # exception messages and test names, which is precisely where a leaked
+    # credential surfaces — travelled unscanned (B-B04).
+    criteria, criteria_found = _scan_strings(list(inputs.acceptance_criteria), "acceptance_criteria")
+    contracts, contract_found = _scan_strings(list(inputs.contracts), "contracts")
+    requirements, requirement_found = _scan_strings(
+        list(inputs.validation_requirements), "validation_requirements"
+    )
+    constraints, constraint_found = _scan_strings(
+        list(inputs.patch_constraints), "patch_constraints"
+    )
+    summary_result = scan_text(inputs.root_cause_summary, "root_cause_summary")
+    evidence, evidence_found = _sanitize_evidence(inputs.runtime_evidence)
+
+    redactions.extend(criteria_found)
+    redactions.extend(contract_found)
+    redactions.extend(requirement_found)
+    redactions.extend(constraint_found)
+    redactions.extend(summary_result.redactions)
+    redactions.extend(evidence_found)
+
+    # The status is recomputed from the full ledger. Setting it only inside the
+    # extraction loop meant a secret found anywhere else was masked and then
+    # reported as `clean`. `failed` still wins: a guard that errored knows
+    # nothing about what it did or did not see.
+    if guard_status != "failed" and redactions:
+        guard_status = "masked"
+
     primary = sanitized[0] if sanitized else None
     package = ContextPackage(
         ranking_version=RANKING_VERSION,
         cache_key=inputs.cache_key,
-        root_cause_summary=scan_text(inputs.root_cause_summary).source,
-        runtime_evidence=_sanitize_evidence(inputs.runtime_evidence),
+        root_cause_summary=summary_result.source,
+        runtime_evidence=evidence,
         target_file=inputs.target_file,
         target_function=inputs.target_function,
-        acceptance_criteria=list(inputs.acceptance_criteria),
+        acceptance_criteria=criteria,
         relevant_imports=list(primary.imports) if primary else [],
         relevant_classes=list(primary.classes) if primary else [],
         relevant_functions=list(primary.functions) if primary else [],
         related_utilities=[s for e in sanitized[1:] for s in e.symbols],
         constants=list(primary.constants) if primary else [],
         dependency_summary=_dependency_summary(ordered),
-        contracts=list(inputs.contracts),
-        validation_requirements=list(inputs.validation_requirements),
-        patch_constraints=list(inputs.patch_constraints),
+        contracts=contracts,
+        validation_requirements=requirements,
+        patch_constraints=constraints,
         expected_output_format=EXPECTED_OUTPUT_FORMAT,
         focused_context=focused,
         original_complete_file=original_source,
@@ -378,12 +433,26 @@ def _read(repo_path: Path, file: str) -> str:
         return ""
 
 
-def _sanitize_evidence(evidence: dict) -> dict:
-    """Mask credentials that leaked into tracebacks and exception messages."""
+def _sanitize_evidence(evidence: dict) -> tuple[dict, list[Redaction]]:
+    """Mask credentials that leaked into tracebacks and exception messages.
+
+    Now returns what it masked. It used to drop the redactions on the floor, so
+    a secret found in a traceback was correctly removed from the prompt and then
+    reported as `privacy_guard_status: "clean"` with an empty ledger — the
+    masking happened and the audit denied it. An unrecorded redaction is
+    indistinguishable from no secret, which is the one thing this ledger exists
+    to tell apart.
+    """
     cleaned: dict = {}
+    redactions: list[Redaction] = []
     for key, value in (evidence or {}).items():
-        cleaned[key] = scan_text(value).source if isinstance(value, str) else value
-    return cleaned
+        if not isinstance(value, str):
+            cleaned[key] = value
+            continue
+        result = scan_text(value, f"runtime_evidence.{key}")
+        cleaned[key] = result.source
+        redactions.extend(result.redactions)
+    return cleaned, redactions
 
 
 def _dependency_summary(ranked: list[RankedContextFile]) -> list[str]:

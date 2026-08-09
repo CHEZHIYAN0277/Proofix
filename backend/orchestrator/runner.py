@@ -6,6 +6,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from backend.config import Settings
 from backend.orchestrator.graph import build_graph
+from backend.services.git_service import discard_clone
 from backend.services.ui_projection import run_decision
 from backend.state.events import PRType, RunLifecycleEvent
 from backend.state.redis_store import RedisStore
@@ -78,6 +79,34 @@ class PipelineRunner:
                 )
             )
             raise
+        finally:
+            # Every terminal path — completed, blocked, failed — reaches here,
+            # which is the point: the leak was worst on the paths nobody thinks
+            # about. Deliberately after the state is saved and the lifecycle
+            # event emitted, so cleanup can never delay or displace the run's
+            # own result. Nothing downstream reads the clone: patch bodies,
+            # context packages and proof bundles are all in Redis by now.
+            await self._discard_clone(run_id)
+
+    async def _discard_clone(self, run_id: str) -> None:
+        """Remove this run's working copy. Never fails the run.
+
+        Reads the freshly persisted state rather than trusting the in-scope
+        object, because the failure path re-reads state and the clone path is
+        set by a node partway through the graph.
+        """
+        try:
+            latest = await self.store.load_state(run_id)
+            if latest and discard_clone(latest.repo_clone_path):
+                logger.info(
+                    "clone_discarded",
+                    extra={"cleanup": {"run_id": run_id, "path": latest.repo_clone_path}},
+                )
+        except Exception as exc:  # noqa: BLE001 — cleanup never fails a run
+            logger.warning(
+                "clone_cleanup_failed",
+                extra={"cleanup": {"run_id": run_id, "error": str(exc)}},
+            )
 
     async def _emit_blocked(self, result: RunStateModel) -> None:
         """Announce a run stopped by the environment precheck.
