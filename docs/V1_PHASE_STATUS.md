@@ -13,7 +13,7 @@ Audit date: 2026-08-08. Legend: ✅ COMPLETE · 🟡 PARTIAL · 🔴 MISSING · 
 | **2** | Repository Intelligence surface | ✅ COMPLETE | A0.5 card + visualization ✅; header identity strip ✅ | A0.5 on the `v1` surface ✅ | 19 card tests + 3 identity tests | none |
 | **3** | Investigation / Evidence / Blast Radius | ✅ COMPLETE | A3.5/A4/A5 cards + visualizations | agents + citation verification ✅ | ✅ | none |
 | **4** | Context Engineering / Repair Planning | ✅ COMPLETE | A5.5 card + viz ✅; context panel (ranking, redactions) ✅; planner shows edge reasons ✅ | A5.5 on the `v1` surface ✅ | 15 card tests + 6 panel tests | none |
-| **5** | Patch Generation | 🟡 PARTIAL | filenames only, **no diff view** | A7 + `/patch` ✅ but B-B03/06/07/08 open | integrity ✅, rollback 🔴 | none |
+| **5** | Patch Generation | ✅ COMPLETE | diff view + patch panel ✅ | B-B03/06/07/08 ✅ | 19 A7 tests + 6 diff-parser + 5 panel | none |
 | **6** | Validation & scoring correctness | ✅ COMPLETE | mutation card ✅; null axes render "Not measured" | B-B01 ✅ (`measurement.py`); B-B02 ✅ (line-free finding key); B-B16 ✅ (absent scanner ≠ 100) | 15 A9 tests + `measured_mean` arithmetic + projection | none |
 | **7** | Final decision & report | 🟡 PARTIAL | report renders, nullable-aware ✅ | routing ✅; B-B09/10/11 open | routing ✅ | depends on 6 |
 | **8** | Production hardening | 🔴 MISSING | reconnect ✅ (Phase 1); no reduced-motion, poll cost | sandbox, scale, G9, privacy, clone leak | 🔴 | B-B12 blocks hosting |
@@ -36,6 +36,46 @@ WebSocket reconnect that never infers completion from a close (B-F03), the
 `severity: "not measured"` (B-F09). What remains of B-F08 is cosmetic: there are
 still no per-panel loading skeletons. The honesty defect it was filed for — a
 failed fetch rendering as an empty one — is fixed; the polish is not.
+
+**Phase 5 ✅** (closed 2026-08-09) — the diff is the product, and it was
+reachable only as two filenames. `/runs/{id}/patch` had served both sides of
+every file all along.
+
+Four backend defects closed, all the same family as Phase 6's: the pipeline
+stating something it had not established.
+
+* **B-B03** was worse than filed. `_expected_from_test_name` matched on
+  `"exp" in root_cause_text` — which hits "unexpected", "export", "explicit",
+  "experiment" — so a null-dereference repair was told its expected behaviour
+  was "Reject tokens whose exp timestamp is earlier than time.time()", in the
+  one prompt section that says what success looks like. Expected behaviour is
+  now built from evidence only: the failing test, the exception it raises, and
+  A4's citation-verified conclusion. Thin evidence produces a thin prompt
+  rather than a guess. The same literals are gone from the retry brief, and
+  `github_repo_name` no longer defaults to the fixture repository — an
+  unconfigured target now refuses to publish instead of naming `vulnapi`.
+* **B-B06** rollback. The subtlety is that a plan producing *no patch* is
+  ordinary — most scope files need no change — so that must never trigger a
+  restore. What must is an exception partway through: writes already on disk
+  are real, `state.patch_bundle` is never set, and A8 then validates changes no
+  bundle records. A7 now snapshots every file it writes and restores them on
+  exception. The redundant `write_text(original)` immediately before the patch
+  write is gone with it.
+* **B-B07** was mostly already handled — `validate_patch_integrity` rejects a
+  no-op, so a stub output never became a candidate. What remained: an LLM
+  exception returned `apply_stub_plan`, the integrity gate rejected it as
+  `no_op`, and that overwrote `retry_reason` — so a call that never completed
+  was recorded as "the model returned an unchanged file". A failed call is now
+  a failed attempt, with the error preserved.
+* **B-B08** the lease was 60 s against one to three LLM calls. It is now 600 s
+  and renewed per plan; losing it stops further writes rather than risking a
+  concurrent writer in the same clone.
+
+The diff renderer is a plain table, deliberately no `shiki` — that dependency
+was removed once already and re-adding ~2 MB to colour keywords buys less than
+add/remove colouring. Line numbers come from the hunk headers and advance per
+side, so they are the file's own numbering; `+++`/`---` are classified before
+`+`/`-` content, or every file header reads as two extra changed lines.
 
 **Phase 4 ✅** (closed 2026-08-09) — A5.5 is the pipeline's **privacy
 boundary**: the only point where secrets are masked before an LLM call. It ran
@@ -132,12 +172,12 @@ What closed the phase:
 
 ## Test suites
 
-- **Backend** — 2011 pass, 4 skipped. One pre-existing environmental failure:
+- **Backend** — 2030 pass, 4 skipped. One pre-existing environmental failure:
   `test_reproduction_stability_gate` asserts `get_head_sha(vulnapi)` is
   non-empty, but the `vulnapi/` fixture has no `.git`, so it returns `""`. The
   test's skip guard only checks that the directory exists, not that it is a git
   repo, so it fails rather than skipping. Not caused by any phase work.
-- **Frontend** — 46 pass across 5 files. Component tests run on jsdom, opted
+- **Frontend** — 57 pass across 6 files. Component tests run on jsdom, opted
   into per file with a `// @vitest-environment jsdom` docblock; shared shims
   live in `src/test/setup.ts`. Test config is `vitest.config.ts`, separate from
   `vite.config.ts` because the TanStack Start plugin must not run under Vitest

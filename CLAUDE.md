@@ -902,9 +902,12 @@ Measured against the phase-0 baseline, not asserted:
    A8 reads `mutation_score` / `survived_mutants` / `total_mutants` and leaves
    `correctness_score = None` when there is no patch.
 2. ✅ **Done.** A3's stub fallback is gated on `code == -1` (tool genuinely absent).
-3. 🟡 **Partial.** Repository-specific literals (T2): `config.py:20
-   github_repo_name = "vulnapi"` and the JWT/expiry literals in
-   `runtime_patch_prompt.py` / `retry_brief_builder.py` remain.
+3. ✅ **Done.** Repository-specific literals (T2) are gone. The prompt's
+   expected behaviour is built from evidence (failing test, exception, A4's
+   conclusion) rather than a keyword table that matched `"exp"` inside
+   "unexpected"; the JWT/expiry strings are out of `retry_brief_builder.py`;
+   and `github_repo_name` no longer defaults to `vulnapi` — an unconfigured
+   target refuses to publish rather than naming the fixture repository.
 4. ✅ **Done.** `services/path_resolution.py` extracted, with tests.
 5. ✅ **Done.** A9's finding identity is `(tool, normalized path, normalized
    message)` — no line number, so an insertion above an existing finding no
@@ -936,7 +939,8 @@ Measured against the phase-0 baseline, not asserted:
 12. 🔴 Split A10: mergeability decision vs. PR publication.
 13. 🟡 **Partial.** `a0_orchestrator.py` is deleted ✅;
     `citation_validator.py`'s pass-through half remains 🔴.
-14. 🔴 Add A7 rollback so a partial patch set cannot reach A8.
+14. ✅ **Done.** A7 snapshots every file it writes and restores them when an
+    exception interrupts generation, so a partial patch set cannot reach A8.
 
 **P2 — Context Engineering** — ✅ shipped. A5.5 executes in the graph
 (`engineer_context`), publishes to `GET /api/runs/{id}/context`, and has a V1

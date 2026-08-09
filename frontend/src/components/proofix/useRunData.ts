@@ -28,6 +28,7 @@ import {
   getRepairAttempts,
   getRunAgents,
   getRunContext,
+  getRunPatch,
   getRunReport,
   getWorkspaceHeader,
   isLive,
@@ -50,6 +51,7 @@ import {
   MOCK_RUN_REPORT,
   MOCK_WORKSPACE_HEADER,
   type ContextPackageModel,
+  type PatchBundleModel,
   type ExecutiveSummaryModel,
   type RepairAttemptsModel,
   type RunReportModel,
@@ -62,7 +64,8 @@ const POLL_INTERVAL_MS = 2500;
 const MOCK_RUN_ID = "vulnapi-live";
 
 /** The run-scoped models, each independently fetchable and independently failable. */
-export type RunModelKey = "agents" | "header" | "summary" | "report" | "attempts" | "context";
+export type RunModelKey =
+  "agents" | "header" | "summary" | "report" | "attempts" | "context" | "patch";
 
 /**
  * Load state for one model.
@@ -114,6 +117,14 @@ export interface RunData {
    * "asked, and there is none" from "not asked yet".
    */
   context: ContextPackageModel | null;
+  /**
+   * A7's patch bundle, or `null` when it produced none.
+   *
+   * Unlike `context` this is re-fetched every poll: A7 regenerates on each
+   * validation retry, so the diff on screen genuinely changes while a run is in
+   * flight.
+   */
+  patch: PatchBundleModel | null;
   header: WorkspaceHeaderModel;
   summary: ExecutiveSummaryModel;
   report: RunReportModel;
@@ -149,6 +160,7 @@ export function useRunData(runId: string, done: boolean): RunData {
     isLive ? EMPTY_REPAIR_ATTEMPTS : MOCK_REPAIR_ATTEMPTS,
   );
   const [context, setContext] = useState<ContextPackageModel | null>(null);
+  const [patch, setPatch] = useState<PatchBundleModel | null>(null);
   const [repositories, setRepositories] = useState<SidebarRepo[]>(isLive ? [] : MOCK_REPOSITORIES);
 
   const [status, setStatus] = useState<Record<RunModelKey, ModelState>>(() => {
@@ -160,6 +172,7 @@ export function useRunData(runId: string, done: boolean): RunData {
       report: initial,
       attempts: initial,
       context: initial,
+      patch: initial,
     };
   });
 
@@ -198,6 +211,7 @@ export function useRunData(runId: string, done: boolean): RunData {
     firstLoadDone.current = false;
     contextRef.current = null;
     setContext(null);
+    setPatch(null);
   }, [runId]);
 
   // Run-scoped models. Polled while the run is in flight, fetched once after.
@@ -211,6 +225,7 @@ export function useRunData(runId: string, done: boolean): RunData {
         report: SETTLED,
         attempts: SETTLED,
         context: SETTLED,
+        patch: SETTLED,
       });
       return;
     }
@@ -228,6 +243,7 @@ export function useRunData(runId: string, done: boolean): RunData {
           report: { ...prev.report, loading: true },
           attempts: { ...prev.attempts, loading: true },
           context: { ...prev.context, loading: true },
+          patch: { ...prev.patch, loading: true },
         }));
       }
 
@@ -241,10 +257,12 @@ export function useRunData(runId: string, done: boolean): RunData {
         // been read there is nothing to re-poll. Skipping the request keeps the
         // poll from growing by a round trip for an answer that cannot change.
         contextRef.current ? Promise.resolve(contextRef.current) : getRunContext(runId),
+        getRunPatch(runId),
       ]);
       if (cancelled) return;
 
-      const [agentsRes, headerRes, summaryRes, attemptsRes, reportRes, contextRes] = results;
+      const [agentsRes, headerRes, summaryRes, attemptsRes, reportRes, contextRes, patchRes] =
+        results;
 
       // An empty agent list is not an answer worth adopting — the backend
       // returns one before the registry is populated — but it is not a failure
@@ -259,6 +277,10 @@ export function useRunData(runId: string, done: boolean): RunData {
         contextRef.current = contextRes.value;
         setIfChanged<ContextPackageModel | null>(setContext, contextRes.value);
       }
+      // Adopted even when null: A7 having produced no bundle is an answer, and
+      // keeping a previous run's diff on screen would be worse than blank.
+      if (patchRes.status === "fulfilled")
+        setIfChanged<PatchBundleModel | null>(setPatch, patchRes.value);
 
       setStatus((prev) => {
         const settle = (key: RunModelKey, r: PromiseSettledResult<unknown>): ModelState =>
@@ -277,6 +299,7 @@ export function useRunData(runId: string, done: boolean): RunData {
           attempts: settle("attempts", attemptsRes),
           report: settle("report", reportRes),
           context: settle("context", contextRes),
+          patch: settle("patch", patchRes),
         };
       });
 
@@ -301,6 +324,7 @@ export function useRunData(runId: string, done: boolean): RunData {
     () => ({
       agents,
       context,
+      patch,
       header,
       summary,
       report,
@@ -315,6 +339,7 @@ export function useRunData(runId: string, done: boolean): RunData {
     [
       agents,
       context,
+      patch,
       header,
       summary,
       report,

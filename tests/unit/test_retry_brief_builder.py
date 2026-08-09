@@ -29,10 +29,21 @@ def test_build_retry_brief_includes_validation_context():
 
     assert brief.attempt == 1
     assert brief.previous_patch_summary is not None
-    assert "validate_token(expired_token) == False" in (brief.expected_behaviour or "")
+    # pytest's own expected value, unedited. This used to read
+    # `validate_token(expired_token) == False` — the builder prepended a
+    # function and parameter name from the `vulnapi` fixture whenever a test
+    # name contained "token", producing an assertion the repository under
+    # repair never wrote (B-B03).
+    assert brief.expected_behaviour == "False"
     assert brief.actual_behaviour == "True"
-    assert "expired JWT tokens" in (brief.retry_instruction or "")
-    assert "DIFFERENT implementation" in (brief.retry_instruction or "")
+    # The instruction names the test that failed, not a conclusion about *why*.
+    # "Previous attempt still accepted expired JWT tokens" used to appear here
+    # for any repository whose test name contained "expired" — a claim about
+    # behaviour nobody measured, on a cache or a session or a lock (B-B03).
+    instruction = brief.retry_instruction or ""
+    assert "JWT" not in instruction
+    assert "tests/test_auth.py::test_expired_token_rejected" in instruction
+    assert "DIFFERENT implementation" in instruction
     assert brief.validation_failure is not None
 
 

@@ -29,6 +29,7 @@ export const ENDPOINTS = {
   retryAttempts: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/attempts`,
   runContext: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/context`,
   runPlan: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/plan`,
+  runPatch: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/patch`,
 } as const;
 
 export interface FetcherOptions extends RequestInit {

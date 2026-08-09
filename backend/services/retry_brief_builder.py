@@ -92,14 +92,16 @@ def retry_reason_from_brief(retry_brief: RetryBrief) -> str:
 
 
 def _format_expected(validation_failure: ValidationFailure, reproduction: dict | None) -> str | None:
+    """The expected value pytest reported, verbatim.
+
+    It used to be rewritten: `(token)` became `(expired_token)`, and a test with
+    "token" in its name had `validate_token(expired_token) == ` prepended. Those
+    are one fixture repository's function and parameter names, edited into an
+    assertion the repository under repair never wrote. The parser already
+    extracted what pytest said; changing it can only make it less true.
+    """
     if validation_failure.expected_value:
-        ev = validation_failure.expected_value
-        if "validate_token" in ev:
-            return ev.replace("(token)", "(expired_token)")
-        failing_test = validation_failure.failing_test or ""
-        if "token" in failing_test.lower():
-            return f"validate_token(expired_token) == {ev}"
-        return ev
+        return validation_failure.expected_value
 
     repro = reproduction or {}
     if repro.get("failing_test"):
@@ -118,10 +120,10 @@ def _failure_context(validation_failure: ValidationFailure, reproduction: dict |
     if validation_failure.mutation_result and validation_failure.mutation_result.get("mutant_survived"):
         return "Previous attempt did not kill the mutation — tests pass without validating the fix."
 
-    repro = reproduction or {}
-    if "expired" in (validation_failure.failing_test or "").lower() or "expired" in (repro.get("failing_test") or ""):
-        return "Previous attempt still accepted expired JWT tokens."
-
+    # "Previous attempt still accepted expired JWT tokens" lived here, keyed on
+    # the word "expired" appearing in a test name. It asserted what the previous
+    # patch did wrong — a specific claim about behaviour nobody measured — on
+    # any repository with a test about expiry, of a cache, a session, a lock.
     if validation_failure.failing_test:
         return f"Previous patch did not fix {validation_failure.failing_test}."
 

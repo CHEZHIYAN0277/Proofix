@@ -163,16 +163,25 @@ class GitHubPRService:
         branch: str,
         draft: bool = False,
     ) -> str | None:
+        owner = self.settings.github_repo_owner
+        name = self.settings.github_repo_name
+
         if self.settings.github_dry_run or not self.settings.github_token:
-            return (
-                f"https://github.com/{self.settings.github_repo_owner}/"
-                f"{self.settings.github_repo_name}/pull/DRY_RUN"
-            )
+            # A dry-run URL that names an unconfigured target is a guess about
+            # where this PR would have gone. Say there is no target instead.
+            if not owner or not name:
+                return None
+            return f"https://github.com/{owner}/{name}/pull/DRY_RUN"
+
+        if not owner or not name:
+            # Refusing beats opening a pull request against whatever repository
+            # the defaults happen to name.
+            return None
 
         from github import Github
 
         g = Github(self.settings.github_token)
-        repo = g.get_repo(f"{self.settings.github_repo_owner}/{self.settings.github_repo_name}")
+        repo = g.get_repo(f"{owner}/{name}")
         pr = repo.create_pull(
             title=title,
             body=body,

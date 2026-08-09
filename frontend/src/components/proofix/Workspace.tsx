@@ -14,6 +14,7 @@ import { NewRunScreen } from "@/components/proofix/NewRunScreen";
 import { AnalyzingSequence } from "@/components/proofix/AnalyzingSequence";
 
 import { RetrySequence } from "@/components/proofix/RetrySequence";
+import { DiffView, diffStats, parseUnifiedDiff } from "@/components/proofix/DiffView";
 
 import { ProgressRing } from "@/components/proofix/ProgressRing";
 import { GitBranch, Hash, Clock, RefreshCcw, Sparkles, GitPullRequest } from "lucide-react";
@@ -23,6 +24,7 @@ import {
   type ExecutiveSummaryModel,
   type RunReportModel,
   type ContextPackageModel,
+  type PatchBundleModel,
 } from "@/mocks";
 import { useRunData, type ModelState } from "@/components/proofix/useRunData";
 import { resolveRunLifecycle, type RunLifecycleView } from "@/components/proofix/runLifecycle";
@@ -596,6 +598,18 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
                 ) : null;
               })()}
 
+              {/* The diff, once generation has been reached. */}
+              {(() => {
+                const patchIdx = agents.findIndex((a) => a.id === "patch");
+                return patchIdx >= 0 && activeIndex >= patchIdx ? (
+                  <PatchPanel
+                    bundle={runData.patch}
+                    state={runData.status.patch}
+                    onRetry={runData.retry}
+                  />
+                ) : null;
+              })()}
+
               {(() => {
                 const mutationIdx = agents.findIndex((a) => a.id === "mutation");
                 const showRetries = mutationIdx >= 0 && activeIndex >= mutationIdx;
@@ -870,6 +884,102 @@ function ContextPanel({
 
       {state.error && (
         <PanelError panel="the latest context package" message={state.error} onRetry={onRetry} />
+      )}
+    </section>
+  );
+}
+
+/**
+ * The diff A7 produced, which is the product.
+ *
+ * The patch card lists filenames; `/runs/{id}/patch` has served both sides of
+ * every file all along and nothing rendered them. Same three states as the
+ * context panel — a 404 is "generation never completed", distinct from a bundle
+ * whose patch list is empty, which is "generation completed and changed
+ * nothing". Those are different facts and the panel says which.
+ */
+function PatchPanel({
+  bundle,
+  state,
+  onRetry,
+}: {
+  bundle: PatchBundleModel | null;
+  state: ModelState;
+  onRetry: () => void;
+}) {
+  if (state.error && !state.loaded) {
+    return <PanelError panel="the patch" message={state.error} onRetry={onRetry} />;
+  }
+
+  if (!bundle) {
+    return (
+      <section className="rounded-2xl border border-border bg-surface p-4">
+        <h3 className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">Patch</h3>
+        <p className="mt-1.5 text-xs text-ink-soft">
+          Pending — patch generation has not produced a bundle for this run yet.
+        </p>
+      </section>
+    );
+  }
+
+  const stats = diffStats(parseUnifiedDiff(bundle.diff_text));
+
+  return (
+    <section className="space-y-3 rounded-2xl border border-border bg-surface p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">Patch</h3>
+        {bundle.patches.length > 0 && (
+          <span className="font-mono text-[11px]">
+            <span className="text-status-completed">+{stats.added}</span>{" "}
+            <span className="text-status-failed">−{stats.removed}</span>{" "}
+            <span className="text-ink-soft">
+              across {bundle.patches.length} file{bundle.patches.length === 1 ? "" : "s"}
+            </span>
+          </span>
+        )}
+      </div>
+
+      {bundle.patches.length === 0 ? (
+        <p className="text-[11px] text-ink-soft">
+          Patch generation completed and produced no change. This is not the same as generation
+          having failed — no candidate cleared the integrity check.
+        </p>
+      ) : (
+        <>
+          <ul className="flex flex-wrap gap-1">
+            {bundle.patches.map((p) => (
+              <li
+                key={p.file}
+                className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[10px] text-ink-soft"
+              >
+                {p.file}
+                {/* A7's own word for how it wrote the file, passed through. */}
+                <span className="ml-1 opacity-70">· {p.method}</span>
+              </li>
+            ))}
+          </ul>
+
+          <DiffView diff={bundle.diff_text} />
+
+          {bundle.contracts.length > 0 && (
+            <div>
+              <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
+                Behavioural contracts
+              </div>
+              <ul className="space-y-0.5 text-[11px] text-ink-soft">
+                {bundle.contracts.map((c, i) => (
+                  <li key={`${c.location}:${i}`}>
+                    <span className="font-mono text-ink">{c.location}</span> — {c.assertion}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+
+      {state.error && (
+        <PanelError panel="the latest patch" message={state.error} onRetry={onRetry} />
       )}
     </section>
   );

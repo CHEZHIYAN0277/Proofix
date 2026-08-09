@@ -36,6 +36,7 @@ vi.mock("@/lib/runService", async () => {
     // Null is the honest mock-mode answer: there is no context fixture, and
     // inventing a ranking would put fabricated privacy evidence on screen.
     getRunContext: async () => null,
+    getRunPatch: async () => null,
     listRepositories: async () => [],
     eventSourceFor: () => () => () => undefined,
     createRun: vi.fn(),

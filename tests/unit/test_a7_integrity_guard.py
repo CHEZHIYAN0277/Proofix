@@ -91,6 +91,9 @@ async def test_run_skips_disk_write_when_integrity_fails(tmp_path: Path):
     agent.settings = MagicMock(stub_mode=False, llm_configured=lambda: True)
     agent.store = MagicMock()
     agent.store.acquire_lock = AsyncMock(return_value=True)
+    # The lease is renewed per plan (B-B08): 60 s was shorter than the LLM calls
+    # it guarded, so the lock expired mid-generation.
+    agent.store.renew_lock = AsyncMock(return_value=True)
     agent.store.append_event = AsyncMock()
     agent.store.set_json = AsyncMock()
     agent.store.release_lock = AsyncMock()

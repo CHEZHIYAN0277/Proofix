@@ -17,7 +17,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     github_token: str = ""
     github_repo_owner: str = ""
-    github_repo_name: str = "vulnapi"
+    # No default. It used to be "vulnapi" — the fixture repository — so an
+    # operator who set a token but forgot the repo name got a PR aimed at, and a
+    # dry-run URL naming, a repository their run had nothing to do with.
+    github_repo_name: str = ""
     github_dry_run: bool = True
     stub_mode: bool = True
     max_retries: int = 3

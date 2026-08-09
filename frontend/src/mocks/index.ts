@@ -29,6 +29,8 @@ export type {
   RetryAttempt,
   RepoMetadata,
   ContextPackageModel,
+  PatchBundleModel,
+  PatchCandidateModel,
   ContextRedaction,
   RankedContextFile,
 } from "./runReport";

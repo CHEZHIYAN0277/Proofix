@@ -36,6 +36,7 @@ const getExecutiveSummary = vi.fn();
 const getRunReport = vi.fn();
 const getRepairAttempts = vi.fn();
 const getRunContext = vi.fn();
+const getRunPatch = vi.fn();
 const listRepositories = vi.fn();
 
 vi.mock("@/lib/runService", () => ({
@@ -46,6 +47,7 @@ vi.mock("@/lib/runService", () => ({
   getRunReport: (...a: unknown[]) => getRunReport(...a),
   getRepairAttempts: (...a: unknown[]) => getRepairAttempts(...a),
   getRunContext: (...a: unknown[]) => getRunContext(...a),
+  getRunPatch: (...a: unknown[]) => getRunPatch(...a),
   listRepositories: (...a: unknown[]) => listRepositories(...a),
   // No event source: the journal is driven by the agent list alone here.
   eventSourceFor: () => () => () => undefined,
@@ -97,6 +99,7 @@ function backendReturns(over: Record<string, unknown> = {}) {
   // `null` is the 404 case: A5.5 has not published a package. `runService`
   // absorbs that status so absence never arrives as a rejection.
   getRunContext.mockResolvedValue(over.context ?? null);
+  getRunPatch.mockResolvedValue(over.patch ?? null);
   listRepositories.mockResolvedValue([]);
 }
 
@@ -339,5 +342,81 @@ describe("Context package panel", () => {
 
     await screen.findByText(/Status · Completed/);
     expect(screen.queryByText("Context Package")).toBeNull();
+  });
+});
+
+describe("Patch panel", () => {
+  const PATCH_AGENTS = [agent("patch", "Patch Generator"), agent("merge", "Mergeability")];
+
+  const BUNDLE = {
+    issue_id: "fix-0",
+    style_exemplar_commit: "abc1234",
+    patches: [
+      {
+        file: "pkg/auth.py",
+        original: "def validate(token):\n    return True\n",
+        patched: "def validate(token):\n    return False\n",
+        method: "ast_validated_write",
+      },
+    ],
+    contracts: [{ assertion: "expired tokens rejected", location: "pkg/auth.py" }],
+    diff_text:
+      "--- a/pkg/auth.py\n+++ b/pkg/auth.py\n@@ -1,2 +1,2 @@\n def validate(token):\n-    return True\n+    return False\n",
+  };
+
+  it("renders the diff, not just the filenames", async () => {
+    backendReturns({ agents: PATCH_AGENTS, patch: BUNDLE });
+
+    render(<Workspace runId="run-patch" />);
+
+    // Testing Library trims text on both sides, so the indentation the diff
+    // preserves is not part of the query.
+    expect(await screen.findByText("return False")).toBeTruthy();
+    expect(screen.getByText("return True")).toBeTruthy();
+    // Anchored: the summary spans hold exactly "+1" and "−1", while their
+    // parent holds "+1 −1 across 1 file" and must not also match.
+    expect(screen.getByText(/^\+1$/)).toBeTruthy();
+    expect(screen.getByText(/^−1$/)).toBeTruthy();
+  });
+
+  it("passes A7's write method through rather than inferring one", async () => {
+    backendReturns({ agents: PATCH_AGENTS, patch: BUNDLE });
+
+    render(<Workspace runId="run-patch-method" />);
+
+    expect(await screen.findByText(/ast_validated_write/)).toBeTruthy();
+  });
+
+  it("distinguishes 'produced no bundle' from 'produced no change'", async () => {
+    // 404 → null: generation never completed.
+    backendReturns({ agents: PATCH_AGENTS, patch: null });
+    const pending = render(<Workspace runId="run-patch-pending" />);
+    expect(await screen.findByText(/Pending — patch generation/)).toBeTruthy();
+    pending.unmount();
+
+    // A bundle with no patches: generation completed and changed nothing.
+    backendReturns({ agents: PATCH_AGENTS, patch: { ...BUNDLE, patches: [], diff_text: "" } });
+    render(<Workspace runId="run-patch-empty" />);
+    expect(await screen.findByText(/completed and produced no change/)).toBeTruthy();
+    expect(screen.queryByText(/Pending — patch generation/)).toBeNull();
+  });
+
+  it("surfaces a real failure with a retry", async () => {
+    backendReturns({ agents: PATCH_AGENTS });
+    getRunPatch.mockRejectedValue(new Error("API 500: Internal Server Error"));
+
+    render(<Workspace runId="run-patch-err" />);
+
+    expect(await screen.findByText(/Could not load the patch/)).toBeTruthy();
+    expect(screen.queryByText(/Pending — patch generation/)).toBeNull();
+  });
+
+  it("is not shown before the pipeline reaches patch generation", async () => {
+    backendReturns({ agents: AGENTS, patch: BUNDLE });
+
+    render(<Workspace runId="run-patch-early" />);
+
+    await screen.findByText(/Status · Completed/);
+    expect(screen.queryByText("Patch")).toBeNull();
   });
 });

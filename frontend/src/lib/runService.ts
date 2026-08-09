@@ -24,6 +24,7 @@ import {
   type RepairAttemptsModel,
   type RepoMetadata,
   type ContextPackageModel,
+  type PatchBundleModel,
 } from "@/mocks";
 import type { SidebarRepo } from "@/components/proofix/Sidebar";
 import type { AgentEntry } from "@/components/proofix/data";
@@ -129,6 +130,23 @@ export async function getRunContext(runId: string): Promise<ContextPackageModel 
   if (DATA_SOURCE !== "api") return null;
   try {
     return await apiFetch<ContextPackageModel>(ENDPOINTS.runContext(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/**
+ * A7's patch bundle, or `null` when it produced none.
+ *
+ * Same 404-is-an-answer contract as `getRunContext`. Unlike the context
+ * package this is *not* write-once: A7 regenerates on every validation retry,
+ * so the bundle genuinely changes while a run is in flight.
+ */
+export async function getRunPatch(runId: string): Promise<PatchBundleModel | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<PatchBundleModel>(ENDPOINTS.runPatch(runId));
   } catch (reason) {
     if (isStatus(reason, 404)) return null;
     throw reason;

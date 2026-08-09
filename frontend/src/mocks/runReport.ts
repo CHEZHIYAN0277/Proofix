@@ -179,6 +179,39 @@ export interface ContextPackageModel {
   };
 }
 
+/** One file A7 rewrote, with both sides as it recorded them. */
+export interface PatchCandidateModel {
+  file: string;
+  original: string;
+  patched: string;
+  /**
+   * How A7 wrote the file. Passed through from the backend untouched — it is
+   * what the integrity badge is allowed to claim, so it must not be inferred
+   * here.
+   */
+  method: string;
+}
+
+export interface BehavioralContractModel {
+  assertion: string;
+  location: string;
+}
+
+/**
+ * A7's patch bundle, from `/runs/{id}/patch`.
+ *
+ * A 404 means A7 produced no bundle. That is a different fact from a bundle
+ * whose `patches` list is empty: the first is "generation never completed", the
+ * second is "generation completed and changed nothing".
+ */
+export interface PatchBundleModel {
+  issue_id: string;
+  patches: PatchCandidateModel[];
+  contracts: BehavioralContractModel[];
+  diff_text: string;
+  style_exemplar_commit: string | null;
+}
+
 export interface ExecutiveSummaryModel {
   repository: string;
   bug: string;

@@ -134,9 +134,28 @@ class RedisStore:
             await self.client.hset(key, mapping=fields)
         await self.client.expire(key, self.ttl)
 
-    async def acquire_lock(self, run_id: str, ttl: int = 60) -> bool:
+    #: Default patch-lock lease. The old 60 s was shorter than the work it
+    #: guarded — A7 makes one to three LLM calls per invocation, any of which
+    #: can exceed a minute on its own — so the lock routinely expired
+    #: mid-generation and a second writer could enter the same clone. The lease
+    #: is renewed per plan (`renew_lock`), so this bounds one iteration rather
+    #: than the whole agent.
+    LOCK_TTL_SECONDS = 600
+
+    async def acquire_lock(self, run_id: str, ttl: int = LOCK_TTL_SECONDS) -> bool:
         key = f"{self._prefix(run_id)}:lock"
         return bool(await self.client.set(key, "1", nx=True, ex=ttl))
+
+    async def renew_lock(self, run_id: str, ttl: int = LOCK_TTL_SECONDS) -> bool:
+        """Extend a lease this process already holds.
+
+        `xx=True` is what makes it a renewal rather than a re-acquire: if the
+        lease has already expired the key is gone, nothing is written, and the
+        caller learns it no longer holds the lock instead of silently taking it
+        back from whoever picked it up.
+        """
+        key = f"{self._prefix(run_id)}:lock"
+        return bool(await self.client.set(key, "1", xx=True, ex=ttl))
 
     async def release_lock(self, run_id: str) -> None:
         key = f"{self._prefix(run_id)}:lock"

@@ -73,22 +73,50 @@ def derive_runtime_behaviors(
             f"{current}"
         ).strip()
 
-    expected = _expected_from_test_name(failing_test, root_cause)
-    if not expected:
-        expected = f"Fix must address: {root_cause.root_cause or root_cause.summary}"
+    expected = _expected_from_evidence(failing_test, root_cause, exception_type, exception_message)
 
     acceptance = f"pytest {failing_test} passes" if failing_test else "All targeted tests pass after the fix."
     return current[:800], expected[:800], acceptance
 
 
-def _expected_from_test_name(failing_test: str, root_cause: RootCauseBrief) -> str:
-    lowered = failing_test.lower()
-    text = (root_cause.root_cause or root_cause.summary or "").lower()
-    if "expired" in lowered or "expiry" in text or "exp" in text:
-        return "Reject tokens whose exp timestamp is earlier than time.time()."
-    if "rejected" in lowered and "token" in text:
-        return "Invalid or expired tokens must be rejected."
-    return ""
+def _expected_from_evidence(
+    failing_test: str,
+    root_cause: RootCauseBrief,
+    exception_type: str,
+    exception_message: str,
+) -> str:
+    """What the patch must achieve, stated only from evidence this run produced.
+
+    This replaces a keyword guess that inferred *domain semantics* from a test
+    name. It returned "Reject tokens whose exp timestamp is earlier than
+    time.time()" whenever the root-cause text contained the substring `exp` —
+    which matches "unexpected", "export", "explicit", "experiment". A run
+    repairing a null dereference was handed JWT expiry as its fix target, in the
+    one section of the prompt that tells the model what success looks like.
+
+    A guess about what a repository *means* has no evidence behind it and cannot
+    be verified, so there is nothing to state but what the pipeline actually
+    observed: the test that fails, the exception it raises, and A4's
+    citation-verified conclusion. If that is thin, the honest prompt is thin.
+    """
+    parts: list[str] = []
+
+    if failing_test:
+        parts.append(f"`{failing_test}` must pass.")
+
+    # The exception is the failure in the repository's own words. Reported
+    # without interpretation — naming the type is a fact, guessing why it was
+    # raised is not.
+    if exception_message:
+        parts.append(f"The {exception_type} it currently raises ({exception_message}) must not occur.")
+    elif exception_type:
+        parts.append(f"The {exception_type} it currently raises must not occur.")
+
+    conclusion = root_cause.root_cause or root_cause.summary
+    if conclusion:
+        parts.append(f"Address the root cause: {conclusion}")
+
+    return " ".join(parts) or "The reproduced failure must no longer occur."
 
 
 def enrich_patch_plan_from_runtime(
@@ -288,11 +316,15 @@ def build_retry_prompt_section(
             "A surviving mutant indicates the previous patch did not validate the fix.\n"
         )
 
+    # The example that used to close this instruction — "(e.g. expiry
+    # comparison if tokens must be rejected)" — described one fixture
+    # repository's bug. On every other repository it named a change the code has
+    # no reason to contain, in the sentence telling the model what to do next.
     instruction = retry_brief.retry_instruction or (
         "The previous patch did not fix the bug. Validation still fails.\n"
         "Generate a DIFFERENT implementation.\n"
         "Do not repeat the previous patch.\n"
-        "Ensure the required semantic change is present (e.g. expiry comparison if tokens must be rejected).\n"
+        "Make the semantic change the failing test requires.\n"
     )
     sections.append(f"### Retry instruction\n{instruction}\n")
     return "".join(sections)

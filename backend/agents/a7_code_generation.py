@@ -77,10 +77,34 @@ class A7CodeGenerationAgent(AgentBase):
             contracts: list[BehavioralContract] = []
             exemplar_commit = None
 
+            # Every file this invocation writes, with the content it had first.
+            #
+            # A plan producing no patch is ordinary — most scope files need no
+            # change, and the loop skips them — so that must never trigger a
+            # restore. What must is an **exception** partway through: the writes
+            # already on disk are real, `state.patch_bundle` is never set, and
+            # A8 then validates a clone carrying changes no bundle records and
+            # no scoring accounts for. Rolling back leaves the clone exactly as
+            # A7 found it, which is the only state A8 can reason about.
+            written: dict[Path, str] = {}
+
             for plan in plans[:3]:
                 full = repo / plan.file
                 if not full.exists():
                     continue
+
+                # Renew before each plan's LLM calls rather than trusting one
+                # lease to outlast every plan. Losing the lease means another
+                # writer may already be in this clone, so stop writing — with
+                # whatever earlier plans produced kept, since those writes were
+                # made while the lock was genuinely held.
+                if not await self._renew_lock(state.run_id):
+                    await self.emit_status(
+                        state,
+                        "failed",
+                        f"Patch lock lease lost before {plan.file}; stopping to avoid a concurrent write",
+                    )
+                    break
 
                 original = self._resolve_original_baseline(full, plan.file, state)
                 commit, exemplar = get_style_exemplar(repo, plan.file)
@@ -132,7 +156,10 @@ class A7CodeGenerationAgent(AgentBase):
                     await self.emit_status(state, "failed", f"Invalid Python in {plan.file}")
                     continue
 
-                full.write_text(original, encoding="utf-8")
+                # The original was written back immediately before the patch —
+                # two writes where one suffices, the first of which only ever
+                # produced a window where the file held content nobody wanted.
+                written.setdefault(full, original)
                 full.write_text(llm_output.patched_content, encoding="utf-8")
 
                 patches.append(
@@ -176,9 +203,57 @@ class A7CodeGenerationAgent(AgentBase):
                 f"Generated {len(patches)} patches from {len(plans)} plans",
                 payload,
             )
+        except Exception as exc:  # noqa: BLE001 — restored, reported, re-raised
+            restored = self._rollback(written)
+            state.errors.append(
+                {"agent": self.agent_id, "error": str(exc), "rolled_back": restored}
+            )
+            await self.emit_status(
+                state,
+                "failed",
+                (
+                    f"Patch generation failed: {exc}. "
+                    f"Rolled back {len(restored)} partially patched file(s)."
+                    if restored
+                    else f"Patch generation failed: {exc}. No files had been written."
+                ),
+                {"rolled_back": restored},
+            )
+            raise
         finally:
             await self.store.release_lock(state.run_id)
         return state
+
+    async def _renew_lock(self, run_id: str) -> bool:
+        """Extend the patch lease, tolerating a store that cannot renew.
+
+        `renew_lock` is newer than the stores in the test suite and than any
+        fake a caller may inject. A store without it is treated as holding the
+        lease — the pre-existing behaviour — rather than failing a run over a
+        capability that did not exist before.
+        """
+        renew = getattr(self.store, "renew_lock", None)
+        if renew is None:
+            return True
+        return bool(await renew(run_id))
+
+    @staticmethod
+    def _rollback(written: dict[Path, str]) -> list[str]:
+        """Restore every file this invocation wrote. Returns what was restored.
+
+        Best-effort by construction: a restore that itself fails must not mask
+        the original exception, which is the thing worth reporting. A file that
+        could not be restored is left out of the returned list, so the caller
+        reports what actually happened rather than what was attempted.
+        """
+        restored: list[str] = []
+        for path, original in written.items():
+            try:
+                path.write_text(original, encoding="utf-8")
+                restored.append(str(path))
+            except OSError:
+                continue
+        return restored
 
     def _learned_conventions(self, plan: PatchPlan) -> str:
         """Repository conventions learned from prior repairs, or "".
@@ -381,9 +456,15 @@ class A7CodeGenerationAgent(AgentBase):
                 return None, metrics
             metrics["semantic_diff"] = True
             return output, metrics
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — a failed call is a failed attempt
+            # Returning `apply_stub_plan(...)` here handed back the *original
+            # file* as though the model had produced it. The integrity gate then
+            # rejected it as `no_op` and overwrote `retry_reason` with that —
+            # so a call that never completed was recorded as "the model returned
+            # an unchanged file", and the real cause vanished from the metrics.
             metrics["retry_reason"] = "llm_error"
-            return apply_stub_plan(plan, original), metrics
+            metrics["llm_error"] = str(exc)[:200]
+            return None, metrics
 
     def _focus_section(
         self,
