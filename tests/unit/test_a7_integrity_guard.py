@@ -106,7 +106,6 @@ async def test_run_skips_disk_write_when_integrity_fails(tmp_path: Path):
 
     with (
         patch.object(agent, "_generate_from_plan", AsyncMock(return_value=(abbreviated_output, {}))),
-        patch("backend.agents.base.get_broadcaster", return_value=MagicMock(broadcast=AsyncMock())),
     ):
         from backend.models.blast import BlastGraphResult
         from backend.models.root_cause import RootCauseBrief

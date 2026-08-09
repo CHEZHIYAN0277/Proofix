@@ -7,7 +7,6 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
-from backend.services.ws_broadcaster import get_broadcaster
 from backend.state.events import AgentStatusEvent, RunLifecycleEvent
 from backend.state.redis_store import RedisStore
 
@@ -15,9 +14,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["websocket"])
 
-# Agents emit to Redis pub/sub *and* the in-process broadcaster, so the same
-# event reaches this socket twice. Track recently sent frames to guarantee the
-# client sees each exactly once. Bounded so a long run cannot grow it forever.
+# Frames can still repeat without the second delivery path that originally
+# required this: the socket replays history on connect and again on reconnect,
+# and the idle poll re-reads lifecycle events it may already have sent. Track
+# recently sent frames so the client sees each exactly once. Bounded so a long
+# run cannot grow it forever.
 _DEDUPE_WINDOW = 512
 
 # Replay the same depth the REST timeline returns, so a client that reads
@@ -142,8 +143,17 @@ async def ws_run_timeline(websocket: WebSocket, run_id: str) -> None:
     except _ClientGone:
         return
 
-    broadcaster = get_broadcaster()
-    queue = broadcaster.subscribe(run_id)
+    # Redis pub/sub is the only delivery path (B-B13). An in-memory
+    # `WSBroadcaster` used to run alongside it, reaching same-process clients a
+    # second time — invisible thanks to `_SentFrames`, and useless to a client
+    # attached to any other replica, which was the single-process assumption
+    # that stopped this from scaling.
+    #
+    # The main loop below no longer has a queue to block on, so the listener
+    # signals activity instead: the loop treats a period with no frames as idle,
+    # which is what licenses it to check whether the run has ended. Without this
+    # the terminal frame could overtake an event still in flight.
+    activity = asyncio.Event()
 
     redis_client: aioredis.Redis = websocket.app.state.redis
     pubsub = redis_client.pubsub()
@@ -173,6 +183,7 @@ async def ws_run_timeline(websocket: WebSocket, run_id: str) -> None:
                             await send_event(AgentStatusEvent.model_validate(decoded))
                     except ValidationError:
                         continue
+                    activity.set()
         except asyncio.CancelledError:
             pass
         except _ClientGone:
@@ -192,13 +203,14 @@ async def ws_run_timeline(websocket: WebSocket, run_id: str) -> None:
     try:
         while True:
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=_IDLE_POLL_SECONDS)
+                await asyncio.wait_for(activity.wait(), timeout=_IDLE_POLL_SECONDS)
             except asyncio.TimeoutError:
                 pass
             else:
-                # Drain everything queued before asking whether the run is over,
-                # so the terminal frame can never overtake a pending event.
-                await send_event(event)
+                # Frames arrived while we waited; the listener has already sent
+                # them. Go round again rather than asking whether the run is
+                # over, so a terminal frame can never overtake a pending event.
+                activity.clear()
                 continue
 
             # A lifecycle frame may have arrived on the channel while the queue
@@ -231,6 +243,5 @@ async def ws_run_timeline(websocket: WebSocket, run_id: str) -> None:
         pass
     finally:
         listener_task.cancel()
-        broadcaster.unsubscribe(run_id, queue)
         await pubsub.unsubscribe(channel)
         await pubsub.close()
