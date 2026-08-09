@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { scrollBehavior } from "@/hooks/useCountUp";
 import { Send, ChevronDown } from "lucide-react";
 import { MOCK_CHAT_SUGGESTIONS, mockAnswerer } from "@/mocks";
 import { DATA_SOURCE } from "@/lib/api";
@@ -48,7 +49,10 @@ export function ChatPanel({
 
   useEffect(() => {
     if (mode === "open") {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+      scrollRef.current?.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: scrollBehavior(),
+      });
     }
   }, [messages, mode]);
 

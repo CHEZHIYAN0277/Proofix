@@ -1,7 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 
-const prefersReducedMotion = () =>
+/**
+ * Whether the viewer asked for less motion.
+ *
+ * Exported because CSS cannot cover every case. The global
+ * `prefers-reduced-motion` block in `styles.css` neutralises animations and
+ * transitions, but it has no reach into two things this app does in
+ * JavaScript: `requestAnimationFrame` count-ups, which are not animations as
+ * far as CSS is concerned, and `window.scrollTo({behavior: "smooth"})`, where
+ * the explicit option beats the stylesheet's `scroll-behavior: auto`.
+ *
+ * Read at call time rather than cached: the setting can change while the page
+ * is open.
+ */
+export const prefersReducedMotion = () =>
   typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+/** `"auto"` when the viewer asked for less motion, so scrolling jumps. */
+export const scrollBehavior = (): ScrollBehavior => (prefersReducedMotion() ? "auto" : "smooth");
 
 /**
  * Animate a numeric value from 0 → target once, on mount or when the

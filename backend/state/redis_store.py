@@ -116,16 +116,44 @@ class RedisStore:
             events.append(RunLifecycleEvent.model_validate_json(item))
         return events
 
-    async def get_events(self, run_id: str, count: int = 100) -> list[AgentStatusEvent]:
+    async def get_events(
+        self,
+        run_id: str,
+        count: int = 100,
+        after: int | None = None,
+    ) -> list[AgentStatusEvent]:
+        """Agent events in chronological order.
+
+        `xrevrange` reads the *newest* `count`, so a run that emitted more than
+        that silently lost its oldest events — and the client replays the
+        timeline from the beginning, so what it lost was the start of the run,
+        with nothing saying so (B-B15).
+
+        `after` is an exclusive cursor on `AgentStatusEvent.sequence`, which
+        `AgentBase.emit_status` increments once per event per run and is
+        therefore monotonic. A caller that receives `count` events asks again
+        from the last sequence it saw until a short page comes back. Reading
+        forward from the cursor is what makes the whole timeline reachable
+        rather than only its tail.
+        """
         key = f"{self._prefix(run_id)}:events"
-        entries = await self.client.xrevrange(key, count=count)
+        entries = await self.client.xrevrange(key, count=count) if after is None else (
+            list(reversed(await self.client.xrange(key)))
+        )
+
         events = []
         for _entry_id, fields in reversed(entries):
             data = fields.get(b"data") or fields.get("data")
-            if data:
-                if isinstance(data, bytes):
-                    data = data.decode()
-                events.append(AgentStatusEvent.model_validate_json(data))
+            if not data:
+                continue
+            if isinstance(data, bytes):
+                data = data.decode()
+            event = AgentStatusEvent.model_validate_json(data)
+            if after is not None and event.sequence <= after:
+                continue
+            events.append(event)
+            if after is not None and len(events) >= count:
+                break
         return events
 
     async def update_meta(self, run_id: str, **fields: str) -> None:

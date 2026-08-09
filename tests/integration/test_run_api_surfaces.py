@@ -490,3 +490,62 @@ async def test_new_routes_are_registered_in_openapi(client, path):
     http, _store = client
     schema = (await http.get("/openapi.json")).json()
     assert path in schema["paths"]
+
+
+async def test_events_are_paginated_by_cursor(client):
+    """B-B15 — a run past the cap lost its *oldest* events, silently.
+
+    `xrevrange` reads the newest N, and the client replays the timeline from the
+    beginning, so what fell off was the start of the run with nothing saying so.
+    """
+    http, store = client
+    await _seed_run(store)
+
+    for sequence in range(1, 13):
+        await store.append_event(
+            AgentStatusEvent(
+                run_id=RUN_ID,
+                agent_id="A1",
+                status="completed",
+                message=f"event {sequence}",
+                sequence=sequence,
+            )
+        )
+
+    # `after=0` starts the walk: sequences begin at 1. Omitting the cursor
+    # keeps the old meaning — the most recent page — which is what every
+    # existing caller still gets.
+    latest = (await http.get(f"/api/runs/{RUN_ID}/events", params={"limit": 5})).json()
+    assert [e["sequence"] for e in latest] == [8, 9, 10, 11, 12]
+
+    first = (
+        await http.get(f"/api/runs/{RUN_ID}/events", params={"limit": 5, "after": 0})
+    ).json()
+    assert [e["sequence"] for e in first] == [1, 2, 3, 4, 5]
+
+    cursor = first[-1]["sequence"]
+    second = (
+        await http.get(f"/api/runs/{RUN_ID}/events", params={"limit": 5, "after": cursor})
+    ).json()
+    assert [e["sequence"] for e in second] == [6, 7, 8, 9, 10]
+
+    # A short page is how the caller knows it has the whole timeline.
+    last = (
+        await http.get(
+            f"/api/runs/{RUN_ID}/events", params={"limit": 5, "after": second[-1]["sequence"]}
+        )
+    ).json()
+    assert [e["sequence"] for e in last] == [11, 12]
+
+
+async def test_events_default_to_the_whole_timeline_for_existing_clients(client):
+    """The response stays a plain array; no client had to change."""
+    http, store = client
+    await _seed_run(store)
+    await store.append_event(
+        AgentStatusEvent(run_id=RUN_ID, agent_id="A1", status="completed", sequence=1)
+    )
+
+    events = (await http.get(f"/api/runs/{RUN_ID}/events")).json()
+    assert isinstance(events, list)
+    assert events[0]["sequence"] == 1

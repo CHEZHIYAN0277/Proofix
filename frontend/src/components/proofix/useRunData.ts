@@ -95,16 +95,36 @@ function messageOf(reason: unknown): string {
 }
 
 /**
- * Replace state only when the payload actually changed.
+ * Replace state only when the payload actually changed, serialising once.
  *
- * Each poll deserialises a fresh object, so a plain `setAgents` would hand the
+ * Each poll deserialises fresh objects, so a plain `setAgents` would hand the
  * execution journal a new array identity every 2.5s. `useExecutionRun`
  * re-subscribes its event source whenever `agents` changes, which would tear
- * down and replay the live stream mid-animation. Comparing by value keeps the
- * identity stable across polls that returned identical data.
+ * down and replay the live stream mid-animation. So the comparison has to be
+ * structural — reference equality always differs here and would be useless.
+ *
+ * The previous version stringified *both* sides on every comparison, and the
+ * previous value has by definition not changed since it was accepted, so it was
+ * re-serialised every 2.5 seconds, for every model, for the life of the run
+ * (B-F10). Remembering the string we accepted removes that half entirely.
+ *
+ * The comparison itself stays structural. Reference equality would be useless
+ * here: every poll deserialises fresh objects, so identity always differs and
+ * the execution journal would re-subscribe its event source on every tick.
  */
-function setIfChanged<T>(setter: Dispatch<SetStateAction<T>>, next: T) {
-  setter((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+function makeChangeGate() {
+  const lastSerialized = new Map<string, string>();
+
+  return function setIfChangedCached<T>(
+    key: RunModelKey | "repositories",
+    setter: Dispatch<SetStateAction<T>>,
+    next: T,
+  ) {
+    const serialized = JSON.stringify(next);
+    if (lastSerialized.get(key) === serialized) return;
+    lastSerialized.set(key, serialized);
+    setter(next);
+  };
 }
 
 export interface RunData {
@@ -188,6 +208,8 @@ export function useRunData(runId: string, done: boolean): RunData {
   const firstLoadDone = useRef(false);
   // Holds the package once fetched, so later polls can skip the request.
   const contextRef = useRef<ContextPackageModel | null>(null);
+  // Per-run cache of the last payload accepted for each model (B-F10).
+  const changed = useRef(makeChangeGate());
   const [loading, setLoading] = useState(isLive);
 
   // Repository list — refreshed when a run finishes so statuses stay accurate.
@@ -198,7 +220,7 @@ export function useRunData(runId: string, done: boolean): RunData {
       .then((repos) => {
         // Set even when empty — a backend with no runs must render as none,
         // not as whatever the previous fetch happened to return.
-        if (!cancelled) setIfChanged(setRepositories, repos);
+        if (!cancelled) changed.current("repositories", setRepositories, repos);
       })
       .catch(() => undefined);
     return () => {
@@ -210,6 +232,7 @@ export function useRunData(runId: string, done: boolean): RunData {
   useEffect(() => {
     firstLoadDone.current = false;
     contextRef.current = null;
+    changed.current = makeChangeGate();
     setContext(null);
     setPatch(null);
   }, [runId]);
@@ -268,19 +291,21 @@ export function useRunData(runId: string, done: boolean): RunData {
       // returns one before the registry is populated — but it is not a failure
       // either, so the model settles clean.
       if (agentsRes.status === "fulfilled" && agentsRes.value.length)
-        setIfChanged(setAgents, agentsRes.value);
-      if (headerRes.status === "fulfilled") setIfChanged(setHeader, headerRes.value);
-      if (summaryRes.status === "fulfilled") setIfChanged(setSummary, summaryRes.value);
-      if (attemptsRes.status === "fulfilled") setIfChanged(setAttempts, attemptsRes.value);
-      if (reportRes.status === "fulfilled") setIfChanged(setReport, reportRes.value);
+        changed.current("agents", setAgents, agentsRes.value);
+      if (headerRes.status === "fulfilled") changed.current("header", setHeader, headerRes.value);
+      if (summaryRes.status === "fulfilled")
+        changed.current("summary", setSummary, summaryRes.value);
+      if (attemptsRes.status === "fulfilled")
+        changed.current("attempts", setAttempts, attemptsRes.value);
+      if (reportRes.status === "fulfilled") changed.current("report", setReport, reportRes.value);
       if (contextRes.status === "fulfilled" && contextRes.value) {
         contextRef.current = contextRes.value;
-        setIfChanged<ContextPackageModel | null>(setContext, contextRes.value);
+        changed.current<ContextPackageModel | null>("context", setContext, contextRes.value);
       }
       // Adopted even when null: A7 having produced no bundle is an answer, and
       // keeping a previous run's diff on screen would be worse than blank.
       if (patchRes.status === "fulfilled")
-        setIfChanged<PatchBundleModel | null>(setPatch, patchRes.value);
+        changed.current<PatchBundleModel | null>("patch", setPatch, patchRes.value);
 
       setStatus((prev) => {
         const settle = (key: RunModelKey, r: PromiseSettledResult<unknown>): ModelState =>

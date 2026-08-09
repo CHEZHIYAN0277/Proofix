@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Check, Bug, GitMerge, Skull, ShieldCheck, AlertTriangle, Terminal } from "lucide-react";
+import { prefersReducedMotion } from "@/hooks/useCountUp";
 import type { LiveAgent } from "./useExecutionRun";
 import type {
   AgentVisualizationPayload,
@@ -85,12 +86,24 @@ function Frame({ children, label }: { children: React.ReactNode; label: string }
   );
 }
 
-/** Smoothly counts a number up to `value` while `active`. */
+/**
+ * Smoothly counts a number up to `value` while `active`.
+ *
+ * Distinct from `@/hooks/useCountUp`, which animates once on mount; this one is
+ * gated on the agent's scene having finished, and resets when it has not. Both
+ * must honour `prefers-reduced-motion` — a `requestAnimationFrame` loop is not
+ * an animation as far as the stylesheet's reduced-motion block is concerned, so
+ * this one counted up regardless of the setting (B-F06).
+ */
 function useCountUp(value: number, active: boolean, duration = 700) {
   const [n, setN] = useState(0);
   useEffect(() => {
     if (!active) {
       setN(0);
+      return;
+    }
+    if (prefersReducedMotion()) {
+      setN(value);
       return;
     }
     const start = performance.now();

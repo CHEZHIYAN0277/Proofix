@@ -28,7 +28,7 @@ or missing · **S3** quality/robustness · **S4** cosmetic.
 | **B-B12** | **S1** | security | pytest/bandit/semgrep/mutmut/ruff run unsandboxed against cloned code with the host interpreter | No isolation | `CLAUDE.md` §7 | 🔴 open | Sandbox before any hosted deployment | 8 |
 | **B-B13** | S2 | scale | In-memory `WSBroadcaster` + `MemorySaver`: two replicas lose events, no resume after restart | Single-process assumptions | `CLAUDE.md` §7 | 🔴 open | Redis broadcaster + checkpointer | 8 |
 | **B-B14** | S3 | hygiene | `clone_or_copy_repo` leaks a full repo copy per run | temp dir never cleaned | `CLAUDE.md` §7 | ✅ fixed | Clean up on terminal state | 8 |
-| **B-B15** | S3 | API | `/events` capped at 500 with no `after=` cursor | G6 | historical QA | 🟡 open | Add cursor when a run exceeds the cap | 8 |
+| **B-B15** | S3 | API | `/events` capped at 500 with no `after=` cursor | G6 | historical QA | ✅ fixed | Add cursor when a run exceeds the cap | 8 |
 
 ## Frontend
 
@@ -39,11 +39,11 @@ or missing · **S3** quality/robustness · **S4** cosmetic.
 | **B-F03** | S2 | transport | No WebSocket reconnect. A dropped socket silently degrades to 2.5 s polling | `onclose` deliberately unhandled | `liveEventStream.ts` | ✅ fixed | Backoff reconnect that never infers completion from a close | 1 |
 | **B-F04** | S3 | fixtures | `AGENT_SUMMARY_BULLETS` (11 hardcoded `{text, ok:true}` claims) and `RETRY_ATTEMPTS` exported, imported by nothing | Leftover from the pre-backend UI | `data.ts:571,597` | ✅ fixed | Delete both | 0 |
 | **B-F05** | S3 | types | `AgentStatus` has no `blocked` member; blocked runs borrow the `draft` tone | Union predates the state | `data.ts:3`, `StatusBadge.tsx` | ✅ fixed | Add `blocked` with its own tone | 1 |
-| **B-F06** | S3 | a11y | No `prefers-reduced-motion` handling; continuous pulses + scroll choreography | Never implemented | repo-wide | 🔴 open | Honour the query | 8 |
+| **B-F06** | S3 | a11y | No `prefers-reduced-motion` handling; continuous pulses + scroll choreography | Never implemented | repo-wide | ✅ fixed | Honour the query | 8 |
 | **B-F07** | S4 | lint | 435 pre-existing prettier errors (`components/ui/**`, `__root.tsx`, `mocks/repositories.ts`) | Repo never formatted | `npm run lint` | ✅ fixed | One `--fix` commit | 0 |
 | **B-F08** | S3 | UX | One page-level loading state; no per-panel skeletons or empty-vs-failed distinction | Single `loading` boolean | `useRunData.ts` | 🟡 partial | Per-model states ✅; per-panel **skeletons** still not built — a loading panel shows stale/empty content, it just no longer hides a failure | 1 |
 | **B-F09** | S2 | UX | `severity` renders `"LOW"` when nothing was scanned — asserts a measurement never taken | `_severity_label` defaults | `ui_projection.py` | ✅ fixed | "Not measured" when `prioritized` is empty | 1 |
-| **B-F10** | S3 | perf | Every 2.5 s poll re-fetches 5 endpoints and JSON-stringifies each for change detection | `setIfChanged` deep compare | `useRunData.ts:63` | 🟡 open | Cheaper comparison; back off when idle | 8 |
+| **B-F10** | S3 | perf | Every 2.5 s poll re-fetches 5 endpoints and JSON-stringifies each for change detection | `setIfChanged` deep compare | `useRunData.ts:63` | ✅ fixed | Cheaper comparison; back off when idle | 8 |
 
 ## Resolved this session (do not re-open)
 

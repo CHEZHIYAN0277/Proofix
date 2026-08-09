@@ -26,6 +26,7 @@ import {
   type ContextPackageModel,
   type PatchBundleModel,
 } from "@/mocks";
+import { scrollBehavior } from "@/hooks/useCountUp";
 import { useRunData, type ModelState } from "@/components/proofix/useRunData";
 import { resolveRunLifecycle, type RunLifecycleView } from "@/components/proofix/runLifecycle";
 import { askChat, createRun, eventSourceFor, isLive } from "@/lib/runService";
@@ -243,7 +244,7 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
 
       const t1 = window.setTimeout(() => {
         repairAttemptsRef.current?.scrollIntoView({
-          behavior: "smooth",
+          behavior: scrollBehavior(),
           block: "start",
         });
       }, REVEAL_ATTEMPTS_AT);
@@ -251,9 +252,9 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
         const el = executiveSummaryRef.current;
         if (el) {
           const top = el.getBoundingClientRect().top + window.scrollY - 24;
-          window.scrollTo({ top, behavior: "smooth" });
+          window.scrollTo({ top, behavior: scrollBehavior() });
         } else {
-          window.scrollTo({ top: 0, behavior: "smooth" });
+          window.scrollTo({ top: 0, behavior: scrollBehavior() });
         }
       }, SCROLL_TO_SUMMARY_AT);
       const t3 = window.setTimeout(() => {
@@ -343,7 +344,7 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
       const maxDelta = Math.max(0, headerTop - minHeaderTop);
       const delta = Math.min(overflow, maxDelta);
       if (delta < 4) return;
-      window.scrollBy({ top: delta, behavior: "smooth" });
+      window.scrollBy({ top: delta, behavior: scrollBehavior() });
     };
 
     const schedule = () => {

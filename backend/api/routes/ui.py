@@ -354,10 +354,32 @@ async def get_run_report(
 async def get_run_events(
     run_id: str,
     store: Annotated[RedisStore, Depends(get_store)],
+    after: Annotated[
+        int | None,
+        Query(ge=0, description="Exclusive cursor: return events with a greater `sequence`."),
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
 ) -> list[dict]:
-    """Raw agent timeline. The UI replays this before attaching the WebSocket."""
+    """Raw agent timeline. The UI replays this before attaching the WebSocket.
+
+    Two modes, and which one you get depends on whether `after` is present:
+
+    * **omitted** — the most recent `limit` events. Unchanged behaviour, so
+      every existing client keeps working, and it is the right answer for
+      "show me where this run is now".
+    * **present** — events with a `sequence` strictly greater than the cursor,
+      in order, up to `limit`. Start from `after=0` to walk the timeline from
+      the beginning and stop when a short page comes back.
+
+    The second mode is what B-B15 was about: without it a run that emitted more
+    than `limit` events could only ever expose its tail, so a client replaying
+    from the start silently lost the beginning of the run.
+
+    The response stays a plain array — the cursor a caller needs is the
+    `sequence` already on the events it receives.
+    """
     await _load_run(store, run_id)
-    events = await _load_events(store, run_id)
+    events = await store.get_events(run_id, count=limit, after=after)
     return [e.model_dump(mode="json") for e in events]
 
 
