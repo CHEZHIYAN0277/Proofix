@@ -16,7 +16,7 @@ Audit date: 2026-08-08. Legend: ✅ COMPLETE · 🟡 PARTIAL · 🔴 MISSING · 
 | **5** | Patch Generation | ✅ COMPLETE | diff view + patch panel ✅ | B-B03/06/07/08 ✅ | 19 A7 tests + 6 diff-parser + 5 panel | none |
 | **6** | Validation & scoring correctness | ✅ COMPLETE | mutation card ✅; null axes render "Not measured" | B-B01 ✅ (`measurement.py`); B-B02 ✅ (line-free finding key); B-B16 ✅ (absent scanner ≠ 100) | 15 A9 tests + `measured_mean` arithmetic + projection | none |
 | **7** | Final decision & report | ✅ COMPLETE | every draft reason on screen ✅ | B-B10 ✅ single writer; B-B11 ✅ shim deleted; B-B09 ✅ decided | 16 authority tests + 4 UI | none |
-| **8** | Production hardening | 🔴 MISSING | reconnect ✅ (Phase 1); no reduced-motion, poll cost | sandbox, scale, G9, privacy, clone leak | 🔴 | B-B12 blocks hosting |
+| **8** | Production hardening | 🟡 PARTIAL | reduced motion ✅, poll cost ✅ | B-B04 ✅, B-B05 ✅, B-B14 ✅, B-B15 ✅, B-B13 broadcaster ✅ | 23 new | **B-B12 sandbox + B-B13 checkpointer need a decision** |
 | **9** | Final QA / certification | 🔴 MISSING | — | — | no real-GitHub E2E | all above |
 
 ---
@@ -36,6 +36,53 @@ WebSocket reconnect that never infers completion from a close (B-F03), the
 `severity: "not measured"` (B-F09). What remains of B-F08 is cosmetic: there are
 still no per-panel loading skeletons. The honesty defect it was filed for — a
 failed fetch rendering as an empty one — is fixed; the polish is not.
+
+**Phase 8 🟡** (2026-08-09) — six of eight items closed. The two left are
+decisions, not refactors, and are described at the end.
+
+* **B-B04** the privacy guard covered extracted code and stopped there, and
+  A5.5 is the only point where secrets are masked before an LLM call, so its
+  coverage *is* the privacy claim. `acceptance_criteria`, `contracts`,
+  `validation_requirements` and `patch_constraints` all reach the prompt and
+  none were scanned — they are built from exception messages and test names,
+  exactly where a credential leaks. Separately, the scans that *did* run on free
+  text discarded their findings, so a secret masked in a traceback was reported
+  as `clean` with an empty ledger. Status is now recomputed from the full
+  ledger, `failed` still winning.
+* **B-B05** was already fixed and simply untested, which is how it kept reading
+  as open. Pinned end to end, including an AST scan that fails if any call site
+  omits `run_id`.
+* **B-B13 (broadcaster half)** turned out to be a deletion. Redis pub/sub was
+  already complete; the in-memory `WSBroadcaster` delivered every event a second
+  time to same-process clients — hidden by frame dedupe, useless to any other
+  replica. The socket loop was driven by that queue and its "drain before
+  checking terminal" ordering is load-bearing, so the Redis listener now signals
+  an `asyncio.Event` the loop waits on instead.
+* **B-B14** clone cleanup runs in a `finally`, covering completed, blocked and
+  failed alike — the leak was worst on the paths nobody thinks about. It refuses
+  anything outside the system temp root or without the `sentinel_` prefix.
+* **B-B15** `/events` could only expose a run's tail. `after` is an exclusive
+  cursor on `sequence`; its *presence* selects forward reading, so existing
+  callers keep the "most recent page" behaviour unchanged.
+* **B-F06** the CSS reduced-motion block was already comprehensive; what it
+  cannot reach is `requestAnimationFrame` count-ups and
+  `scrollTo({behavior:"smooth"})`, where the explicit option beats the
+  stylesheet. Both honour the setting now.
+* **B-F10** change detection stringified both sides every poll; the previous
+  value cannot have changed since it was accepted, so half the work was pure
+  waste.
+
+**Still open, both needing a decision rather than a refactor:**
+
+* **B-B12 — sandboxing.** pytest, bandit, semgrep, mutmut and ruff run against
+  cloned code with the host interpreter. This blocks any hosted multi-tenant
+  deployment. Closing it means choosing an isolation technology (container,
+  gVisor, nsjail, bubblewrap, microVM), each with different deployment
+  requirements, and rewriting `subprocess_runner` plus every caller to marshal
+  work in and results out. That is a product and infrastructure decision.
+* **B-B13 — checkpointer.** `MemorySaver` means no run resumes after a restart.
+  Fixing it needs either `langgraph-checkpoint-redis` as a new dependency or a
+  hand-written saver over the existing Redis client.
 
 **Phase 7 ✅** (closed 2026-08-09) — `force_draft_pr` has one owner, and every
 reason a run is a draft is on screen.
@@ -208,12 +255,12 @@ What closed the phase:
 
 ## Test suites
 
-- **Backend** — 2046 pass, 4 skipped. One pre-existing environmental failure:
+- **Backend** — 2071 pass, 4 skipped. One pre-existing environmental failure:
   `test_reproduction_stability_gate` asserts `get_head_sha(vulnapi)` is
   non-empty, but the `vulnapi/` fixture has no `.git`, so it returns `""`. The
   test's skip guard only checks that the directory exists, not that it is a git
   repo, so it fails rather than skipping. Not caused by any phase work.
-- **Frontend** — 61 pass across 6 files. Component tests run on jsdom, opted
+- **Frontend** — 66 pass across 7 files. Component tests run on jsdom, opted
   into per file with a `// @vitest-environment jsdom` docblock; shared shims
   live in `src/test/setup.ts`. Test config is `vitest.config.ts`, separate from
   `vite.config.ts` because the TanStack Start plugin must not run under Vitest
