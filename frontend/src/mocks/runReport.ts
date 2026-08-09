@@ -78,6 +78,16 @@ export interface RunReportModel {
   };
   /** Why the run routed the way it did, in the router's own words. */
   decisionReason: string;
+  /**
+   * Every reason the run cannot be auto-merged, from `trust_gating.draft_reasons`
+   * — the same computation that sets `force_draft_pr`, so the explanation on
+   * screen and the routing decision cannot disagree.
+   *
+   * `decisionReason` carries only the *first* reason A10 hit. A run blocked for
+   * three reasons showed one, and the others were unrecoverable from the UI.
+   * Optional because the fixtures predate the field.
+   */
+  draftReasons?: { code: string; detail: string }[];
   trust: TrustMetric[];
   files: string[];
   evidence: EvidenceFlag[];

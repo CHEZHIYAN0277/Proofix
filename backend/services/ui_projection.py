@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from backend.agents.a10_routing import SCORE_THRESHOLD
+from backend.orchestrator.trust_gating import draft_reasons
 from backend.state.events import AgentStatusEvent
 from backend.services.measurement import measured_mean
 from backend.state.schema import RunStateModel
@@ -2073,6 +2074,15 @@ def build_run_report(state: RunStateModel, events: list[AgentStatusEvent]) -> di
             "reason": _rejection_reason(state, mutation),
         },
         "decisionReason": _decision_reason(state),
+        # Every reason this run cannot be auto-merged, from the module that
+        # decides it. A10's `review_note` carries only the *first* one it hit,
+        # so a run blocked for three reasons showed one and the other two were
+        # unrecoverable from the UI. These come from `trust_gating.draft_reasons`
+        # — the same computation that sets `force_draft_pr`, so the explanation
+        # and the routing cannot disagree.
+        "draftReasons": [
+            {"code": r.code, "detail": r.detail} for r in draft_reasons(state)
+        ],
         # `value: null` where the pipeline measured nothing, and tone
         # `"unknown"` alongside it. An axis that never ran is neither passing
         # nor failing, and colouring it red accused the run of failing a check

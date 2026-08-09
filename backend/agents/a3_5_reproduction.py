@@ -56,8 +56,10 @@ class A35ReproductionAgent(AgentBase):
 
         result_dict = result.model_dump(mode="json")
         state.reproduction = result_dict
-        if result.force_draft_pr:
-            state.force_draft_pr = True
+        # `state.force_draft_pr` is deliberately not set here. A3.5 reports what
+        # it observed — the status is in `result` — and `trust_gating` derives
+        # the routing consequence from it. See that module's docstring for why
+        # three writers of one flag had no single moment at which it was true.
 
         await self.emit_status(
             state,

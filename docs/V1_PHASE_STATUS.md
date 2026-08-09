@@ -15,7 +15,7 @@ Audit date: 2026-08-08. Legend: ✅ COMPLETE · 🟡 PARTIAL · 🔴 MISSING · 
 | **4** | Context Engineering / Repair Planning | ✅ COMPLETE | A5.5 card + viz ✅; context panel (ranking, redactions) ✅; planner shows edge reasons ✅ | A5.5 on the `v1` surface ✅ | 15 card tests + 6 panel tests | none |
 | **5** | Patch Generation | ✅ COMPLETE | diff view + patch panel ✅ | B-B03/06/07/08 ✅ | 19 A7 tests + 6 diff-parser + 5 panel | none |
 | **6** | Validation & scoring correctness | ✅ COMPLETE | mutation card ✅; null axes render "Not measured" | B-B01 ✅ (`measurement.py`); B-B02 ✅ (line-free finding key); B-B16 ✅ (absent scanner ≠ 100) | 15 A9 tests + `measured_mean` arithmetic + projection | none |
-| **7** | Final decision & report | 🟡 PARTIAL | report renders, nullable-aware ✅ | routing ✅; B-B09/10/11 open | routing ✅ | depends on 6 |
+| **7** | Final decision & report | ✅ COMPLETE | every draft reason on screen ✅ | B-B10 ✅ single writer; B-B11 ✅ shim deleted; B-B09 ✅ decided | 16 authority tests + 4 UI | none |
 | **8** | Production hardening | 🔴 MISSING | reconnect ✅ (Phase 1); no reduced-motion, poll cost | sandbox, scale, G9, privacy, clone leak | 🔴 | B-B12 blocks hosting |
 | **9** | Final QA / certification | 🔴 MISSING | — | — | no real-GitHub E2E | all above |
 
@@ -36,6 +36,42 @@ WebSocket reconnect that never infers completion from a close (B-F03), the
 `severity: "not measured"` (B-F09). What remains of B-F08 is cosmetic: there are
 still no per-panel loading skeletons. The honesty defect it was filed for — a
 failed fetch rendering as an empty one — is fixed; the polish is not.
+
+**Phase 7 ✅** (closed 2026-08-09) — `force_draft_pr` has one owner, and every
+reason a run is a draft is on screen.
+
+**B-B10.** The flag was written from three places — A3.5 on failed
+reproduction, A4 on unverified citations, `trust_gating` on exhausted
+validation. A flag written from three places has no single moment at which it is
+true, and answering "why is this a draft?" meant reading three files and knowing
+which had run. Both agent writes were *derivable* from state those agents
+already published (`reproduction.status`, `root_cause.evidence_incomplete`), so
+the flag is now computed from that evidence once, immediately before routing.
+Agents record observations; the gate decides what they mean — the same split the
+rest of the pipeline follows. It is assigned rather than or-ed, so a stale
+`True` cannot survive a pass that finds no reason. A test greps the backend for
+a second writer, because reintroducing one would otherwise be silent.
+
+Making the reasons enumerable is what put them on screen. `draft_reasons`
+returns `(code, detail)` pairs; A10's `review_note` carries only the *first*
+reason routing hit, so a run blocked for three showed one and the rest were
+unrecoverable from any client. The report now publishes all of them, from the
+same computation that sets the flag, so the explanation and the routing cannot
+disagree.
+
+**B-B11.** `citation_validator.py` is deleted. Its `validate_all_citations*`
+functions returned `verify_all_citations_with_metrics` unchanged; only
+`coerce_llm_citations` did work, and it now lives beside the verification it
+feeds. Its two verification tests moved to the verifier's own test file, where
+they were always testing.
+
+**B-B09 — decided: surface, do not enforce.** `reproduction_gate` still flows
+unconditionally to `investigate`. Halting would save two LLM calls on an
+unreproducible run but discard the diff, which `CLAUDE.md` documents as
+deliberate value ("you still get a diff to look at"), and A0.7 already halts the
+common case — a repository whose tests cannot run at all never reaches here. The
+cost is now visible instead: the reproduction failure appears as a named draft
+reason rather than being implied by a flag.
 
 **Phase 5 ✅** (closed 2026-08-09) — the diff is the product, and it was
 reachable only as two filenames. `/runs/{id}/patch` had served both sides of
@@ -172,12 +208,12 @@ What closed the phase:
 
 ## Test suites
 
-- **Backend** — 2030 pass, 4 skipped. One pre-existing environmental failure:
+- **Backend** — 2046 pass, 4 skipped. One pre-existing environmental failure:
   `test_reproduction_stability_gate` asserts `get_head_sha(vulnapi)` is
   non-empty, but the `vulnapi/` fixture has no `.git`, so it returns `""`. The
   test's skip guard only checks that the directory exists, not that it is a git
   repo, so it fails rather than skipping. Not caused by any phase work.
-- **Frontend** — 57 pass across 6 files. Component tests run on jsdom, opted
+- **Frontend** — 61 pass across 6 files. Component tests run on jsdom, opted
   into per file with a `// @vitest-environment jsdom` docblock; shared shims
   live in `src/test/setup.ts`. Test config is `vitest.config.ts`, separate from
   `vite.config.ts` because the TanStack Start plugin must not run under Vitest

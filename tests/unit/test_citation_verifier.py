@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.services.citation_validator import validate_all_citations_with_metrics
+from backend.services.citation_verifier import verify_all_citations_with_metrics
 from backend.services.citation_verifier import (
     resolve_citation_path,
     verify_all_citations_with_metrics,
@@ -151,7 +151,7 @@ def test_validator_wrapper_returns_metrics(repo: Path):
             "claim": "validate_token() missing expiry validation",
         }
     ]
-    validated, metrics = validate_all_citations_with_metrics(repo, citations, sig=SIG)
+    validated, metrics = verify_all_citations_with_metrics(repo, citations, sig=SIG)
     assert validated[0]["verified"] is True
     assert metrics["total_citations"] == 1
     assert metrics["unresolved"] == 0
@@ -170,3 +170,34 @@ def test_vulnapi_repo_auth_basename_verifies():
     assert validated[0]["verified"] is True
     assert validated[0]["file"] == "vulnapi/auth.py"
     assert metrics["unresolved"] == 0
+
+
+# Moved here when `citation_validator.py` was deleted (B-B11). It was a
+# pass-through shim whose `validate_all_citations*` functions returned this
+# module's `verify_all_citations_with_metrics` unchanged, so these tests were
+# exercising this code through one pointless hop.
+
+def test_verification_resolves_a_bare_basename_through_the_sig(tmp_path):
+    auth_dir = tmp_path / "vulnapi"
+    auth_dir.mkdir(parents=True)
+    (auth_dir / "auth.py").write_text("def validate_token():\n    return True\n", encoding="utf-8")
+    sig = {"files": {"vulnapi/auth.py": {"path": "vulnapi/auth.py"}}}
+    validated, _metrics = verify_all_citations_with_metrics(
+        tmp_path,
+        [{"file": "auth.py", "line": 1, "claim": "validate_token() bug"}],
+        sig=sig,
+    )
+    assert validated[0]["verified"] is True
+    assert validated[0]["file"] == "vulnapi/auth.py"
+
+
+def test_verification_reports_metrics_alongside_the_citations(tmp_path):
+    auth_dir = tmp_path / "vulnapi"
+    auth_dir.mkdir(parents=True)
+    (auth_dir / "auth.py").write_text("def validate_token():\n    return True\n", encoding="utf-8")
+    validated, metrics = verify_all_citations_with_metrics(
+        tmp_path,
+        [{"file": "auth.py", "line": 1, "claim": "validate_token() bug"}],
+    )
+    assert validated[0]["verified"] is True
+    assert metrics["total_citations"] == 1

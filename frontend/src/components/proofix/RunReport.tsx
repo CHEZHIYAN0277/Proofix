@@ -208,6 +208,7 @@ export function RunReport({
                   </span>
                 </div>
                 {report.decisionReason && <p className="text-ink-soft">{report.decisionReason}</p>}
+                <DraftReasons reasons={report.draftReasons} />
               </div>
             </Section>
 
@@ -375,6 +376,39 @@ function LiveObserving({ agent }: { agent: LiveAgent }) {
       <p className="text-xs italic text-ink-soft">
         Waiting for completion — the final report appears once all agents finish.
       </p>
+    </div>
+  );
+}
+
+/**
+ * Every reason the run cannot be auto-merged.
+ *
+ * `decisionReason` above is A10's `review_note`, which carries only the *first*
+ * reason routing hit — a run blocked because it could not reproduce the bug
+ * *and* exhausted its retries showed one of the two, and the other was
+ * unrecoverable from the UI. These come from `trust_gating.draft_reasons`, the
+ * same computation that sets `force_draft_pr`, so what is on screen and what
+ * routed the PR cannot disagree.
+ *
+ * Sentences are rendered verbatim. The backend owns the words (governing rule
+ * 3); a UI that phrases its own explanation is a second source of truth for a
+ * decision it did not make.
+ */
+function DraftReasons({ reasons }: { reasons?: { code: string; detail: string }[] }) {
+  if (!reasons || reasons.length === 0) return null;
+
+  return (
+    <div className="mt-3 rounded-lg border border-status-draft/30 bg-status-draft-bg/30 px-3 py-2.5">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-soft">
+        {reasons.length === 1 ? "Why this is a draft" : `Why this is a draft (${reasons.length})`}
+      </div>
+      <ul className="mt-1.5 space-y-1.5">
+        {reasons.map((r) => (
+          <li key={r.code} className="text-[12.5px] leading-relaxed text-ink">
+            {r.detail}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

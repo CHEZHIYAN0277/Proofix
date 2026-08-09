@@ -5,9 +5,9 @@ from pydantic import BaseModel
 from backend.agents.base import AgentBase
 from backend.models.root_cause import Citation, RootCauseBrief
 from backend.orchestrator.trust_gating import MAX_REINVESTIGATIONS
-from backend.services.citation_validator import (
+from backend.services.citation_verifier import (
     coerce_llm_citations,
-    validate_all_citations_with_metrics,
+    verify_all_citations_with_metrics,
 )
 from backend.services.llm import LLMService
 from backend.services.root_cause_builder import (
@@ -81,7 +81,7 @@ class A4EvidenceInvestigatorAgent(AgentBase):
         brief.runtime_evidence = runtime_snapshot
         brief.cve_context = cve_context
 
-        validated, citation_metrics = validate_all_citations_with_metrics(
+        validated, citation_metrics = verify_all_citations_with_metrics(
             repo,
             [c.model_dump() for c in brief.citations],
             sig=state.sig,
@@ -97,9 +97,11 @@ class A4EvidenceInvestigatorAgent(AgentBase):
                 brief.reinvestigation_count = prior_count + 1
             else:
                 brief.reinvestigation_required = False
+                # `evidence_incomplete` is the observation; the draft decision
+                # that follows from it belongs to `trust_gating`, which derives
+                # it from this field rather than being told.
                 brief.evidence_incomplete = True
                 state.reinvestigation_exhausted = True
-                state.force_draft_pr = True
         else:
             brief.reinvestigation_required = False
 

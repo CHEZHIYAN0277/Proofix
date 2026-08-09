@@ -321,4 +321,9 @@ async def test_a4_reinvestigation_exhaustion_sets_flags():
     assert root.get("evidence_incomplete") is True
     assert root.get("reinvestigation_required") is False
     assert result.reinvestigation_exhausted is True
-    assert result.force_draft_pr is True
+
+    # A4 records the observation and stops there — `force_draft_pr` is
+    # `trust_gating`'s to write, from exactly this evidence (B-B10). The agent
+    # setting it too was one of three writers with no single moment of truth.
+    assert result.force_draft_pr is False
+    assert apply_trust_gates_before_pr(result, max_retries=3).force_draft_pr is True

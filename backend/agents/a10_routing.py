@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from backend.models.pr import AxisScores
-from backend.orchestrator.trust_gating import full_suite_review_note
+from backend.orchestrator.trust_gating import full_suite_review_note, reproduction_draft_reason
 from backend.services.measurement import Score, below_threshold, meets_threshold
 from backend.state.schema import RunStateModel
 
@@ -67,34 +67,20 @@ def technical_validation_passed(
 
 
 def reproduction_gate_failed(state: RunStateModel) -> tuple[bool, str | None]:
+    """Whether reproduction blocks a merge, and the note explaining it.
+
+    The four status sentences used to be written out here as well as in
+    `trust_gating`, so the note A10 attached to the PR and the reason the gate
+    recorded were two independent copies of the same wording. They are one
+    string now, authored where the decision is made.
+    """
     if not state.force_draft_pr:
         return False, None
 
-    repro = state.reproduction or {}
-    status = repro.get("status", "")
-    if status == "CONFIRMED":
+    reason = reproduction_draft_reason(state.reproduction or {})
+    if reason is None:
         return False, None
-
-    if status == "UNCONFIRMED":
-        return True, (
-            "A3.5 Reproduction Gate: bug could not be reproduced in test environment. "
-            "Manual verification required before merge."
-        )
-    if status == "INFRA_ERROR":
-        detail = repro.get("infra_detail") or "pytest infrastructure failure"
-        return True, (
-            f"A3.5 Reproduction Gate: infrastructure error during test run ({detail}). "
-            "Manual verification required before merge."
-        )
-    if status == "NO_TESTS":
-        return True, (
-            "A3.5 Reproduction Gate: no tests available to confirm the vulnerability. "
-            "Manual verification required before merge."
-        )
-    return True, (
-        "A3.5 Reproduction Gate: bug could not be reproduced in test environment. "
-        "Manual verification required before merge."
-    )
+    return True, reason.detail
 
 
 def hard_draft_reason(

@@ -932,13 +932,14 @@ Measured against the phase-0 baseline, not asserted:
    the UI cannot distinguish verified from asserted evidence.
 
 **P1 — architecture**
-8. 🔴 Consolidate trust-gate authority into `trust_gating.py` (T3).
+8. ✅ **Done.** `trust_gating.py` is the only writer of `force_draft_pr`; the
+   agents record observations and the gate derives the decision.
 9. 🔴 Extract shared target resolution; make A5, A7, A5.5 agree.
 10. 🔴 Extract `patch_integrity` from `runtime_patch_prompt`.
 11. 🔴 Move `correctness_score` out of A8 into A10's scoring module.
 12. 🔴 Split A10: mergeability decision vs. PR publication.
-13. 🟡 **Partial.** `a0_orchestrator.py` is deleted ✅;
-    `citation_validator.py`'s pass-through half remains 🔴.
+13. ✅ **Done.** `a0_orchestrator.py` and `citation_validator.py` are both
+    deleted; `coerce_llm_citations` moved into `citation_verifier.py`.
 14. ✅ **Done.** A7 snapshots every file it writes and restores them when an
     exception interrupts generation, so a partial patch set cannot reach A8.
 

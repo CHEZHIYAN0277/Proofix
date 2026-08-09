@@ -63,3 +63,67 @@ describe("RunReport decision badge", () => {
     expect(badge.className).not.toContain("status-draft");
   });
 });
+
+describe("Draft reasons", () => {
+  it("lists every reason, not just the one A10 noted", () => {
+    // `decisionReason` is A10's `review_note`, which carries the first reason
+    // routing hit. A run blocked for three reasons showed one and the rest were
+    // unrecoverable from the UI.
+    render(
+      <RunReport
+        done
+        report={{
+          ...EMPTY_RUN_REPORT,
+          decisionReason: "Validation retries exhausted. Manual verification required.",
+          draftReasons: [
+            {
+              code: "validation_exhausted",
+              detail: "Validation retries exhausted without a patch that passed.",
+            },
+            {
+              code: "citations_unverified",
+              detail: "Citation verification incomplete after the maximum reinvestigations.",
+            },
+            {
+              code: "reproduction_no_tests",
+              detail: "A3.5 Reproduction Gate: no tests available to confirm the vulnerability.",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/Why this is a draft \(3\)/)).toBeTruthy();
+    expect(screen.getByText(/no tests available to confirm/)).toBeTruthy();
+    expect(screen.getByText(/Citation verification incomplete/)).toBeTruthy();
+  });
+
+  it("renders the backend's sentences verbatim", () => {
+    const detail = "A3.5 Reproduction Gate: bug could not be reproduced in test environment.";
+    render(
+      <RunReport
+        done
+        report={{
+          ...EMPTY_RUN_REPORT,
+          draftReasons: [{ code: "reproduction_unconfirmed", detail }],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(detail)).toBeTruthy();
+    // Singular heading — the count is only shown when there is more than one.
+    expect(screen.getByText("Why this is a draft")).toBeTruthy();
+  });
+
+  it("shows nothing for a run with no draft reasons", () => {
+    render(<RunReport done report={{ ...EMPTY_RUN_REPORT, draftReasons: [] }} />);
+
+    expect(screen.queryByText(/Why this is a draft/)).toBeNull();
+  });
+
+  it("shows nothing when the backend predates the field", () => {
+    render(<RunReport done report={EMPTY_RUN_REPORT} />);
+
+    expect(screen.queryByText(/Why this is a draft/)).toBeNull();
+  });
+});
