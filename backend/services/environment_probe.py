@@ -101,6 +101,59 @@ def primary_language(manifests: list[DetectedManifest]) -> str | None:
     return best[1] if best else None
 
 
+def python_manifests(manifests: list[DetectedManifest]) -> list[DetectedManifest]:
+    """The Python manifests, best first.
+
+    `primary_language` answers "what kind of project does this look like", which
+    is the right answer for a *label* and the wrong one for a *decision*. A
+    polyglot repository with `frontend/package.json` and `backend/requirements.txt`
+    and no root manifest reads as node under that rule — and was then rejected as
+    unsupported, while A1 went on to index `backend/` and build a SIG from it.
+    The pipeline could see the Python it had just declined to look at.
+
+    So the operative question is not "is this a Python project" but "is there
+    Python here to repair". Ranked root-first, then by manifest priority, so the
+    suggested command names the manifest a human would actually install from.
+    """
+    priority_of = {name: priority for name, _lang, priority in _MANIFESTS}
+
+    def rank(manifest: DetectedManifest) -> tuple[int, int, str]:
+        return (
+            0 if "/" not in manifest.path else 1,
+            priority_of.get(manifest.kind, 9),
+            manifest.path,
+        )
+
+    return sorted((m for m in manifests if m.language == _SUPPORTED_LANGUAGE), key=rank)
+
+
+def _manifest_directory(manifest: DetectedManifest) -> str:
+    """The directory holding a manifest, `""` for the repository root."""
+    return manifest.path.rsplit("/", 1)[0] if "/" in manifest.path else ""
+
+
+def _suggested_command(kinds: set[str], directory: str) -> str | None:
+    """How a human prepares this checkout. ProoFix never runs it (module docstring)."""
+    if "pyproject.toml" in kinds:
+        return f'pip install -e "./{directory}[dev]"' if directory else 'pip install -e ".[dev]"'
+    if "requirements.txt" in kinds:
+        return f"pip install -r {directory}/requirements.txt" if directory else "pip install -r requirements.txt"
+    if "Pipfile" in kinds:
+        return f"(cd {directory} && pipenv install --dev)" if directory else "pipenv install --dev"
+    if "setup.py" in kinds:
+        return f"pip install -e ./{directory}" if directory else "pip install -e ."
+    return None
+
+
+#: SGR sequences. Python 3.14 colours tracebacks, and `reason` is rendered
+#: verbatim by the UI — unstripped, the user reads `\x1b[1;35mModuleNotFoundError`.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
 #: `ModuleNotFoundError: No module named 'x'` / `ImportError: cannot import name`.
 _MISSING_MODULE_RE = re.compile(
     r"(?:ModuleNotFoundError|ImportError):\s*No module named ['\"]([\w.]+)['\"]"
@@ -145,7 +198,10 @@ async def probe_environment(repo: Path, timeout: int = 30) -> EnvironmentReport:
             blocking=True,
         )
 
-    if language != _SUPPORTED_LANGUAGE:
+    # Unsupported means "there is no Python here", not "the root manifest is not
+    # Python". A repository whose Python lives in `backend/` is repairable.
+    python = python_manifests(manifests)
+    if not python:
         return EnvironmentReport(
             status="unsupported",
             language=language,
@@ -161,6 +217,13 @@ async def probe_environment(repo: Path, timeout: int = 30) -> EnvironmentReport:
             suggested_command=None,
             blocking=True,
         )
+
+    # Where the Python lives. The probe still runs at the repository root,
+    # because that is where A3.5 runs pytest — a probe that answered for a
+    # different directory than reproduction uses would answer the wrong
+    # question. The directory only shapes the command a human is told to run.
+    python_root = _manifest_directory(python[0])
+    located = f" Python was found in `{python_root}/`." if python_root else ""
 
     # The operative check: will the runner start? `-c "import pytest"` is the
     # cheapest honest answer, and it uses the same interpreter A3.5 will use.
@@ -205,14 +268,14 @@ async def probe_environment(repo: Path, timeout: int = 30) -> EnvironmentReport:
     if runner_available and collection_ok:
         return EnvironmentReport(
             status="ready",
-            language=language,
+            language=_SUPPORTED_LANGUAGE,
             manifests=manifests,
             test_runner="pytest",
             test_runner_available=True,
             missing_imports=[],
             reason=(
                 "pytest collected the test suite without import errors — it can "
-                "be executed."
+                f"be executed.{located}"
             ),
             suggested_command=None,
             blocking=False,
@@ -221,29 +284,25 @@ async def probe_environment(repo: Path, timeout: int = 30) -> EnvironmentReport:
     # Not runnable. Name the modules pytest itself could not import, so the
     # message points at the real problem rather than a sampled guess.
     missing: list[str] = [] if runner_available else ["pytest"]
-    for module in _missing_modules_from_output(f"{collect_out}\n{collect_err}"):
+    for module in _missing_modules_from_output(_plain(f"{collect_out}\n{collect_err}")):
         if module not in missing:
             missing.append(module)
         if len(missing) >= 8:
             break
 
-    kinds = {m.kind for m in manifests}
-    if "pyproject.toml" in kinds:
-        suggested = 'pip install -e ".[dev]"'
-    elif "requirements.txt" in kinds:
-        suggested = "pip install -r requirements.txt"
-    elif "Pipfile" in kinds:
-        suggested = "pipenv install --dev"
-    elif "setup.py" in kinds:
-        suggested = "pip install -e ."
-    else:
-        suggested = None
+    # Only Python manifests in the same directory as the best one: a command
+    # built from `frontend/package.json` would install the wrong project.
+    kinds = {m.kind for m in python if _manifest_directory(m) == python_root}
+    suggested = _suggested_command(kinds, python_root)
 
     # Name what is actually missing. When pytest is present and the project's
     # own dependencies are not, "pytest is not importable" would be false.
     if not runner_available:
-        detail = (stderr or "").strip().splitlines()
-        first_line = detail[0][:200] if detail else "pytest is not importable"
+        # The *last* line of a Python traceback is the one that names the cause
+        # ("ModuleNotFoundError: No module named 'pytest'"); the first is always
+        # "Traceback (most recent call last):", which told the reader nothing.
+        detail = [line for line in _plain(stderr or "").strip().splitlines() if line.strip()]
+        first_line = detail[-1].strip()[:200] if detail else "pytest is not importable"
     elif missing:
         named = ", ".join(missing[:5])
         first_line = (
@@ -254,13 +313,13 @@ async def probe_environment(repo: Path, timeout: int = 30) -> EnvironmentReport:
         # Collection failed without naming a module — a `conftest.py` that
         # raises, a syntax error, a plugin that errors on load. Quote what
         # pytest said rather than asserting a cause it did not state.
-        tail = (collect_err or collect_out or "").strip().splitlines()
+        tail = _plain(collect_err or collect_out or "").strip().splitlines()
         quoted = tail[-1][:200] if tail else f"pytest collection exited {collect_code}"
         first_line = f"pytest could not collect the test suite: {quoted}"
 
     return EnvironmentReport(
         status="not_prepared",
-        language=language,
+        language=_SUPPORTED_LANGUAGE,
         manifests=manifests,
         test_runner="pytest",
         # Reported as found when it is: this branch is now also reached with a

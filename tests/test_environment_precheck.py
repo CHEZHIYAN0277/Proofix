@@ -14,7 +14,11 @@ import pytest
 
 from backend.models.environment import DetectedManifest, EnvironmentReport
 from backend.orchestrator.edges import after_environment
-from backend.services.environment_probe import detect_manifests, primary_language
+from backend.services.environment_probe import (
+    detect_manifests,
+    primary_language,
+    python_manifests,
+)
 
 
 class TestManifestDetection:
@@ -60,6 +64,31 @@ class TestManifestDetection:
         (tmp_path / "go.mod").write_text("module x\n")
         assert primary_language(detect_manifests(tmp_path)) == "go"
 
+    def test_python_is_found_when_no_manifest_sits_at_the_root(self, tmp_path):
+        """`frontend/package.json` + `backend/requirements.txt`, nothing at the root.
+
+        `primary_language` calls this node — both manifests are nested, so the
+        tie breaks on manifest priority. The repository is still repairable, and
+        the decision must not be made from that label.
+        """
+        for directory, manifest, body in (
+            ("frontend", "package.json", "{}"),
+            ("backend", "requirements.txt", "fastapi\n"),
+        ):
+            (tmp_path / directory).mkdir()
+            (tmp_path / directory / manifest).write_text(body)
+
+        found = detect_manifests(tmp_path)
+        assert primary_language(found) == "node"
+        assert [m.path for m in python_manifests(found)] == ["backend/requirements.txt"]
+
+    def test_root_python_manifest_outranks_a_nested_one(self, tmp_path):
+        (tmp_path / "requirements.txt").write_text("pytest\n")
+        (tmp_path / "services").mkdir()
+        (tmp_path / "services" / "pyproject.toml").write_text("[project]\n")
+
+        assert python_manifests(detect_manifests(tmp_path))[0].path == "requirements.txt"
+
 
 class TestProbeClassification:
     @pytest.mark.asyncio
@@ -85,6 +114,31 @@ class TestProbeClassification:
         assert "rust" in report.reason.lower()
         # Never suggests a command for a language it cannot drive.
         assert report.suggested_command is None
+
+    @pytest.mark.asyncio
+    async def test_nested_python_is_not_rejected_as_unsupported(self, tmp_path):
+        """The `llm-shield` shape: JS frontend, Python backend, bare root.
+
+        This was reported as "This is a node project" and halted the run, while
+        A1 went on to index `backend/` and build a SIG from it — the pipeline
+        declining to look at Python it could already see.
+        """
+        from backend.services.environment_probe import probe_environment
+
+        (tmp_path / "frontend").mkdir()
+        (tmp_path / "frontend" / "package.json").write_text("{}")
+        (tmp_path / "backend").mkdir()
+        (tmp_path / "backend" / "requirements.txt").write_text("fastapi\n")
+
+        report = await probe_environment(tmp_path)
+
+        assert report.status != "unsupported"
+        assert report.language == "python"
+        # The command names the Python manifest, not the JS one beside it.
+        if report.suggested_command:
+            assert report.suggested_command == "pip install -r backend/requirements.txt"
+        # `reason` is rendered verbatim; Python 3.14 colours its tracebacks.
+        assert "\x1b[" not in report.reason
 
 
 class TestSuggestedCommandIsNeverExecuted:
