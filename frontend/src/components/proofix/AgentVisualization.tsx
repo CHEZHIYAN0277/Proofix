@@ -5,6 +5,7 @@ import type {
   AgentVisualizationPayload,
   BlastPayload,
   DepsPayload,
+  IntelligencePayload,
   MergePayload,
   MutationPayload,
   PatchPayload,
@@ -36,6 +37,8 @@ export function AgentVisualization({ entry }: { entry: LiveAgent }) {
   if (!payload) return null;
 
   switch (payload.kind) {
+    case "intelligence":
+      return <IntelligenceViz data={payload.data} progress={progress} done={done} />;
     case "repo-intel":
       return <RepoIntelViz data={payload.data} progress={progress} done={done} />;
     case "deps":
@@ -98,6 +101,124 @@ function useCountUp(value: number, active: boolean, duration = 700) {
     return () => cancelAnimationFrame(raf);
   }, [value, active, duration]);
   return n;
+}
+
+/* ============================================================
+ * A0.5 — Repository Indexing
+ *
+ * The one thing this layer does that no other agent does is *not* work: it
+ * reuses an index built by a previous run. So the scene leads with how the
+ * index was obtained, and the timing bar shows what had to be rebuilt. A cache
+ * hit draws no bar at all, because no phase ran.
+ * ============================================================ */
+function IntelligenceViz({
+  data,
+  progress,
+  done,
+}: {
+  data: IntelligencePayload;
+  progress: number;
+  done: boolean;
+}) {
+  const { metrics, phases } = data;
+  const phaseTotal = phases.reduce((sum, p) => sum + p.ms, 0);
+
+  const nodes = useCountUp(metrics.nodes, done);
+  const edges = useCountUp(metrics.edges, done);
+  const callables = useCountUp(metrics.callables, done);
+  const commits = useCountUp(metrics.commits, done);
+  const remembered = useCountUp(metrics.rememberedRepairs, done);
+
+  // Reuse is the good outcome here, so a cache hit reads as success and a full
+  // rebuild as ordinary work — neither is a failure.
+  const modeTone =
+    data.mode === "cache hit"
+      ? "border-status-completed/30 bg-status-completed-bg text-status-completed"
+      : "border-border bg-surface-muted text-ink-soft";
+
+  return (
+    <Frame label="Repository Index">
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={`rounded-md border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${modeTone}`}
+        >
+          {data.mode}
+        </span>
+        <span className="text-[11px] text-ink-soft">{data.modeDetail}</span>
+      </div>
+
+      {phaseTotal > 0 ? (
+        <div className="mt-3">
+          <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-surface-muted">
+            {phases.map((phase, i) => (
+              <div
+                key={phase.label}
+                className="h-full bg-primary transition-all duration-700"
+                style={{
+                  // One hue, stepped down — these are phases of a single
+                  // process, not unrelated categories.
+                  opacity: 1 - i * 0.15,
+                  width: `${(phase.ms / phaseTotal) * 100 * Math.min(1, progress / 0.8)}%`,
+                }}
+              />
+            ))}
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+            {phases.map((phase, i) => (
+              <span key={phase.label} className="flex items-center gap-1 text-[10px] text-ink-soft">
+                <span
+                  className="h-1.5 w-1.5 rounded-full bg-primary"
+                  style={{ opacity: 1 - i * 0.15 }}
+                />
+                {phase.label}
+                <span className="font-mono text-ink">{phase.ms}ms</span>
+              </span>
+            ))}
+            <span className="ml-auto font-mono text-[10px] text-ink-soft">
+              total {data.totalMs}ms
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 rounded-md border border-border bg-surface-muted/60 px-2 py-1.5 text-[11px] text-ink-soft">
+          No index phase ran — nothing needed rebuilding.
+        </div>
+      )}
+
+      <div className="mt-3 grid grid-cols-3 gap-1.5 md:grid-cols-5">
+        {[
+          { label: "Nodes", value: nodes },
+          { label: "Edges", value: edges },
+          { label: "Callables", value: callables },
+          { label: "Commits", value: commits },
+          { label: "Remembered", value: remembered },
+        ].map((m) => (
+          <div
+            key={m.label}
+            className="rounded-md border border-border bg-surface-muted/60 px-2 py-1.5"
+          >
+            <div className="text-[9px] font-medium uppercase tracking-wider text-ink-soft">
+              {m.label}
+            </div>
+            <div className="font-mono text-xs font-semibold text-ink">{m.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {data.capabilities.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {data.capabilities.map((name) => (
+            <span
+              key={name}
+              className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[10px] text-ink-soft"
+            >
+              {name}
+            </span>
+          ))}
+        </div>
+      )}
+    </Frame>
+  );
 }
 
 /* ============================================================

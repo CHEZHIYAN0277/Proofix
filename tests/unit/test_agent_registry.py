@@ -68,13 +68,19 @@ def test_registry_entries_remain_positionally_unpackable():
     assert name and purpose and handoff
 
 
-def test_v1_surface_excludes_the_agents_v1_cannot_render():
+def test_v1_surface_excludes_only_the_agents_it_cannot_render():
+    """The product surface publishes everything it has a card for.
+
+    A0.5 joined it in Phase 2 — a layer whose whole purpose is reusing work
+    across runs was invisible to the person paying for it. A5.5 is the last
+    remaining gap (Phase 4); when it lands the two surfaces collapse to one.
+    """
     v1_ids = {a.agent_id for a in agents_for_surface(SURFACE_V1)}
-    assert "A0.5" not in v1_ids
     assert "A5.5" not in v1_ids
+    assert "A0.5" in v1_ids
     assert "A1" in v1_ids and "A10" in v1_ids
-    # A0.7 is the exception: a run the precheck blocks reaches no other agent,
-    # so without it V1 has nothing to show for the stage where the run stopped.
+    # A run the precheck blocks reaches no other agent, so without A0.7 V1 has
+    # nothing to show for the stage where the run stopped.
     assert "A0.7" in v1_ids
 
 

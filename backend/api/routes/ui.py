@@ -222,8 +222,9 @@ async def get_run_agents(
             pattern="^(v1|v2)$",
             description=(
                 "Which registry surface to publish. `v1` (default) returns the "
-                "eleven agents the existing workspace renders; `v2` returns "
-                "full pipeline including A0.5 and A5.5."
+                "agents the workspace has cards for; `v2` returns the full "
+                "pipeline. They differ by A5.5 alone — A0.5 joined the product "
+                "surface in Phase 2 — and collapse to one value when it lands."
             ),
         ),
     ] = SURFACE_V1,

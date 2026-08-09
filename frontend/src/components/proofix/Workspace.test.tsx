@@ -169,3 +169,45 @@ describe("Workspace REST failures", () => {
     expect(screen.getAllByText(/vulnapi/).length).toBeGreaterThan(0);
   });
 });
+
+describe("Repository identity", () => {
+  it("renders the identity the backend has always published", async () => {
+    backendReturns({
+      header: {
+        ...header("completed"),
+        repositoryId: "repo-abc123def456",
+        headSha: "9c2d1f4a8b7e6d5c",
+        repositoryHash: "idx-77aa88bb99cc",
+      },
+    });
+
+    render(<Workspace runId="run-identity" />);
+
+    expect(await screen.findByText("Repository ID")).toBeTruthy();
+    // Abbreviated for the strip; the full value is the element's title.
+    expect(screen.getByText("repo-abc123d")).toBeTruthy();
+    expect(screen.getByText("9c2d1f4")).toBeTruthy();
+    expect(screen.getByTitle("9c2d1f4a8b7e6d5c")).toBeTruthy();
+  });
+
+  it("omits a commit the run never observed rather than dashing it", async () => {
+    backendReturns({
+      header: { ...header("completed"), repositoryId: "repo-abc123", headSha: null },
+    });
+
+    render(<Workspace runId="run-no-head" />);
+
+    expect(await screen.findByText("Repository ID")).toBeTruthy();
+    expect(screen.queryByText("HEAD")).toBeNull();
+  });
+
+  it("renders no identity strip when the backend knows nothing", async () => {
+    backendReturns({ header: header("completed") });
+
+    render(<Workspace runId="run-bare" />);
+
+    await screen.findByText(/Status · Completed/);
+    expect(screen.queryByText("Repository ID")).toBeNull();
+    expect(screen.queryByText("Index hash")).toBeNull();
+  });
+});

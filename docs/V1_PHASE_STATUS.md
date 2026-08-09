@@ -10,11 +10,11 @@ Audit date: 2026-08-08. Legend: ✅ COMPLETE · 🟡 PARTIAL · 🔴 MISSING · 
 |---|---|---|---|---|---|---|
 | **0** | V2 decommission & V1-only cleanup | ✅ COMPLETE | V2 deleted + committed; dead fixtures gone; `prettier --check` clean | comment + test rename done | backend 1954✓ / frontend 20✓ | none |
 | **1** | Run lifecycle & execution experience | 🟡 PARTIAL | terminal states ✅; error/retry ✅; reconnect ✅; **skeletons 🔴** (B-F08) | lifecycle events ✅; severity absence ✅ | mapping ✅, rendering ✅ (17 component tests) | none |
-| **2** | Repository Intelligence surface | 🟡 PARTIAL | A1/A2/A3 cards ✅; **A0.5 has no card** | A0.5 + knowledge APIs ✅ | backend ✅ | none |
+| **2** | Repository Intelligence surface | ✅ COMPLETE | A0.5 card + visualization ✅; header identity strip ✅ | A0.5 on the `v1` surface ✅ | 19 card tests + 3 identity tests | none |
 | **3** | Investigation / Evidence / Blast Radius | ✅ COMPLETE | A3.5/A4/A5 cards + visualizations | agents + citation verification ✅ | ✅ | none |
 | **4** | Context Engineering / Repair Planning | 🔴 MISSING (frontend) | **no context card; planner shows summary only** | A5.5 + A6 + `/context` + `/plan` ✅ | backend ✅ | none |
 | **5** | Patch Generation | 🟡 PARTIAL | filenames only, **no diff view** | A7 + `/patch` ✅ but B-B03/06/07/08 open | integrity ✅, rollback 🔴 | none |
-| **6** | Validation & scoring correctness | ⛔ BLOCKED | mutation card ✅ | **B-B01 unmeasured→zero changes routing**; B-B02 false rejections | B-B01/B-B02 untested | B-B01 must land before trusting any decision |
+| **6** | Validation & scoring correctness | ✅ COMPLETE | mutation card ✅; null axes render "Not measured" | B-B01 ✅ (`measurement.py`); B-B02 ✅ (line-free finding key); B-B16 ✅ (absent scanner ≠ 100) | 15 A9 tests + `measured_mean` arithmetic + projection | none |
 | **7** | Final decision & report | 🟡 PARTIAL | report renders, nullable-aware ✅ | routing ✅; B-B09/10/11 open | routing ✅ | depends on 6 |
 | **8** | Production hardening | 🔴 MISSING | reconnect ✅ (Phase 1); no reduced-motion, poll cost | sandbox, scale, G9, privacy, clone leak | 🔴 | B-B12 blocks hosting |
 | **9** | Final QA / certification | 🔴 MISSING | — | — | no real-GitHub E2E | all above |
@@ -37,21 +37,70 @@ WebSocket reconnect that never infers completion from a close (B-F03), the
 still no per-panel loading skeletons. The honesty defect it was filed for — a
 failed fetch rendering as an empty one — is fixed; the polish is not.
 
-**Phase 6 ⛔** — this is the one phase that cannot be called partial. B-B01 means
-an axis nobody measured contributes a zero to the composite that gates
-auto-merge. Until it is fixed, every routing decision downstream is suspect, so
-Phase 7's report is showing numbers that may be wrong for a structural reason.
+**Phase 2 ✅** (closed 2026-08-09) — A0.5 moved from the `v2`-only surface onto
+the product surface, so the layer whose entire purpose is reusing work across
+runs is no longer invisible to the person paying for it.
+
+The card leads with **how the index was obtained** — cache hit, incremental, or
+full rebuild — because that is the only fact distinguishing A0.5 from A1
+re-reading the same files. Its visualization is a timing breakdown of the
+phases that actually ran (a zero-millisecond phase is omitted, not drawn as a
+sliver) plus node/edge/callable/commit/remembered-repair counts.
+
+A0.5 is projected unlike any other agent, and two things followed from that:
+
+* It never mutates `RunStateModel` by design, so `_visualization_for` now takes
+  the agent's events — its numbers exist only in its own emitted payload.
+* Its failure is caught so the pipeline can continue, so it emits `started` and
+  never a terminal event. `_agent_status` read that as "running" forever on a
+  finished run; a terminal run now resolves an unfinished agent to `failed`
+  when `state.errors` names it and `skipped` otherwise.
+
+Disabled A0.5 (`repository_intelligence_enabled=False`) emits nothing and
+renders as absence — `skipped`, no visualization, no zeroed index.
+
+The header identity strip (`repositoryId` / `headSha` / `repositoryHash`)
+renders values the backend had been publishing all along. Fields the run never
+observed are omitted rather than dashed.
+
+**`surface` does not collapse yet.** The two values now differ by A5.5 alone;
+retiring the parameter is Phase 4's to finish.
+
+**Phase 6 ✅** (closed 2026-08-09) — every number that gates a merge is now a
+real measurement, in both directions.
+
+B-B01's half was already done: `services/measurement.py` holds the tri-state
+semantics, `AxisScores` is nullable, and `measured_mean` divides by the
+measurements rather than by four.
+
+What closed the phase:
+
+* **B-B02** — A9's finding identity dropped the line number. The key was
+  `file:line:message[:50]`, so a patch inserting a line above a pre-existing
+  finding shifted it, changed its key, and had it rejected as newly introduced.
+  Identity is now `(tool, normalized path, normalized message)` with the
+  message no longer truncated — the 50-character prefix collided distinct
+  bandit issues, and a collision there *accepts* a real vulnerability.
+  Comparison is by multiplicity (`Counter`), not set difference, so a file that
+  went from one hardcoded password to two still reports one new finding.
+* **B-B16** (found during the phase) — the inverse of B-B01. A9 returned `[]`
+  both for "scanned, nothing found" and "bandit could not be executed", and the
+  score is derived from that count, so an absent scanner produced
+  `security_score = 100.0` and cleared the 90.0 auto-merge gate. Scanners now
+  report `(executed, findings)`; with none executed the score is `None`, which
+  `meets_threshold` refuses. Two projection sites that read "A9 produced a
+  result" as "A9 measured one" were corrected with it.
 
 ---
 
 ## Test suites
 
-- **Backend** — 1957 pass, 4 skipped. One pre-existing environmental failure:
+- **Backend** — 1995 pass, 4 skipped. One pre-existing environmental failure:
   `test_reproduction_stability_gate` asserts `get_head_sha(vulnapi)` is
   non-empty, but the `vulnapi/` fixture has no `.git`, so it returns `""`. The
   test's skip guard only checks that the directory exists, not that it is a git
   repo, so it fails rather than skipping. Not caused by any phase work.
-- **Frontend** — 37 pass across 5 files. Component tests run on jsdom, opted
+- **Frontend** — 40 pass across 5 files. Component tests run on jsdom, opted
   into per file with a `// @vitest-environment jsdom` docblock; shared shims
   live in `src/test/setup.ts`. Test config is `vitest.config.ts`, separate from
   `vite.config.ts` because the TanStack Start plugin must not run under Vitest

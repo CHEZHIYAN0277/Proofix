@@ -7,6 +7,29 @@
  * verbatim per agent.
  */
 
+/** One timed stage of A0.5's index build. Only stages that took time are sent. */
+export interface IndexPhase {
+  label: string;
+  ms: number;
+}
+
+export interface IntelligencePayload {
+  /** How the index was obtained: "cache hit" | "incremental" | "full rebuild". */
+  mode: string;
+  /** The backend's own sentence explaining that mode. Rendered verbatim. */
+  modeDetail: string;
+  phases: IndexPhase[];
+  totalMs: number;
+  metrics: {
+    nodes: number;
+    edges: number;
+    callables: number;
+    commits: number;
+    rememberedRepairs: number;
+  };
+  capabilities: string[];
+}
+
 export interface RepoFile {
   name: string;
   ast: number;
@@ -157,6 +180,7 @@ export interface MergePayload {
 }
 
 export type AgentVisualizationPayload =
+  | { kind: "intelligence"; data: IntelligencePayload }
   | { kind: "repo-intel"; data: RepoIntelPayload }
   | { kind: "deps"; data: DepsPayload }
   | { kind: "static"; data: StaticPayload }

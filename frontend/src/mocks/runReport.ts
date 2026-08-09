@@ -102,6 +102,16 @@ export interface WorkspaceHeaderModel {
    * `RunLifecycleEvent` list, `environment` A0.7's report.
    */
   status?: string;
+  /**
+   * Repository identity, from `repository_identity()`. `repositoryId` is the key
+   * every cross-run store is keyed by — repair memory, learned profiles — so it
+   * is what makes "this repository has been seen before" checkable rather than
+   * asserted. `headSha` and `repositoryHash` are null when this run never
+   * observed them; render absence, never a guess.
+   */
+  repositoryId?: string | null;
+  headSha?: string | null;
+  repositoryHash?: string | null;
   lifecycle?: { type: string; reason?: string | null; decision_label?: string | null }[];
   environment?: {
     status?: string | null;

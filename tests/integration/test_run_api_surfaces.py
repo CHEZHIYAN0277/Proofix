@@ -93,10 +93,10 @@ async def test_agents_endpoint_defaults_to_the_v1_surface(client):
     assert response.status_code == 200
 
     agent_ids = [entry["agentId"] for entry in response.json()]
-    # V1 has no renderer for these two; handing them over would add cards that
-    # never animate.
-    assert "A0.5" not in agent_ids
+    # A5.5 is the one agent V1 still has no renderer for; handing it over would
+    # add a card that never animates. A0.5 gained one in Phase 2.
     assert "A5.5" not in agent_ids
+    assert "A0.5" in agent_ids
     assert "A1" in agent_ids
 
 

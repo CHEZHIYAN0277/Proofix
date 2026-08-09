@@ -92,13 +92,13 @@ STAGE_BY_ID = {stage.id: stage for stage in STAGE_REGISTRY}
 #
 #   "v1" — the product surface: the agent cards the workspace renders today
 #          (`frontend/src/components/proofix`).
-#   "v2" — the full-pipeline surface: every agent the graph executes, including
-#          A0.5 and A5.5, which the product surface has no card for yet.
+#   "v2" — the full-pipeline surface: every agent the graph executes.
 #
-# The full-pipeline surface is retained because it is the only thing publishing
-# A0.5 and A5.5, which genuinely run. Collapsing the two — by giving the product
-# surface cards for those agents — is tracked as product work, not done here,
-# because it changes what the workspace renders.
+# The two now differ by exactly one entry: A5.5 (`context`), which runs but has
+# no product card yet — Phase 4. A0.5 moved onto the product surface in Phase 2,
+# so the layer whose entire purpose is reusing work across runs is no longer
+# invisible to the person paying for it. When A5.5 gains a card these collapse
+# to one value and the `surface` parameter can be retired.
 SURFACE_V1 = "v1"
 SURFACE_V2 = "v2"
 _BOTH = frozenset({SURFACE_V1, SURFACE_V2})
@@ -140,7 +140,7 @@ AGENT_REGISTRY: list[AgentDefinition] = [
         "Index the repository into a reusable knowledge graph.",
         "Repository Index",
         "repository",
-        _V2_ONLY,
+        _BOTH,
     ),
     AgentDefinition(
         "repo-intel",
@@ -491,6 +491,14 @@ def _agent_status(events_for_agent: list[AgentStatusEvent], state: RunStateModel
     if latest.status == "failed":
         return "failed"
     if latest.status != "completed":
+        # A terminal run cannot still be running an agent. A0.5 makes this
+        # reachable in practice: its failure is caught so the pipeline can
+        # continue, so it emits `started` and never a terminal event, and the
+        # card sat on "running" forever after the run had finished.
+        if state.status in RUN_TERMINAL_STATES:
+            agent_id = BACKEND_BY_CARD_ID.get(card)
+            errored = any(e.get("agent") == agent_id for e in state.errors)
+            return "failed" if errored else "skipped"
         return "running"
 
     if card == "mutation":
@@ -518,11 +526,43 @@ def _lines_for(card: str, state: RunStateModel, events_for_agent: list[AgentStat
     """Narrate what the agent did, from its own emitted messages plus state."""
     lines = [e.message for e in events_for_agent if e.message]
     detail = _narrative_detail(card, state)
+    if card == "intelligence":
+        # A0.5 publishes nothing to run state, so its detail comes from the
+        # event payload rather than from `state` like every other card.
+        detail = _intelligence_detail(_latest_payload(events_for_agent, "repository_intelligence"))
     if lines or detail:
         return lines + detail
     if state.status in RUN_TERMINAL_STATES:
         return ["Skipped — the pipeline routed around this stage."]
     return ["Waiting to start…"]
+
+
+def _intelligence_detail(published: dict) -> list[str]:
+    """What A0.5's index means, in the terms the layer exists for.
+
+    The agent's own message already reports the counts; this says whether the
+    work was reused, and whether anything was remembered from earlier runs —
+    the two facts that distinguish this layer from A1 re-indexing the same
+    files.
+    """
+    if not published:
+        return []
+
+    _mode, detail = _index_mode(published)
+    lines = [detail]
+
+    remembered = published.get("repair_memory_entries", 0)
+    if remembered:
+        lines.append(
+            f"{remembered} repair(s) remembered from previous runs on this repository."
+        )
+    else:
+        lines.append("No previous repairs remembered for this repository.")
+
+    commits = published.get("git_commits_indexed", 0)
+    if commits:
+        lines.append(f"{commits} commit(s) of history indexed for ownership and churn.")
+    return lines
 
 
 def _narrative_detail(card: str, state: RunStateModel) -> list[str]:
@@ -1096,8 +1136,86 @@ def _evidence_for(
     return payload("Evidence", "No evidence captured for this stage.", [])
 
 
-def _visualization_for(card: str, state: RunStateModel) -> dict | None:
-    """Build the typed visualization payloads the UI renders per agent."""
+#: Index phases as A0.5 times them, in the order they run.
+_INDEX_PHASES = (
+    ("Graph", "graph_build_ms"),
+    ("Call graph", "call_graph_ms"),
+    ("Ownership", "ownership_ms"),
+    ("History", "history_ms"),
+    ("Docs", "documentation_ms"),
+)
+
+
+def _index_mode(published: dict) -> tuple[str, str]:
+    """How A0.5 obtained this index, and the detail behind it.
+
+    Mirrors `RepositoryIntelligenceAgent._summary` precedence deliberately: a
+    cache hit outranks an incremental update, which outranks a full rebuild. The
+    mode *is* the story of this card — a layer that exists to reuse work across
+    runs is only interesting if you can see whether it reused any.
+    """
+    if published.get("cache_hits"):
+        return "cache hit", "Index reused from a previous run."
+    if published.get("incremental_updates"):
+        changed = (
+            f"+{published.get('files_added', 0)} added, "
+            f"~{published.get('files_modified', 0)} modified, "
+            f"-{published.get('files_deleted', 0)} deleted, "
+            f"→{published.get('files_renamed', 0)} renamed"
+        )
+        return "incremental", f"Only the changed files were re-indexed: {changed}."
+    return "full rebuild", "No usable prior index — the repository was indexed from scratch."
+
+
+def _visualization_for(
+    card: str,
+    state: RunStateModel,
+    events_for_agent: list[AgentStatusEvent] | None = None,
+) -> dict | None:
+    """Build the typed visualization payloads the UI renders per agent.
+
+    Most agents write their artifact to `RunStateModel` and are projected from
+    there. A0.5 deliberately does not — it never mutates run state, and its
+    index lives in the cross-run cache — so its numbers are only ever in its own
+    emitted event, which is why this takes the agent's events too.
+    """
+    events_for_agent = events_for_agent or []
+
+    if card == "intelligence":
+        published = _latest_payload(events_for_agent, "repository_intelligence")
+        if not published:
+            return None
+        graph = _latest_payload(events_for_agent, "knowledge_graph")
+        mode, mode_detail = _index_mode(published)
+        return {
+            "kind": "intelligence",
+            "data": {
+                "mode": mode,
+                "modeDetail": mode_detail,
+                # Only phases that took measurable time. A zero-millisecond
+                # segment is not a phase that ran fast, it is a phase this
+                # index did not need, and drawing it as a sliver implies work.
+                "phases": [
+                    {"label": label, "ms": published.get(key) or 0}
+                    for label, key in _INDEX_PHASES
+                    if (published.get(key) or 0) > 0
+                ],
+                "totalMs": published.get("total_ms") or 0,
+                "metrics": {
+                    "nodes": published.get("repository_nodes", 0),
+                    "edges": published.get("repository_edges", 0),
+                    "callables": published.get("call_graph_nodes", 0),
+                    "commits": published.get("git_commits_indexed", 0),
+                    "rememberedRepairs": published.get("repair_memory_entries", 0),
+                },
+                "capabilities": [
+                    c.get("name", "")
+                    for c in (graph.get("capabilities") or [])[:6]
+                    if c.get("name")
+                ],
+            },
+        }
+
     if card == "repo-intel":
         sig = state.sig or {}
         files = sig.get("files") or {}
@@ -1433,7 +1551,7 @@ def build_agent_entries(
             "evidence": _evidence_for(card, state, agent_events),
         }
 
-        visualization = _visualization_for(card, state)
+        visualization = _visualization_for(card, state, agent_events)
         if visualization:
             entry["visualization"] = visualization
 

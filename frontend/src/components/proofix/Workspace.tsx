@@ -845,7 +845,46 @@ function WorkspaceHeader({
           </div>
         ))}
       </div>
+
+      <RepositoryIdentity header={header} />
     </section>
+  );
+}
+
+/**
+ * Which repository, at which commit, indexed as what.
+ *
+ * The backend has published these since the index layer landed and nothing
+ * rendered them. `repositoryId` is the key every cross-run store is keyed by, so
+ * it is the only thing that makes "this repository has been seen before"
+ * checkable rather than asserted — which is exactly the claim A0.5's card makes.
+ *
+ * Fields are omitted when the backend sends null. A commit the run never
+ * observed is not rendered as a dash that implies a value was measured and
+ * empty; it simply is not there, and when nothing is known the strip is absent.
+ */
+function RepositoryIdentity({ header }: { header: WorkspaceHeaderModel }) {
+  const entries = [
+    { label: "Repository ID", value: header.repositoryId, short: (v: string) => v.slice(0, 12) },
+    { label: "HEAD", value: header.headSha, short: (v: string) => v.slice(0, 7) },
+    { label: "Index hash", value: header.repositoryHash, short: (v: string) => v.slice(0, 12) },
+  ].filter((e): e is { label: string; value: string; short: (v: string) => string } =>
+    Boolean(e.value),
+  );
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-border pt-3">
+      {entries.map((e) => (
+        <span key={e.label} className="flex items-center gap-1.5 text-[11px]">
+          <span className="font-medium uppercase tracking-wider text-ink-soft">{e.label}</span>
+          <span className="font-mono text-ink" title={e.value}>
+            {e.short(e.value)}
+          </span>
+        </span>
+      ))}
+    </div>
   );
 }
 
