@@ -57,9 +57,16 @@ def _is_expected_disconnect(exc: BaseException) -> bool:
         return True
     # Starlette raises a bare RuntimeError once the close handshake is done.
     # Matched on its message rather than its type so an unrelated RuntimeError
-    # is still reported.
+    # is still reported. The exact wording
+    # (`starlette/websockets.py::WebSocket.send`) is
+    # 'Cannot call "send" once a close message has been sent.' — this used to
+    # be unmatched, so a normal browser reload mid-send surfaced as an
+    # unhandled 500 traceback instead of the ordinary disconnect it is.
     return isinstance(exc, RuntimeError) and (
-        'websocket.close' in str(exc) or 'response already completed' in str(exc)
+        'websocket.close' in str(exc)
+        or 'response already completed' in str(exc)
+        or 'close message has been sent' in str(exc)
+        or 'disconnect message has been received' in str(exc)
     )
 
 # How long the event queue must be idle before we check whether the run has

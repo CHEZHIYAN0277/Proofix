@@ -1,4 +1,15 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+#: Which path actually produced `FixDAGPlan.execution_order`.
+#:
+#: `deterministic` is `topological_execution_order` — a real topological sort
+#: over `dependency_edges`, or (when the graph has a cycle) a CVE-first
+#: fallback. `llm` means the configured model returned an order and it was
+#: used as-is, unvalidated against the dependency edges. Persisted so the UI
+#: never has to guess, and never has to invent, which one happened.
+OrderingSource = Literal["llm", "deterministic"]
 
 
 class FixNode(BaseModel):
@@ -18,3 +29,11 @@ class FixDAGPlan(BaseModel):
     execution_order: list[str] = Field(default_factory=list)
     conflict_batches: list[list[str]] = Field(default_factory=list)
     dependency_edges: list[DependencyEdge] = Field(default_factory=list)
+    #: `None` on a run predating this field. Never defaulted to
+    #: `"deterministic"` for an unknown run — that would fabricate a fact this
+    #: model did not actually record at the time.
+    ordering_source: OrderingSource | None = None
+    #: The LLM's own account of why it chose this order, when it was asked and
+    #: it answered. Empty when the deterministic path ran (there is no LLM to
+    #: explain itself) or when the LLM returned an order without one.
+    ordering_rationale: str = ""

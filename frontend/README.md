@@ -40,6 +40,60 @@ cp .env.example .env
 
 In dev, Vite proxies `/api` and `/ws` to the FastAPI backend, so the browser sees one origin and CORS never applies.
 
+## Run locally (full-stack)
+
+This project runs a FastAPI backend and a Vite frontend. The frontend can run standalone (mock data) or connect to the backend (`VITE_DATA_SOURCE=api`). Follow these steps to run both locally.
+
+1) Backend (Python)
+
+```bash
+# create a virtual environment and activate it
+python -m venv .venv && source .venv/bin/activate
+
+# install dependencies (including dev extras)
+pip install -e ".[dev]"
+
+# download spaCy model used by the repo
+python -m spacy download en_core_web_sm
+
+# copy example env and edit credentials (MISTRAL/ANTHROPIC, GITHUB_TOKEN, REDIS_URL)
+cp .env.example .env
+
+# start Redis (choose one):
+brew services start redis            # macOS Homebrew
+# OR, using Docker Compose from project root:
+docker compose up -d
+
+# start the API (from project root, with venv active)
+.venv/bin/uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+2) Frontend (Node)
+
+```bash
+cd frontend
+npm install
+# copy frontend env and set VITE_DATA_SOURCE=api (or leave as mock)
+cp .env.example .env
+export VITE_DATA_SOURCE=api
+npm run dev
+# open http://localhost:5173
+```
+
+Notes:
+
+- If `uvicorn` reports permission or command-not-found, ensure the venv is activated or call the binary directly as shown above.
+- For development you can keep `VITE_DATA_SOURCE=mock` to use local fixtures without running the backend.
+- To start a pipeline run against the bundled demo repo, use:
+
+```bash
+curl -X POST http://127.0.0.1:8000/runs \
+  -H "Content-Type: application/json" \
+  -d '{"repo_path": "vulnapi"}'
+```
+
+If you want, I can also add a short consolidated run section to the root `README.md` — say if you'd like a single place with the exact commands. 
+
 ## Architecture
 
 Two seams keep the UI independent of where data comes from:

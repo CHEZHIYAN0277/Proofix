@@ -1,6 +1,28 @@
 import asyncio
 import json
+import sys
 from pathlib import Path
+
+#: The interpreter every Python subprocess runs under.
+#:
+#: Was the bare string `"python"` at seven call sites — the probe, A3.5, the
+#: three in scoped validation and the two mutmut calls. That resolves through
+#: `PATH`, which is whatever the server process inherited and is *not* the
+#: interpreter ProoFix itself is running under. On a machine where ProoFix runs
+#: from a virtualenv and `PATH` leads to a system Python, the probe reported
+#: `No module named 'pytest'` while ProoFix's own interpreter had pytest
+#: installed — and the message it printed claimed to be describing "the
+#: interpreter ProoFix would run its tests with", which was the one thing it was
+#: not.
+#:
+#: `sys.executable` is that interpreter, by definition. Using it also keeps the
+#: probe and reproduction honest with each other: the probe's whole value is
+#: answering the question A3.5 will later ask, and two different interpreters
+#: are two different questions.
+#:
+#: The fallback exists because `sys.executable` is documented as possibly empty
+#: when Python is embedded.
+PYTHON = sys.executable or "python3"
 
 
 async def run_command(

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from backend.agents.base import AgentBase
-from backend.models.blast import BlastGraphResult
+from backend.models.blast import BlastGraphResult, TargetResolutionSummary
 from backend.models.sig import SemanticIntentGraph
 from backend.services.blast_traversal import resolve_origins, traverse_multi_origin
 from backend.services.target_resolver import pin_resolved_target, resolve_patch_target
@@ -18,6 +18,7 @@ class A5BlastGraphAgent(AgentBase):
         citations = root_cause.get("citations", [])
 
         target = None
+        pinned = False
         runtime_confirmed = (state.reproduction or {}).get("status") == "CONFIRMED"
 
         if not sig_data or not citations:
@@ -34,7 +35,21 @@ class A5BlastGraphAgent(AgentBase):
 
             result = traverse_multi_origin(sig, origins)
             if target.resolved_application_path:
-                pin_resolved_target(result, target, runtime_confirmed)
+                pinned = pin_resolved_target(result, target, runtime_confirmed)
+
+            # Persisted, not just emitted on the transient WS event: the event
+            # rolls off after 500 events and is invisible to a client opening a
+            # finished run — exactly the reason `investigation` was added to
+            # A4's state rather than left on the event alone.
+            result.target_resolution = TargetResolutionSummary(
+                original_path=target.original_path,
+                normalized_path=target.normalized_path,
+                resolved_path=target.resolved_application_path,
+                source=target.resolution_source,
+                confidence=target.confidence,
+                runtime_confirmed=runtime_confirmed,
+                pinned=pinned,
+            )
 
         result_dict = result.model_dump(mode="json")
         state.blast_graph = result_dict

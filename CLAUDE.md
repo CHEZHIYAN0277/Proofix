@@ -578,279 +578,22 @@ depends on agreeing what "the same file" means.
 
 ---
 
-## 6. Proposed Context Engineering Layer (A5.5)
+## 6. Context Engineering Layer (A5.5) — shipped
 
-### 6.1 Where it goes
+This section originally proposed A5.5 in detail (ranking weights, subsystem layout, full
+`ContextPackage` schema, a five-phase migration plan, projected token savings, and a risk table).
+Per the roadmap (§8, P2) it has shipped: it runs in the graph as `engineer_context` between
+`blast_scope` and `plan_fixes`, publishes via `GET /api/runs/{id}/context`, and has a V1 context
+panel. The code is now the source of truth for its exact behavior — see
+`backend/services/context/` (`ranking.py`, `extraction.py`, `privacy.py`, `builder.py`,
+`cache.py`), `backend/models/context.py` for the `ContextPackage` schema, and
+`backend/agents/a5_5_context_engineer.py` for orchestration. It makes zero LLM calls by design;
+if ranking ever needs LLM judgment, that judgment belongs in A4 as evidence, not in A5.5 as
+inference.
 
-The natural seam is **between A5 and A6** — and it fixes A6's decorative status rather than adding
-another dead artifact:
-
-```
-A5 blast_scope ──► A5.5 context_engineering ──► A6 fix_planner ──► A7 patch_generation
-   scope, origins      ContextPackage per          consumes packages,   consumes package
-   target resolution   candidate target            orders them,         instead of
-                                                   attaches acceptance  re-deriving context
-                                                   criteria
-```
-
-A5.5 produces the *content* of the repair context; A6 decides *order and dependencies* over those
-contexts and attaches acceptance criteria; A7 renders one package into a prompt and generates.
-That gives A6 a real job for the first time and removes context selection from A7.
-
-Graph change is one node:
-
-```python
-graph.add_edge("blast_scope", "engineer_context")
-graph.add_edge("engineer_context", "plan_fixes")
-```
-
-### 6.2 What it consumes
-
-Everything is already in `RunStateModel` — **A5.5 requires no new upstream data**:
-
-| Input | Source | Used for |
-|---|---|---|
-| `sig` | A1 | file roles, imports/imported_by, criticality |
-| `reproduction.traceback` | A3.5 | frame ranking — strongest deterministic signal |
-| `reproduction.failing_test`, `exception_type/message` | A3.5 | acceptance criteria, expected behaviour |
-| `reproduction.failing_file/line` | A3.5 | primary anchor |
-| `root_cause.citations` (verified only) | A4 | claim → function anchoring |
-| `root_cause.evidence_refs`, `runtime_evidence` | A4 | secondary ranking, evidence block |
-| `static_report.prioritized` | A3 | tie-break, constraint derivation |
-| `blast_graph.scope` / `auto_patch_scope` | A5 | candidate universe + propagation confidence |
-| `TargetResolution` | shared target service | the anchor file |
-| `retry_brief` | A8/A9 | retry-mode context widening |
-
-### 6.3 What it reuses
-
-| Service | Use |
-|---|---|
-| `path_resolution` (new) | every path in every input, normalized once |
-| `ast_index` (extended parser) | function spans, imports, call sites, per-function source |
-| `citation_verifier` | re-anchor citations to current post-patch source on retries |
-| `target_resolution` (extracted) | the anchor — **not** re-derived |
-| `cache_service` | context-package cache |
-| `sig_helpers` | criticality/role lookups |
-
-No LLM service. **A5.5 makes zero LLM calls.**
-
-### 6.4 Subsystem shape
-
-```
-backend/services/context/
-├── ranking.py       ContextRankingEngine   — score candidate functions
-├── extraction.py    ContextExtractor       — pull spans via ast_index
-├── privacy.py       PrivacyGuard           — detect + mask secrets
-├── builder.py       MinimalContextBuilder  — assemble + enforce budget
-└── cache.py         ContextCache           — keyed on evidence fingerprint
-
-backend/models/context.py                   — ContextPackage schema
-backend/agents/a5_5_context_engineer.py      — the agent (orchestration only)
-```
-
-**Ranking Engine.** Deterministic additive scoring over candidate functions. Every weight is a
-module-level named constant, mirroring `root_cause_builder`'s existing convention:
-
-```
-STACK_FRAME_EXACT      1.00   function contains a non-library traceback frame
-STACK_FRAME_DEPTH_DECAY 0.85^ depth from the innermost frame
-VERIFIED_CITATION      0.80   a verified A4 citation lands inside the span
-RESOLVED_TARGET        0.75   function is in the resolved target file
-DIRECT_CALLEE          0.50   called by a ranked function (1 hop)
-DIRECT_CALLER          0.40   calls a ranked function (1 hop)
-FAILING_TEST_CALL      0.45   invoked directly by the failing test
-STATIC_FINDING         0.30   a prioritized finding lands inside the span
-BLAST_PROPAGATION      0.00–0.30  scaled by ScopedFile.propagation_confidence
-SIG_CRITICALITY        0.00–0.20  scaled by FileNode.criticality
-UNVERIFIED_CITATION    0.10
-```
-
-Ties break on `(-score, hop_count, path, lineno)` — fully reproducible. Selection is
-score-descending until the token budget is met, target function always included regardless of
-score.
-
-**Extractor.** From `ast_index`, for each selected function: exact source span, the imports it
-actually references (not the whole import block), enclosing class signature if a method, and
-module-level constants it reads. Helper functions are included as **signature + docstring only**
-unless they scored above the inclusion threshold.
-
-**Privacy Guard.** Runs on every string that will leave the process — extracted code, tracebacks,
-evidence claims, acceptance criteria. Detection is layered:
-
-1. **Structural** — assignments to names matching
-   `(?i)(secret|password|passwd|token|api[_-]?key|private[_-]?key|credential|salt|auth)` with a
-   string literal value.
-2. **Format** — PEM blocks, JWTs (`eyJ...`), AWS keys (`AKIA...`), `sk-`/`ghp_`/`gho_` prefixes,
-   connection URIs with embedded credentials, base64 runs over 40 chars with high entropy.
-3. **Environment** — any value matching a `os.environ`/`getenv` default literal.
-
-Masking is **structure-preserving**: `SECRET_KEY = "abc123"` → `SECRET_KEY = "<REDACTED:str:6>"`.
-The code still parses, the LLM still sees the shape, the value never leaves. Every mask is
-recorded in `ContextPackage.redactions` with file, line, and detector — so the run is auditable
-and the guard is testable.
-
-Guard failure is **fail-closed**: if the guard raises, A5.5 emits a package with
-`privacy_guard_status="failed"` and A7 falls back to its current path only if
-`settings.context_privacy_strict` is off. Default on.
-
-**Minimal Context Builder.** Assembles the package, enforces a character budget
-(`settings.context_max_chars`, default 12000 ≈ 3k tokens), degrades gracefully: drop lowest-ranked
-helpers → drop helper bodies to signatures → truncate the traceback to the innermost 5 frames →
-truncate module constants. Never drops the target function or the acceptance criteria.
-
-**Context Cache.** Keyed on
-`sha256(repo_hash | target_file | target_function | sorted(citation fingerprints) | traceback hash | retry_count)`.
-Justified: the retry loop re-enters A7 up to `max_retries` times, and on a retry where only the
-*validation failure* changed, ranking and extraction are identical. Saves the full AST + ranking
-pass per retry. Redis, same TTL policy as the SIG cache. **Cache the pre-privacy package? No** —
-cache the post-mask package only, so a cache hit can never resurrect an unmasked secret.
-
-### 6.5 Output schema
-
-```python
-# backend/models/context.py
-
-class ExtractedFunction(BaseModel):
-    name: str
-    file: str
-    lineno: int
-    end_lineno: int
-    source: str
-    signature_only: bool = False
-    score: float = 0.0
-    score_breakdown: dict[str, float] = Field(default_factory=dict)  # explainability
-    inclusion_reason: str = ""
-
-class Redaction(BaseModel):
-    file: str
-    line: int
-    detector: str
-    placeholder: str
-
-class ContextPackage(BaseModel):
-    schema_version: str = "1.0"
-
-    target_file: str
-    target_function: str | None
-    target_source: str
-
-    helper_functions: list[ExtractedFunction] = Field(default_factory=list)
-    imports: list[str] = Field(default_factory=list)
-    module_constants: list[str] = Field(default_factory=list)
-
-    runtime_evidence: dict = Field(default_factory=dict)
-    acceptance_criteria: list[str] = Field(default_factory=list)
-    constraints: list[str] = Field(default_factory=list)
-
-    redactions: list[Redaction] = Field(default_factory=list)
-    privacy_guard_status: Literal["clean", "masked", "failed"] = "clean"
-
-    candidates_considered: int = 0
-    total_chars: int = 0
-    budget_chars: int = 0
-    cache_hit: bool = False
-    ranking_version: str = "v1"
-```
-
-`RunStateModel` gains one field, defaulted, so every existing run and every stored Redis state
-still deserializes:
-
-```python
-context_packages: list[dict] = Field(default_factory=list)
-```
-
-Matching entry in the `RunState` TypedDict (remember: two places, per T4).
-
-### 6.6 Which agents change
-
-| Agent | Change | Compatibility |
-|---|---|---|
-| **A1–A4** | none | untouched |
-| **A5** | target resolution moves to the shared service; A5 calls it instead of owning it | output schema identical |
-| **A5.5** | new | additive |
-| **A6** | reads `context_packages`, orders them, attaches acceptance criteria to each | `FixDAGPlan` unchanged; gains meaning |
-| **A7** | if a package exists for the plan's file, render the prompt from it; else current path | **both paths live** |
-| **A8–A10** | none | untouched |
-
-**Interfaces that change:**
-- `runtime_patch_prompt.build_runtime_patch_prompt` gains an optional
-  `context: ContextPackage | None = None`. When present, "Relevant code" comes from
-  `target_source` + helpers, and the duplicated "Original complete file" block is **dropped** —
-  that alone is a large token reduction.
-- `target_resolver.resolve_patch_target(repo, state, sig)` →
-  `resolve_patch_target(repo, evidence: TargetEvidence, sig)` where `TargetEvidence` is a small
-  model built from reproduction/root_cause/static. Old signature kept as a deprecated wrapper for
-  one release.
-- `python_ast_parser.ParsedModule` gains `function_spans: list[FunctionSpan]`, defaulted empty.
-  Existing consumers ignore it. **SIG cache version bumps `v1` → `v2`** so stale payloads without
-  spans are not read back.
-
-**Untouched:** `RunStateModel` existing fields, all agent output schemas, the WS event contract,
-`ui_projection`, `proof_bundle`, `github_pr`, trust gating, routing, all 30 test files.
-
-### 6.7 Migration strategy
-
-Five phases, each independently shippable and revertible.
-
-**Phase 0 — foundations (no A5.5 yet).** Extract `path_resolution`; migrate
-`citation_verifier`, `target_resolver`, `mci_verifier`, A3, A9 onto it. Extract `llm_gateway`
-with token accounting. Baseline every run's token count — **this is what phase 4 gets measured
-against.** Extend `python_ast_parser` with `FunctionSpan`; bump SIG cache version. Ship. No
-behaviour change; existing tests must pass unmodified.
-
-**Phase 1 — shadow mode.** Add A5.5 as a graph node behind
-`settings.context_engineering_enabled` (default **off**). When on, it builds packages, stores them
-in state, emits metrics — and A7 ignores them. Compare package targets against A7's current
-derived targets across the fixture suite. Any divergence is a ranking bug, caught with zero
-production risk.
-
-**Phase 2 — opt-in generation.** `settings.context_engineering_mode = "off" | "shadow" | "active"`.
-In `active`, A7 renders from the package. Run both modes over the `vulnapi` fixture and any
-additional fixtures; compare patch success rate, retry count, and token count. Do not proceed
-without a measured win.
-
-**Phase 3 — A6 integration.** A6 consumes packages, orders them, attaches acceptance criteria.
-A7 stops calling `build_patch_plans`. A6 becomes load-bearing.
-
-**Phase 4 — default on, cleanup.** Flip the default. Remove `extract_relevant_code` and
-`infer_target_function` from `runtime_patch_prompt` (now A5.5's). Keep the legacy A7 path behind
-the flag for one release, then delete.
-
-**Rollback at every phase is a settings flag**, not a revert.
-
-### 6.8 Expected improvements
-
-Measured against the phase-0 baseline, not asserted:
-
-- **Tokens per patch call: 60–80% reduction.** Today A7 sends the target file twice (up to 12k
-  chars) plus stack evidence plus a style exemplar (1.5k). A budgeted package is ~12k chars total
-  including evidence, and the duplicate block disappears entirely.
-- **Cost:** proportional. A7 is the most expensive call in the pipeline (1–3 per attempt, up to
-  `max_retries` attempts).
-- **Repair quality:** the model stops receiving unrelated functions that invite unrelated edits —
-  which should directly reduce `is_abbreviated_patch` and `no_op` integrity failures, currently
-  the main source of wasted retries.
-- **Privacy:** first point in the system where secrets are masked before an LLM call. Today A4
-  and A7 both send raw source and raw tracebacks. This is the change that makes enterprise
-  deployment discussable.
-- **Determinism:** target selection and context content become reproducible from state, with a
-  `score_breakdown` per included function. Two runs on the same commit produce byte-identical
-  packages.
-- **Explainability:** `inclusion_reason` per function makes "why did the model see this code?"
-  answerable in the proof bundle.
-
-### 6.9 Risks
-
-| Risk | Severity | Mitigation |
-|---|---|---|
-| **Ranking omits the function that actually needed fixing** | High | Shadow mode (phase 1) catches divergence before it affects output. Budget degradation drops *helpers* first, never the target. Blast-scope files always contribute at least their top-ranked function. |
-| **Privacy guard masks meaningful code** | Medium | Structure-preserving placeholders keep the code parseable. Every redaction is logged and asserted in tests. Detectors are conservative and individually unit-tested. |
-| **Privacy guard misses a secret** | High | Layered detection (name + format + entropy + env-default). Fail-closed on guard error. Accept that this is defence-in-depth, not a guarantee — document it as such. |
-| **Whole-file patches need whole-file context** | High | A7 returns the *complete file* and `is_abbreviated_patch` enforces that every original top-level definition survives. A package containing only the target function invites abbreviation. **Mitigation: the package carries the full original file for the return contract while the prompt's "focus here" section is minimal** — the saving comes from removing the *duplicate*, not from starving the model. Phase 2 must measure abbreviation-failure rate specifically. |
-| **Cache serves stale context after a patch write** | Medium | Key includes the repo hash, which includes the worktree diff hash — A7's write invalidates it. Retry count is in the key. |
-| **A5.5 becomes another decorative artifact** (A6's fate) | Medium | Phase 3 makes A6 consume it and phase 4 deletes A7's alternative path. A layer nothing depends on gets deleted, not maintained. |
-| **AST extraction fails on unparseable files** | Low | `parse_python_file` already returns `None` on `SyntaxError`; fall back to the current whole-file path for that file and mark the package `degraded`. |
-| **Scope creep into LLM-assisted ranking** | Medium | Hard architectural rule: **A5.5 never calls an LLM.** If ranking needs judgment, that judgment belongs in A4 as evidence, not in A5.5 as inference. |
+Two defects surfaced post-ship and remain open — see roadmap items 7b (privacy guard doesn't
+cover acceptance criteria/constraints/tracebacks, only extracted code) and 7c (per-citation
+`verified` / per-file `propagation_confidence` are aggregated away before reaching the UI).
 
 ---
 
@@ -898,28 +641,20 @@ Measured against the phase-0 baseline, not asserted:
 > frontend exists or will be built.
 
 **P0 — correctness and trust**
-1. ✅ **Done.** Mutation score is parsed for real — `services/mutation_parser.py`;
-   A8 reads `mutation_score` / `survived_mutants` / `total_mutants` and leaves
-   `correctness_score = None` when there is no patch.
+1. ✅ **Done.** Mutation score parsed for real (`services/mutation_parser.py`); A8 reads
+   `mutation_score`/`survived_mutants`/`total_mutants`, leaves `correctness_score = None`
+   when there is no patch.
 2. ✅ **Done.** A3's stub fallback is gated on `code == -1` (tool genuinely absent).
-3. ✅ **Done.** Repository-specific literals (T2) are gone. The prompt's
-   expected behaviour is built from evidence (failing test, exception, A4's
-   conclusion) rather than a keyword table that matched `"exp"` inside
-   "unexpected"; the JWT/expiry strings are out of `retry_brief_builder.py`;
-   and `github_repo_name` no longer defaults to `vulnapi` — an unconfigured
-   target refuses to publish rather than naming the fixture repository.
+3. ✅ **Done.** Repository-specific literals (T2) removed — expected behaviour is built
+   from evidence, not JWT/expiry keyword tables; `github_repo_name` no longer defaults
+   to `vulnapi`.
 4. ✅ **Done.** `services/path_resolution.py` extracted, with tests.
-5. ✅ **Done.** A9's finding identity is `(tool, normalized path, normalized
-   message)` — no line number, so an insertion above an existing finding no
-   longer produces a false rejection. Comparison is by multiplicity, so a
-   genuinely duplicated finding is still caught.
+5. ✅ **Done.** A9's finding identity dropped the line number (was causing false
+   rejections on insertions above existing findings); compares by multiplicity.
 6. ✅ **Done.** `services/llm_gateway.py` extracted with token/cost telemetry.
-7. ✅ **Done.** Unmeasured axes are `None`, not zero — `services/measurement.py`
-   holds the tri-state semantics, `measured_mean` divides by the measurements
-   that exist, and `meets_threshold`/`below_threshold` are deliberately not each
-   other's negation. The inverse defect found alongside it is also closed: an
-   absent scanner used to score `security_score = 100.0` and clear the
-   auto-merge gate, and now scores `None`.
+7. ✅ **Done.** Unmeasured axes are `None`, not zero (`services/measurement.py`); an
+   absent scanner used to score `security_score = 100.0` and clear the auto-merge gate,
+   now scores `None`.
 7a. 🔴 **Open (G9).** `run_id` never reaches `LLMGateway.complete()`, so every
    `AuditEvent.run_id` is `""` and per-run cost/token attribution — the entire
    justification for extracting the gateway (item 6) — is impossible.

@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 
 from backend.models.environment import DetectedManifest, EnvironmentReport
-from backend.services.subprocess_runner import run_command
+from backend.services.subprocess_runner import PYTHON, run_command
 
 # Manifest → (language, priority). Lower priority wins when several are present:
 # `pyproject.toml` describes the project better than a bare `requirements.txt`.
@@ -160,6 +160,23 @@ _MISSING_MODULE_RE = re.compile(
 )
 
 
+#: pytest's own collection summary: "3 tests collected in 0.01s",
+#: "no tests collected in 0.00s", "3 tests collected, 1 error in 0.01s".
+_COLLECTED_RE = re.compile(r"(\d+)\s+tests?\s+collected")
+_NO_TESTS_RE = re.compile(r"no tests collected")
+
+
+def _tests_collected_from_output(text: str) -> int | None:
+    """The count pytest itself reported, or `None` if it never said."""
+    plain = _plain(text or "")
+    match = _COLLECTED_RE.search(plain)
+    if match:
+        return int(match.group(1))
+    if _NO_TESTS_RE.search(plain):
+        return 0
+    return None
+
+
 def _missing_modules_from_output(text: str) -> list[str]:
     """Modules pytest reported it could not import, in first-seen order.
 
@@ -228,7 +245,7 @@ async def probe_environment(repo: Path, timeout: int = 30) -> EnvironmentReport:
     # The operative check: will the runner start? `-c "import pytest"` is the
     # cheapest honest answer, and it uses the same interpreter A3.5 will use.
     code, _stdout, stderr = await run_command(
-        ["python", "-c", "import pytest; print(pytest.__version__)"],
+        [PYTHON, "-c", "import pytest; print(pytest.__version__)"],
         cwd=repo,
         timeout=timeout,
     )
@@ -252,7 +269,7 @@ async def probe_environment(repo: Path, timeout: int = 30) -> EnvironmentReport:
     # guessing which imports matter.
     collect_code, collect_out, collect_err = (
         await run_command(
-            ["python", "-m", "pytest", "--collect-only", "-q", "--no-header", "-p", "no:cacheprovider"],
+            [PYTHON, "-m", "pytest", "--collect-only", "-q", "--no-header", "-p", "no:cacheprovider"],
             cwd=repo,
             timeout=timeout,
         )
@@ -273,6 +290,7 @@ async def probe_environment(repo: Path, timeout: int = 30) -> EnvironmentReport:
             test_runner="pytest",
             test_runner_available=True,
             missing_imports=[],
+            tests_collected=_tests_collected_from_output(f"{collect_out}\n{collect_err}"),
             reason=(
                 "pytest collected the test suite without import errors — it can "
                 f"be executed.{located}"

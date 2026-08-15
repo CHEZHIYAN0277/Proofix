@@ -281,3 +281,37 @@ def test_absolute_stack_path_matches_repo_relative_candidate():
         )
     )
     assert "runtime_stack" in ranked[0].signals
+
+
+# -- vendor paths never reach the repair context ---------------------------
+
+
+def test_vendor_path_in_auto_patch_scope_is_never_ranked():
+    """Belt-and-suspenders: even if a vendor path reaches `rank_files`
+    directly (bypassing `resolve_origins`'s own filter), it must not be
+    scored or returned as a candidate."""
+    ranked = rank_files(
+        RankingInputs(auto_patch_scope=[".venv/Lib/site-packages/httpx/_auth.py"])
+    )
+    assert ranked == []
+
+
+def test_vendor_path_does_not_survive_alongside_a_real_candidate():
+    ranked = rank_files(
+        RankingInputs(
+            auto_patch_scope=["pkg/auth.py", "node_modules/lodash/lodash.js"],
+            failing_file="pkg/auth.py",
+        )
+    )
+    assert [f.file for f in ranked] == ["pkg/auth.py"]
+
+
+def test_vendor_resolved_target_is_dropped_even_though_it_would_score_highest():
+    ranked = rank_files(
+        RankingInputs(
+            resolved_target=".venv/site-packages/httpx/_auth.py",
+            target_confidence=1.0,
+            auto_patch_scope=["pkg/auth.py", ".venv/site-packages/httpx/_auth.py"],
+        )
+    )
+    assert [f.file for f in ranked] == ["pkg/auth.py"]

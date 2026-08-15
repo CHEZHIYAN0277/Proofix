@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from backend.services.workspace_layout import SKIP_DIRECTORIES
 from backend.state.schema import RunStateModel
 
 EXCLUDED_DIR_NAMES = frozenset({
@@ -23,6 +24,8 @@ EXCLUDED_DIR_NAMES = frozenset({
     "build",
     ".mypy_cache",
     ".ruff_cache",
+    "site-packages",
+    "dist-packages",
 })
 
 CONTAINER_DIRS = ("src", "app", "backend", "lib")
@@ -40,6 +43,50 @@ def is_excluded_path(rel_path: str) -> bool:
     """Return True if a relative path should be skipped for indexing/scanning."""
     parts = Path(rel_path.replace("\\", "/")).parts
     return any(part in EXCLUDED_DIR_NAMES or part.startswith(".") for part in parts)
+
+
+def bandit_exclude_arg() -> str:
+    """`-x` value excluding every vendor/VCS/cache/build directory, any depth.
+
+    Bandit does not exclude `.venv`, `node_modules`, or `site-packages` by
+    default — only its own small VCS/cache list — so without this, `bandit -r
+    <source_root>` walks straight into installed dependency source and scores
+    it like the repository's own code. Two glob forms per name cover both a
+    vendor directory at the scan root (`node_modules/*`) and nested anywhere
+    beneath it (`*/node_modules/*`).
+    """
+    patterns: list[str] = []
+    for name in sorted(SKIP_DIRECTORIES):
+        patterns.append(f"{name}/*")
+        patterns.append(f"*/{name}/*")
+    return ",".join(patterns)
+
+
+def semgrep_exclude_args() -> list[str]:
+    """`--exclude` flags, one per vendor/VCS/cache/build directory name.
+
+    Semgrep's `--exclude` uses gitignore-style matching, where a bare name
+    (no slash) matches a directory of that name at any depth — unlike
+    bandit, no glob expansion is needed here.
+    """
+    return [f"--exclude={name}" for name in sorted(SKIP_DIRECTORIES)]
+
+
+def is_vendor_path(rel_path: str) -> bool:
+    """True for a path under a vendored dependency, VCS, cache, or build directory.
+
+    Narrower than `is_excluded_path`: that function also excludes test/docs/
+    scripts directories, which is a question about *source-root discovery*,
+    not about whether a path is the repository's own code. A citation or
+    stack frame pointing into `.venv/site-packages/httpx/_auth.py` (installed
+    dependency source) must never become a repair target or a ranked context
+    candidate regardless of source-root policy — this is the one check every
+    entry point for that evidence (blast origin resolution, context ranking)
+    shares, so it lives here once rather than being re-approximated per call
+    site.
+    """
+    parts = Path(rel_path.replace("\\", "/")).parts
+    return any(part in SKIP_DIRECTORIES for part in parts)
 
 
 def _has_python_modules(directory: Path) -> bool:

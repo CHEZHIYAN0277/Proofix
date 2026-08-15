@@ -395,6 +395,12 @@ class A7CodeGenerationAgent(AgentBase):
     ) -> tuple[PatchLLMOutput | None, dict]:
         retry_number = retry_count
         metrics = {
+            # The file this attempt actually patched — `target_file` below is
+            # `blast.origins[0]` on every plan in the same run (see
+            # `enrich_patch_plan_from_runtime`), so it cannot be used to zip a
+            # metrics entry back to its `PatchCandidate` when a run touches more
+            # than one file. This can.
+            "file": plan.file,
             "target_file": plan.target_file or plan.file,
             "target_function": plan.target_function,
             "runtime_prompt": uses_runtime_prompt(plan),
@@ -409,6 +415,7 @@ class A7CodeGenerationAgent(AgentBase):
         if self.settings.stub_mode or not self.settings.llm_configured():
             output = apply_stub_plan(plan, original)
             metrics["semantic_diff"] = has_semantic_diff(original, output.patched_content)
+            metrics["generation_source"] = "stub"
             return output, metrics
 
         llm = LLMService(
@@ -416,6 +423,7 @@ class A7CodeGenerationAgent(AgentBase):
         )
         repo_context = str(repo)
         relevant_code, context_source = self._focus_section(plan, original, context_package)
+        metrics["generation_source"] = "llm"
         metrics["context_source"] = context_source
         metrics["focus_chars"] = len(relevant_code)
 

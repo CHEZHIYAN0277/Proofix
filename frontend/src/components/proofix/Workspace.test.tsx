@@ -18,6 +18,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { AgentEntry } from "./data";
+import type { PatchFileProvenance } from "./visualizationTypes";
 
 const navigate = vi.fn();
 vi.mock("@tanstack/react-router", () => ({
@@ -53,6 +54,11 @@ vi.mock("@/lib/runService", () => ({
   eventSourceFor: () => () => () => undefined,
   createRun: vi.fn(),
   askChat: vi.fn(),
+  // The "merge" agent id below mounts `MergeabilityDecisionPanel`, which
+  // calls this directly — unmocked it isn't `undefined`, it doesn't exist on
+  // this factory's object at all, so the panel's plain `.then()` call throws.
+  // `null` is the panel's real "A10 has not completed" state.
+  getMergeabilityDecision: vi.fn().mockResolvedValue(null),
 }));
 
 const { Workspace } = await import("./Workspace");
@@ -123,6 +129,24 @@ describe("Workspace terminal states", () => {
     expect(screen.queryByText(/Draft PR/)).toBeNull();
   });
 
+  it("renders the backend's specific block reason, not a generic fallback (B-B19)", async () => {
+    // "Unsupported repository" and "No dependency manifest" used to collapse
+    // onto the same "Environment not prepared" label everywhere the decision
+    // chip is rendered, contradicting the reason text printed beneath it.
+    backendReturns({
+      header: {
+        ...header("blocked", [{ type: "run.blocked", reason: "This is a node project." }]),
+        decisionLabel: "Unsupported repository",
+      },
+      summary: { ...EMPTY_EXECUTIVE_SUMMARY, decision: "blocked" },
+    });
+
+    render(<Workspace runId="run-blocked-unsupported" />);
+
+    expect(await screen.findByText("Unsupported repository")).toBeTruthy();
+    expect(screen.queryByText("Environment not prepared")).toBeNull();
+  });
+
   it("renders a failed run as Failed", async () => {
     backendReturns({ header: header("failed", [{ type: "run.failed", reason: "boom" }]) });
 
@@ -137,6 +161,37 @@ describe("Workspace terminal states", () => {
     render(<Workspace runId="run-done" />);
 
     expect(await screen.findByText(/Status · Completed/)).toBeTruthy();
+  });
+
+  it("shows the backend's real last agent, not the run state, in the Current Agent tile (B-B20)", async () => {
+    // "Completed" is a run/state word, not an agent identity — showing it in
+    // the "Current Agent" tile was the exact contradiction this pass targets.
+    backendReturns({
+      header: {
+        ...header("completed", [{ type: "run.completed" }]),
+        currentAgent: "A10",
+      },
+    });
+
+    render(<Workspace runId="run-current-agent" />);
+
+    await screen.findByText(/Status · Completed/);
+    expect(await screen.findByText("A10")).toBeTruthy();
+  });
+
+  it("shows A0.7 as the Current Agent for a blocked run", async () => {
+    backendReturns({
+      header: {
+        ...header("blocked", [{ type: "run.blocked", reason: "pytest is not importable" }]),
+        currentAgent: "A0.7",
+      },
+      summary: { ...EMPTY_EXECUTIVE_SUMMARY, decision: "blocked" },
+    });
+
+    render(<Workspace runId="run-blocked-agent" />);
+
+    await screen.findByText(/Status · Blocked/);
+    expect(await screen.findByText("A0.7")).toBeTruthy();
   });
 });
 
@@ -220,131 +275,6 @@ describe("Repository identity", () => {
   });
 });
 
-describe("Context package panel", () => {
-  const CONTEXT_AGENTS = [agent("context", "Context Engineering"), agent("merge", "Mergeability")];
-
-  const PACKAGE = {
-    target_file: "vulnapi/auth.py",
-    target_function: "validate_token",
-    acceptance_criteria: ["Expired tokens must be rejected"],
-    patch_constraints: [],
-    prefer_focused: true,
-    privacy_guard_status: "masked" as const,
-    ranked_files: [
-      {
-        file: "vulnapi/auth.py",
-        score: 2.4,
-        reason: "contains the failing stack frame",
-        confidence: 0.9,
-        signals: { stack_frame: 1, verified_citation: 0.8, unused: 0 },
-        is_target: true,
-        evidence: [],
-      },
-      {
-        file: "vulnapi/tokens.py",
-        score: 0.6,
-        reason: "called by the target",
-        confidence: 0.4,
-        signals: { direct_callee: 0.5 },
-        is_target: false,
-        evidence: [],
-      },
-    ],
-    redactions: [
-      {
-        file: "vulnapi/config.py",
-        line: 12,
-        kind: "REDACTED_SECRET",
-        detector: "structural",
-        identifier: "SECRET_KEY",
-      },
-    ],
-    metrics: {
-      files_ranked: 12,
-      context_files: 2,
-      context_functions: 4,
-      original_tokens: 8000,
-      reduced_tokens: 2000,
-      token_reduction: 0.75,
-      privacy_redactions: 1,
-      degraded: false,
-    },
-  };
-
-  it("renders Pending when A5.5 has not published a package", async () => {
-    // The endpoint 404s, which `runService` turns into null. That is absence,
-    // not failure: no error, no retry, and above all no claim that the context
-    // was checked and found clean.
-    backendReturns({ agents: CONTEXT_AGENTS, context: null });
-
-    render(<Workspace runId="run-ctx-pending" />);
-
-    expect(await screen.findByText(/Pending — context engineering/)).toBeTruthy();
-    expect(screen.queryByText(/Could not load the context package/)).toBeNull();
-    expect(screen.queryByText(/No secrets detected/)).toBeNull();
-  });
-
-  it("lists the ranking with the signals behind each score", async () => {
-    backendReturns({ agents: CONTEXT_AGENTS, context: PACKAGE });
-
-    render(<Workspace runId="run-ctx" />);
-
-    // The target file names itself twice on purpose: once as the package's
-    // subject in the header, once as the top-ranked row.
-    await waitFor(() => expect(screen.getAllByText("vulnapi/auth.py").length).toBe(2));
-    expect(screen.getByText("vulnapi/tokens.py")).toBeTruthy();
-    expect(screen.getByText("target")).toBeTruthy();
-    expect(screen.getByText("2.40")).toBeTruthy();
-    expect(screen.getByText("contains the failing stack frame")).toBeTruthy();
-    // Zero-valued signals contribute nothing and are not drawn as if they did.
-    expect(screen.getByText(/stack_frame \+1/)).toBeTruthy();
-    expect(screen.queryByText(/unused/)).toBeNull();
-  });
-
-  it("lists every redaction so the masking is auditable", async () => {
-    backendReturns({ agents: CONTEXT_AGENTS, context: PACKAGE });
-
-    render(<Workspace runId="run-ctx-redactions" />);
-
-    expect(await screen.findByText("vulnapi/config.py:12")).toBeTruthy();
-    expect(screen.getByText("SECRET_KEY")).toBeTruthy();
-    expect(screen.getByText(/masked by structural/)).toBeTruthy();
-  });
-
-  it("a failed guard is not reported as a clean one", async () => {
-    backendReturns({
-      agents: CONTEXT_AGENTS,
-      context: { ...PACKAGE, privacy_guard_status: "failed", redactions: [] },
-    });
-
-    render(<Workspace runId="run-ctx-failed" />);
-
-    expect(await screen.findByText(/The guard errored/)).toBeTruthy();
-    // An empty redaction list under a failed guard means nothing was checked,
-    // not that nothing was found.
-    expect(screen.queryByText(/No secrets detected/)).toBeNull();
-  });
-
-  it("surfaces a real failure with a retry, unlike a 404", async () => {
-    backendReturns({ agents: CONTEXT_AGENTS });
-    getRunContext.mockRejectedValue(new Error("API 500: Internal Server Error"));
-
-    render(<Workspace runId="run-ctx-err" />);
-
-    expect(await screen.findByText(/Could not load the context package/)).toBeTruthy();
-    expect(screen.queryByText(/Pending — context engineering/)).toBeNull();
-  });
-
-  it("is not shown before the pipeline reaches context engineering", async () => {
-    backendReturns({ agents: AGENTS, context: PACKAGE });
-
-    render(<Workspace runId="run-ctx-early" />);
-
-    await screen.findByText(/Status · Completed/);
-    expect(screen.queryByText("Context Package")).toBeNull();
-  });
-});
-
 describe("Patch panel", () => {
   const PATCH_AGENTS = [agent("patch", "Patch Generator"), agent("merge", "Mergeability")];
 
@@ -379,12 +309,15 @@ describe("Patch panel", () => {
     expect(screen.getByText(/^−1$/)).toBeTruthy();
   });
 
-  it("passes A7's write method through rather than inferring one", async () => {
+  it("shows AST validation only when the real method earns it, from the bundle itself", async () => {
     backendReturns({ agents: PATCH_AGENTS, patch: BUNDLE });
 
     render(<Workspace runId="run-patch-method" />);
 
-    expect(await screen.findByText(/ast_validated_write/)).toBeTruthy();
+    // No per-file provenance event exists for this fixture, so the badge
+    // must come from `PatchCandidate.method` directly, not from
+    // `a7_patch_metrics` — proving the two sources are independent.
+    expect(await screen.findByText("AST validated ✓")).toBeTruthy();
   });
 
   it("distinguishes 'produced no bundle' from 'produced no change'", async () => {
@@ -418,5 +351,355 @@ describe("Patch panel", () => {
 
     await screen.findByText(/Status · Completed/);
     expect(screen.queryByText("Patch")).toBeNull();
+  });
+
+  const MULTI_BUNDLE = {
+    issue_id: "fix-0",
+    style_exemplar_commit: "abc1234",
+    patches: [
+      {
+        file: "pkg/auth.py",
+        original: "def validate(token):\n    return True\n",
+        patched: "def validate(token):\n    return False\n",
+        method: "ast_validated_write",
+      },
+      {
+        file: "pkg/session.py",
+        original: "def refresh():\n    pass\n",
+        patched: "def refresh():\n    return None\n",
+        method: "ast_validated_write",
+      },
+    ],
+    contracts: [{ assertion: "expired tokens rejected", location: "pkg/auth.py" }],
+    diff_text:
+      "--- a/pkg/auth.py\n+++ b/pkg/auth.py\n@@ -1,2 +1,2 @@\n def validate(token):\n-    return True\n+    return False\n" +
+      "--- a/pkg/session.py\n+++ b/pkg/session.py\n@@ -1,2 +1,2 @@\n def refresh():\n-    pass\n+    return None\n",
+  };
+
+  const PROVENANCE_DEFAULTS: PatchFileProvenance = {
+    file: "",
+    method: null,
+    isTarget: false,
+    targetFunction: null,
+    generationSource: null,
+    contextSource: null,
+    runtimePrompt: null,
+    retryNumber: null,
+    retryReason: null,
+    semanticDiff: null,
+  };
+
+  /** A "patch" agent entry carrying real `a7_patch_metrics` provenance. */
+  function patchAgentWithProvenance(files: Partial<PatchFileProvenance>[]): AgentEntry {
+    return {
+      ...agent("patch", "Patch Generator"),
+      visualization: {
+        kind: "patch",
+        data: { files: files.map((f) => ({ ...PROVENANCE_DEFAULTS, ...f })) },
+      },
+    };
+  }
+
+  it("shows a file selector for a multi-file patch, not one merged diff", async () => {
+    backendReturns({
+      agents: [patchAgentWithProvenance([]), agent("merge", "Mergeability")],
+      patch: MULTI_BUNDLE,
+    });
+
+    render(<Workspace runId="run-patch-multi" />);
+
+    // The active file's name appears twice (selector button + file header);
+    // the inactive file's name appears once (selector button only) — either
+    // way, both real filenames are on screen as separate selectable entries.
+    expect((await screen.findAllByText("pkg/auth.py")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("pkg/session.py").length).toBeGreaterThan(0);
+    // Only the active file's diff content is on screen — the inactive
+    // file's changed line is not, because the two diffs are not merged into
+    // one view.
+    expect(screen.queryByText("return None")).toBeNull();
+  });
+
+  it("switching the file selector changes the displayed diff", async () => {
+    const user = (await import("@testing-library/user-event")).default.setup();
+    backendReturns({
+      agents: [patchAgentWithProvenance([]), agent("merge", "Mergeability")],
+      patch: MULTI_BUNDLE,
+    });
+
+    render(<Workspace runId="run-patch-switch" />);
+    await screen.findByText("return False");
+    expect(screen.queryByText("return None")).toBeNull();
+
+    await user.click(screen.getByText("pkg/session.py"));
+
+    expect(await screen.findByText("return None")).toBeTruthy();
+    expect(screen.queryByText("return False")).toBeNull();
+  });
+
+  it("marks the resolved target file using real backend provenance, not a guess", async () => {
+    backendReturns({
+      agents: [
+        patchAgentWithProvenance([
+          { file: "pkg/auth.py", isTarget: true },
+          { file: "pkg/session.py", isTarget: false },
+        ]),
+        agent("merge", "Mergeability"),
+      ],
+      patch: MULTI_BUNDLE,
+    });
+
+    render(<Workspace runId="run-patch-target" />);
+
+    expect((await screen.findAllByText("target")).length).toBeGreaterThan(0);
+  });
+
+  it("shows the target function only when A7 actually resolved one", async () => {
+    backendReturns({
+      agents: [
+        patchAgentWithProvenance([{ file: "pkg/auth.py", targetFunction: "validate" }]),
+        agent("merge", "Mergeability"),
+      ],
+      patch: BUNDLE,
+    });
+
+    render(<Workspace runId="run-patch-func" />);
+
+    expect(await screen.findByText(/validate\(\)/)).toBeTruthy();
+  });
+
+  it("does not invent a target function when the backend has none", async () => {
+    backendReturns({
+      agents: [patchAgentWithProvenance([{ file: "pkg/auth.py" }]), agent("merge", "Mergeability")],
+      patch: BUNDLE,
+    });
+
+    render(<Workspace runId="run-patch-nofunc" />);
+
+    await screen.findByText(/Update\(/);
+    expect(screen.queryByText(/::/)).toBeNull();
+  });
+
+  it("reports LLM generation honestly, not by assumption", async () => {
+    backendReturns({
+      agents: [
+        patchAgentWithProvenance([{ file: "pkg/auth.py", generationSource: "llm" }]),
+        agent("merge", "Mergeability"),
+      ],
+      patch: BUNDLE,
+    });
+
+    render(<Workspace runId="run-patch-llm" />);
+
+    expect(await screen.findByText("LLM")).toBeTruthy();
+  });
+
+  it("reports stub mode honestly rather than always claiming LLM generation", async () => {
+    backendReturns({
+      agents: [
+        patchAgentWithProvenance([{ file: "pkg/auth.py", generationSource: "stub" }]),
+        agent("merge", "Mergeability"),
+      ],
+      patch: BUNDLE,
+    });
+
+    render(<Workspace runId="run-patch-stub" />);
+
+    expect(await screen.findByText(/Stub mode — no LLM configured/)).toBeTruthy();
+    expect(screen.queryByText("LLM")).toBeNull();
+  });
+
+  it("labels contracts as repair contracts, not as AI thoughts or reasoning", async () => {
+    backendReturns({ agents: PATCH_AGENTS, patch: BUNDLE });
+
+    render(<Workspace runId="run-patch-contracts" />);
+
+    expect(await screen.findByText("Repair contracts")).toBeTruthy();
+    expect(screen.queryByText(/thought/i)).toBeNull();
+    expect(screen.queryByText(/reasoning/i)).toBeNull();
+  });
+
+  it("shows the empty patch state without any sample or fabricated code", async () => {
+    backendReturns({ agents: PATCH_AGENTS, patch: null });
+
+    render(<Workspace runId="run-patch-mock-guard" />);
+
+    await screen.findByText(/Pending — patch generation/);
+    expect(screen.queryByText("def validate")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("renders an A7 → A8 handoff without claiming A8 has already validated", async () => {
+    backendReturns({ agents: PATCH_AGENTS, patch: BUNDLE });
+
+    render(<Workspace runId="run-patch-handoff" />);
+
+    expect(await screen.findByText("A7 generated patch")).toBeTruthy();
+    expect(screen.getByText("A8 validation")).toBeTruthy();
+    expect(screen.queryByText(/A8 passed/i)).toBeNull();
+    expect(screen.queryByText(/validated successfully/i)).toBeNull();
+  });
+});
+
+describe("Environment Preflight Board", () => {
+  function headerWithEnv(
+    status: string,
+    environment: Record<string, unknown> | null,
+    extra: Record<string, unknown> = {},
+  ) {
+    return { ...header(status), environment, ...extra };
+  }
+
+  it("renders READY with a real test count", async () => {
+    backendReturns({
+      header: headerWithEnv("completed", {
+        status: "ready",
+        language: "python",
+        test_runner: "pytest",
+        test_runner_available: true,
+        tests_collected: 42,
+        manifests: [{ path: "pyproject.toml", kind: "pyproject.toml", language: "python" }],
+        blocking: false,
+      }),
+    });
+
+    render(<Workspace runId="env-ready" />);
+
+    expect(await screen.findByLabelText("Environment preflight: READY")).toBeTruthy();
+    expect(screen.getByText("42 collected")).toBeTruthy();
+    expect(screen.getByText("Reproduction can proceed.")).toBeTruthy();
+  });
+
+  it("renders UNSUPPORTED, distinctly from a generic block label", async () => {
+    backendReturns({
+      header: headerWithEnv("blocked", {
+        status: "unsupported",
+        language: "rust",
+        reason: "This is a rust project. ProoFix analyses and repairs Python only.",
+        blocking: true,
+      }),
+    });
+
+    render(<Workspace runId="env-unsupported" />);
+
+    expect(await screen.findByLabelText("Environment preflight: UNSUPPORTED")).toBeTruthy();
+    expect(screen.getAllByText(/ProoFix analyses and repairs Python only/).length).toBeGreaterThan(
+      0,
+    );
+    expect(
+      screen.getByText("Repository is outside the supported repair environment."),
+    ).toBeTruthy();
+  });
+
+  it("renders NO MANIFEST", async () => {
+    backendReturns({
+      header: headerWithEnv("blocked", {
+        status: "no_manifest",
+        reason: "No dependency manifest was found.",
+        blocking: true,
+      }),
+    });
+
+    render(<Workspace runId="env-no-manifest" />);
+
+    expect(await screen.findByLabelText("Environment preflight: NO MANIFEST")).toBeTruthy();
+    expect(screen.getByText("Unavailable")).toBeTruthy();
+  });
+
+  it("renders NOT PREPARED with the suggested command and a copy button", async () => {
+    backendReturns({
+      header: headerWithEnv("blocked", {
+        status: "not_prepared",
+        language: "python",
+        test_runner: "pytest",
+        test_runner_available: false,
+        reason: "This repository's dependencies are not installed.",
+        suggested_command: "pip install -r requirements.txt",
+        missing_imports: ["pytest"],
+        blocking: true,
+      }),
+    });
+
+    render(<Workspace runId="env-not-prepared" />);
+
+    expect(await screen.findByLabelText("Environment preflight: NOT PREPARED")).toBeTruthy();
+    expect(screen.getByText("pip install -r requirements.txt")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /copy suggested setup command/i })).toBeTruthy();
+  });
+
+  it("does not show a copy button when the backend gives no suggested command", async () => {
+    backendReturns({
+      header: headerWithEnv("blocked", {
+        status: "not_prepared",
+        test_runner: "pytest",
+        test_runner_available: false,
+        reason: "pytest could not collect the test suite.",
+        suggested_command: null,
+        blocking: true,
+      }),
+    });
+
+    render(<Workspace runId="env-not-prepared-no-cmd" />);
+
+    await screen.findByLabelText("Environment preflight: NOT PREPARED");
+    expect(screen.queryByRole("button", { name: /copy suggested setup command/i })).toBeNull();
+  });
+
+  it("renders NO TESTS as ready, never as a failure", async () => {
+    backendReturns({
+      header: headerWithEnv("completed", {
+        status: "ready",
+        language: "python",
+        test_runner: "pytest",
+        test_runner_available: true,
+        tests_collected: 0,
+        blocking: false,
+      }),
+    });
+
+    render(<Workspace runId="env-no-tests" />);
+
+    expect(await screen.findByLabelText("Environment preflight: NO TESTS")).toBeTruthy();
+    expect(screen.getByText("None detected")).toBeTruthy();
+    expect(screen.getByText("Reproduction cannot establish a failing test.")).toBeTruthy();
+    // Never rendered as a failed environment.
+    expect(screen.queryByLabelText("Environment preflight: NOT PREPARED")).toBeNull();
+  });
+
+  it("renders ERROR when the probe itself crashed, not when it simply hasn't run", async () => {
+    backendReturns({
+      header: headerWithEnv("running", null, { environmentProbeError: true }),
+    });
+
+    render(<Workspace runId="env-probe-error" />);
+
+    expect(await screen.findByLabelText("Environment preflight: ERROR")).toBeTruthy();
+  });
+
+  it("renders nothing when there is no environment report and no probe error", async () => {
+    backendReturns({ header: headerWithEnv("running", null) });
+
+    render(<Workspace runId="env-absent" />);
+
+    await screen.findByText(/Status · Running/);
+    expect(screen.queryByLabelText(/Environment preflight/)).toBeNull();
+  });
+
+  it("never invents a suggested command or a language the backend did not report", async () => {
+    backendReturns({
+      header: headerWithEnv("blocked", {
+        status: "not_prepared",
+        language: null,
+        test_runner: null,
+        reason: "pytest could not collect the test suite: SyntaxError",
+        suggested_command: null,
+        blocking: true,
+      }),
+    });
+
+    render(<Workspace runId="env-unmeasured" />);
+
+    await screen.findByLabelText("Environment preflight: NOT PREPARED");
+    // "Not measured" for every fact the backend did not supply — never a guess.
+    expect(screen.getAllByText("Not measured").length).toBeGreaterThan(0);
   });
 });

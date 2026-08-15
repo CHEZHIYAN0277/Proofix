@@ -26,6 +26,7 @@ from backend.agents.a9_security_rescan import (
     new_findings_by_multiplicity,
 )
 from backend.config import Settings
+from backend.models.validation import SecurityRescanResult
 from backend.services.measurement import meets_threshold
 from backend.state.schema import RunStateModel
 
@@ -211,6 +212,7 @@ class TestAgentRescan:
         assert result["security_score"] == 75.0
         assert result["new_findings"][0]["message"] == ASSERT_USED
         assert result["new_findings"][0]["tools"] == ["bandit"]
+        assert result["scanners_run"] == ["bandit", "semgrep"]
 
     @pytest.mark.asyncio
     async def test_absent_scanners_do_not_score_a_hundred(self, monkeypatch, tmp_path):
@@ -222,6 +224,7 @@ class TestAgentRescan:
 
         assert result["security_score"] is None
         assert result["rejected"] is False
+        assert result["scanners_run"] == []
         # And the unmeasured score cannot clear the auto-merge gate.
         assert not meets_threshold(result["security_score"], SECURITY_TECHNICAL_THRESHOLD)
 
@@ -236,6 +239,17 @@ class TestAgentRescan:
 
         assert result["security_score"] == 75.0
         assert result["rejected"] is True
+        assert result["scanners_run"] == ["bandit"]
+
+    @pytest.mark.asyncio
+    async def test_scanners_run_persists_both_scanners_when_both_execute(self, monkeypatch, tmp_path):
+        agent = make_agent(monkeypatch, bandit=[], semgrep=[])
+        state = make_state(tmp_path, [])
+
+        result = (await agent.run(state)).security_result
+
+        assert result["scanners_run"] == ["bandit", "semgrep"]
+        assert result["security_score"] == 100.0
 
     @pytest.mark.asyncio
     async def test_baseline_from_a_tool_that_did_not_rerun_is_ignored(self, monkeypatch, tmp_path):
@@ -258,3 +272,20 @@ class TestAgentRescan:
 
         assert result["rejected"] is False
         assert result["security_score"] == 100.0
+
+
+class TestScannersRunBackwardCompatibility:
+    def test_state_persisted_before_the_field_existed_still_deserializes(self):
+        """A `SecurityRescanResult` dict from before `scanners_run` existed —
+        as sits in Redis for any run completed before this change — must still
+        validate, defaulting to an empty list rather than raising."""
+        legacy = {
+            "new_findings": [],
+            "rejected": False,
+            "security_score": 100.0,
+            "reexecution_command": "bandit -f json -q -r .",
+            "reexecution_timeout_seconds": 150,
+        }
+        result = SecurityRescanResult.model_validate(legacy)
+        assert result.scanners_run == []
+        assert result.security_score == 100.0

@@ -3,7 +3,11 @@ from pathlib import Path
 from backend.agents.base import AgentBase
 from backend.models.cve import CVERecord, CVEReachabilityReport
 from backend.services.osv_client import parse_requirements, query_osv
-from backend.services.sig_helpers import get_sig_or_defaults, is_module_reachable
+from backend.services.sig_helpers import (
+    get_sig_or_defaults,
+    is_module_reachable,
+    reachable_modules,
+)
 from backend.state.schema import RunStateModel
 
 
@@ -33,6 +37,7 @@ class A2DependencyAnalyzerAgent(AgentBase):
                         severity = sev.get("score", "HIGH")
 
                 reachable = is_module_reachable(sig, package)
+                reach_path = reachable_modules(sig, package) if reachable else None
                 if reachable is None:
                     classification = "Unknown"
                 elif reachable:
@@ -46,14 +51,21 @@ class A2DependencyAnalyzerAgent(AgentBase):
                         package=package,
                         cve_id=cve_id,
                         severity=str(severity),
+                        installed_version=version,
                         affected_symbol=None,
                         reachable=reachable,
-                        reach_path=None,
+                        reach_path=reach_path,
                         classification=classification,  # type: ignore[arg-type]
                     )
                 )
 
-        report = CVEReachabilityReport(findings=findings, critical_queue=critical_queue)
+        report = CVEReachabilityReport(
+            findings=findings,
+            critical_queue=critical_queue,
+            total_dependencies=len(packages),
+            manifest="requirements.txt" if requirements.exists() else None,
+            ecosystem="PyPI" if requirements.exists() else None,
+        )
         report_dict = report.model_dump(mode="json")
         await self.store.set_json(state.run_id, "cve", report_dict)
         state.cve_report = report_dict

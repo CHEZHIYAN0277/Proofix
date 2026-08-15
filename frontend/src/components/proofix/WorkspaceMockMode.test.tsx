@@ -37,6 +37,19 @@ vi.mock("@/lib/runService", async () => {
     // inventing a ranking would put fabricated privacy evidence on screen.
     getRunContext: async () => null,
     getRunPatch: async () => null,
+    // Same reasoning for A1's semantic graph — there is no SIG fixture, and
+    // inventing role classifications would put fabricated evidence on screen.
+    getSemanticGraph: async () => null,
+    // Same reasoning for A2's dependency risk report — there is no CVE
+    // fixture, and inventing advisories would put fabricated evidence on screen.
+    getDependencyRisk: async () => null,
+    // Same reasoning for A3's static findings — there is no scanner-output
+    // fixture, and inventing findings would put fabricated evidence on screen.
+    getStaticFindings: async () => null,
+    // Same reasoning for A3.5's reproduction evidence — there is no pytest
+    // execution fixture, and inventing a verdict would put fabricated
+    // evidence on screen.
+    getReproductionEvidence: async () => null,
     listRepositories: async () => [],
     eventSourceFor: () => () => () => undefined,
     createRun: vi.fn(),

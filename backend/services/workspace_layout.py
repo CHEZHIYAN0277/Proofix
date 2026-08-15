@@ -76,7 +76,7 @@ LANGUAGE_SUFFIXES = {
 SKIP_DIRECTORIES = frozenset({
     ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",
     "dist", "build", "target", "vendor", ".tox", ".mypy_cache", ".ruff_cache",
-    ".pytest_cache", "site-packages", ".next", ".nuxt", "coverage",
+    ".pytest_cache", "site-packages", "dist-packages", ".next", ".nuxt", "coverage",
 })
 
 # Depth limit for package discovery. Packages live near the top; scanning deeper

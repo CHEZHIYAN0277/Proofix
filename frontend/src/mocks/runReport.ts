@@ -122,14 +122,38 @@ export interface WorkspaceHeaderModel {
   repositoryId?: string | null;
   headSha?: string | null;
   repositoryHash?: string | null;
+  /**
+   * `RunStateModel.current_agent` verbatim — the agent ID that last owned
+   * this run (e.g. "A0.7" for a blocked run, "A10" for a completed one).
+   * Optional because mock fixtures predate the field; live responses always
+   * carry it.
+   */
+  currentAgent?: string;
   lifecycle?: { type: string; reason?: string | null; decision_label?: string | null }[];
+  /**
+   * A0.7's report, forwarded verbatim (`state.environment.model_dump()`) — every
+   * field the backend has ever put on this object is optional here because a
+   * probe that never ran, or an older stored run, omits fields this type knows
+   * about that the payload does not carry.
+   */
   environment?: {
     status?: string | null;
     language?: string | null;
     reason?: string | null;
     test_runner?: string | null;
+    test_runner_available?: boolean | null;
+    missing_imports?: string[] | null;
+    tests_collected?: number | null;
+    manifests?: { path: string; kind: string; language: string }[] | null;
     suggested_command?: string | null;
+    blocking?: boolean | null;
   } | null;
+  /**
+   * True when A0.7 itself crashed rather than reaching a verdict — distinct
+   * from `environment` being null, which also happens when the precheck is
+   * disabled or simply has not run yet.
+   */
+  environmentProbeError?: boolean;
 }
 
 /**
@@ -160,32 +184,69 @@ export interface ContextRedaction {
 }
 
 /**
+ * One AST-extracted span of source A5.5 decided the repair needs to see.
+ * `source` is the real, redacted text — never re-derived or summarised.
+ */
+export interface ExtractedSymbol {
+  name: string;
+  qualname: string;
+  file: string;
+  kind: string;
+  lineno: number;
+  end_lineno: number;
+  source: string;
+  signature_only: boolean;
+  reason: string;
+}
+
+/**
  * A5.5's context package, from `/runs/{id}/context`.
  *
  * Partial by intent: the endpoint returns the full stored package, and this
  * types only the fields the workspace renders. `privacy_guard_status` is the
  * one that matters most — it is the evidence that secrets did not reach the
  * LLM, and `failed` means the guard itself errored, so nothing may be assumed
- * about what got through.
+ * about what got through. `prefer_focused` is the second most important field:
+ * a package can be fully built and fully redacted and still not be what A7
+ * actually uses.
  */
 export interface ContextPackageModel {
   target_file: string;
   target_function: string | null;
   acceptance_criteria: string[];
   patch_constraints: string[];
+  contracts: string[];
+  validation_requirements: string[];
+  dependency_summary: string[];
   ranked_files: RankedContextFile[];
+  relevant_imports: string[];
+  relevant_classes: ExtractedSymbol[];
+  relevant_functions: ExtractedSymbol[];
+  related_utilities: ExtractedSymbol[];
+  constants: ExtractedSymbol[];
   redactions: ContextRedaction[];
   privacy_guard_status: "clean" | "masked" | "failed";
   prefer_focused: boolean;
   metrics: {
     files_ranked: number;
+    files_extracted: number;
     context_files: number;
     context_functions: number;
+    context_lines: number;
     original_tokens: number;
     reduced_tokens: number;
+    estimated_saved_tokens: number;
     token_reduction: number;
     privacy_redactions: number;
     degraded: boolean;
+    cache_hit: boolean;
+    ranking_time_ms: number;
+    extraction_time_ms: number;
+    privacy_time_ms: number;
+    build_time_ms: number;
+    /** Why `prefer_focused` came out the way it did, in the adoption rule's
+     * own terms. Empty on a run predating this field. */
+    adoption_reason: string;
   };
 }
 

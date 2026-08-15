@@ -115,11 +115,12 @@ class PipelineRunner:
         backend's words rather than composing a sentence of its own.
         """
         env = result.environment or {}
+        _decision, label = run_decision(result)
         try:
             event = RunLifecycleEvent(
                 type="run.blocked",
                 run_id=result.run_id,
-                decision_label="Environment not prepared",
+                decision_label=label,
                 reason=str(env.get("reason") or "The repository's tests could not be executed."),
                 sequence=result.ws_sequence + 1,
             )

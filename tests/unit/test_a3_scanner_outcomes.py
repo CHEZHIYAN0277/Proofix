@@ -238,3 +238,242 @@ async def _async_none(*args, **kwargs):
 
 async def _async_noop(*args, **kwargs):
     return None
+
+
+# -- scanner_status / criticality / churn_weight / severity_measured -------
+
+
+def patch_run_command_per_tool(monkeypatch, results: dict):
+    """`results` keyed by the binary name (`cmd[0]`) so bandit/semgrep/ruff
+    can be given independent outcomes in one run."""
+
+    async def fake_run_command(cmd, cwd=None, timeout=120, env=None):
+        return results[cmd[0]]
+
+    monkeypatch.setattr(
+        "backend.agents.a3_static_analysis.run_command", fake_run_command
+    )
+
+
+async def _run_agent(monkeypatch, repo, results, *, stub_mode=False, sig=None):
+    patch_run_command_per_tool(monkeypatch, results)
+
+    async def _get_json(*a, **k):
+        return sig
+
+    store = MagicMock()
+    store.get_json = _get_json
+    store.set_json = _async_noop
+    store.append_event = _async_noop
+
+    agent = A3StaticAnalysisAgent(store, Settings(stub_mode=stub_mode))
+    agent.emit_status = _async_noop
+
+    from backend.state.schema import RunStateModel
+
+    state = RunStateModel(run_id="r1", repo_path=str(repo), repo_clone_path=str(repo))
+    return await agent.run(state)
+
+
+@pytest.mark.asyncio
+async def test_scanner_status_is_persisted_on_the_durable_report(monkeypatch, repo):
+    """`scanner_status` previously lived only on the transient event; it must
+    also reach `state.static_report`, which survives past the event window."""
+    result = await _run_agent(
+        monkeypatch,
+        repo,
+        {
+            "bandit": (-1, "", "command not found: bandit"),
+            "semgrep": (-1, "", "command not found: semgrep"),
+            "ruff": (0, json.dumps([]), ""),
+        },
+    )
+
+    assert result.static_report["scanner_status"] == {
+        "bandit": "unavailable",
+        "semgrep": "unavailable",
+        "ruff": "ok_no_findings",
+    }
+
+
+@pytest.mark.asyncio
+async def test_scanner_status_reports_ok_when_a_scanner_finds_something(monkeypatch, repo):
+    payload = {
+        "results": [
+            {
+                "filename": str(repo / "pkg/app.py"),
+                "line_number": 1,
+                "issue_text": "pickle usage",
+                "issue_severity": "HIGH",
+            }
+        ]
+    }
+    result = await _run_agent(
+        monkeypatch,
+        repo,
+        {
+            "bandit": (1, json.dumps(payload), ""),
+            "semgrep": (-1, "", "not found"),
+            "ruff": (0, json.dumps([]), ""),
+        },
+    )
+
+    assert result.static_report["scanner_status"]["bandit"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_finding_carries_criticality_and_churn_weight_from_sig(monkeypatch, repo):
+    payload = {
+        "results": [
+            {
+                "filename": str(repo / "pkg/app.py"),
+                "line_number": 1,
+                "issue_text": "pickle usage",
+                "issue_severity": "HIGH",
+            }
+        ]
+    }
+    sig = {
+        "repo_path": str(repo),
+        "source_roots": [""],
+        "files": {
+            "pkg/app.py": {
+                "path": "pkg/app.py",
+                "role": "public-api",
+                "imports": [],
+                "imported_by": [],
+                "churn_weight": 0.37,
+                "criticality": 0.81,
+            }
+        },
+        "edges": [],
+    }
+    result = await _run_agent(
+        monkeypatch,
+        repo,
+        {
+            "bandit": (1, json.dumps(payload), ""),
+            "semgrep": (-1, "", "not found"),
+            "ruff": (0, json.dumps([]), ""),
+        },
+        sig=sig,
+    )
+
+    finding = result.static_report["prioritized"][0]
+    assert finding["criticality"] == 0.81
+    assert finding["churn_weight"] == 0.37
+
+
+@pytest.mark.asyncio
+async def test_bandit_only_finding_reports_severity_measured(monkeypatch, repo):
+    payload = {
+        "results": [
+            {
+                "filename": str(repo / "pkg/app.py"),
+                "line_number": 1,
+                "issue_text": "pickle usage",
+                "issue_severity": "HIGH",
+            }
+        ]
+    }
+    result = await _run_agent(
+        monkeypatch,
+        repo,
+        {
+            "bandit": (1, json.dumps(payload), ""),
+            "semgrep": (-1, "", "not found"),
+            "ruff": (0, json.dumps([]), ""),
+        },
+    )
+
+    finding = result.static_report["prioritized"][0]
+    assert finding["tools"] == ["bandit"]
+    assert finding["severity_measured"] is True
+    assert finding["severity"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_ruff_only_finding_reports_severity_not_measured(monkeypatch, repo):
+    """ruff assigns every finding the same constant (0.4) — never a real
+    per-finding measurement, so the UI must not display it as one."""
+    ruff_payload = [
+        {
+            "filename": str(repo / "pkg/app.py"),
+            "location": {"row": 1},
+            "message": "unused import",
+        }
+    ]
+    result = await _run_agent(
+        monkeypatch,
+        repo,
+        {
+            "bandit": (-1, "", "not found"),
+            "semgrep": (-1, "", "not found"),
+            "ruff": (0, json.dumps(ruff_payload), ""),
+        },
+    )
+
+    finding = result.static_report["prioritized"][0]
+    assert finding["tools"] == ["ruff"]
+    assert finding["severity_measured"] is False
+    assert finding["severity"] == 0.4
+
+
+@pytest.mark.asyncio
+async def test_stub_mode_bandit_fallback_is_never_reported_as_measured(monkeypatch, repo):
+    """A stub finding carries the tool name "bandit" but is not a real
+    measurement — `outcome.executed` must gate this, not the tool name."""
+    result = await _run_agent(
+        monkeypatch,
+        repo,
+        {
+            "bandit": (-1, "", "command not found: bandit"),
+            "semgrep": (-1, "", "command not found: semgrep"),
+            "ruff": (0, json.dumps([]), ""),
+        },
+        stub_mode=True,
+    )
+
+    assert result.static_report["scanner_status"]["bandit"] == "stubbed"
+    bandit_findings = [f for f in result.static_report["prioritized"] if "bandit" in f["tools"]]
+    assert bandit_findings
+    assert all(f["severity_measured"] is False for f in bandit_findings)
+
+
+@pytest.mark.asyncio
+async def test_two_tool_consensus_keeps_the_measured_severitys_own_flag(monkeypatch, repo):
+    """When bandit and ruff both flag the same 5-line cluster, the winning
+    (higher) severity is bandit's real measurement — `severity_measured` must
+    track that, not default false just because multiple tools contributed."""
+    bandit_payload = {
+        "results": [
+            {
+                "filename": str(repo / "pkg/app.py"),
+                "line_number": 1,
+                "issue_text": "pickle usage",
+                "issue_severity": "HIGH",
+            }
+        ]
+    }
+    ruff_payload = [
+        {
+            "filename": str(repo / "pkg/app.py"),
+            "location": {"row": 2},
+            "message": "unused import",
+        }
+    ]
+    result = await _run_agent(
+        monkeypatch,
+        repo,
+        {
+            "bandit": (1, json.dumps(bandit_payload), ""),
+            "semgrep": (-1, "", "not found"),
+            "ruff": (0, json.dumps(ruff_payload), ""),
+        },
+    )
+
+    finding = result.static_report["prioritized"][0]
+    assert set(finding["tools"]) == {"bandit", "ruff"}
+    assert finding["consensus"] is True
+    assert finding["severity"] == 0.9  # bandit's HIGH, not ruff's 0.4
+    assert finding["severity_measured"] is True

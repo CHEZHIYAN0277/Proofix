@@ -40,6 +40,13 @@ interface Props {
   onSelect: () => void;
   disabled?: boolean;
   outputLabel?: string;
+  /**
+   * Replaces `<AgentVisualization>` in the "Live view" box. A handful of
+   * agents (A0.7, A0.5) publish a richer, persistent board rather than a
+   * timed animation — this is how the workspace swaps it in without
+   * `AgentVisualization` needing to know those boards exist.
+   */
+  liveView?: React.ReactNode;
 }
 
 export function AgentCard({
@@ -50,6 +57,7 @@ export function AgentCard({
   onSelect,
   disabled,
   outputLabel,
+  liveView,
 }: Props) {
   const isRunning = entry.liveStatus === "running";
   const isFailed = entry.liveStatus === "failed";
@@ -132,6 +140,13 @@ export function AgentCard({
         )}
 
         <div
+          // Every interactive element a per-agent panel renders (toggles,
+          // expandable rows, "why" disclosures) lives inside this box. The
+          // card's own expand/collapse is wired to `onClick` on the whole
+          // `<article>` above, so without this stop, clicking any of those
+          // controls bubbled up and re-toggled — and often closed — the
+          // entire card the user was trying to look inside.
+          onClick={(e) => e.stopPropagation()}
           className={`grid transition-all duration-[250ms] ease-out ${
             expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
           }`}
@@ -157,9 +172,7 @@ export function AgentCard({
                     </span>
                   )}
                 </div>
-                <div className="p-3">
-                  <AgentVisualization entry={entry} />
-                </div>
+                <div className="p-3">{liveView ?? <AgentVisualization entry={entry} />}</div>
               </section>
 
               {/* Live activity feed */}

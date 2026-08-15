@@ -80,3 +80,8 @@ class SecurityRescanResult(BaseModel):
     validation_failure: ValidationFailure | None = None
     reexecution_command: str = ""
     reexecution_timeout_seconds: int = 150
+    #: Scanners that actually executed this rescan (subset of ["bandit",
+    #: "semgrep"]) — durable so a client reading the run later, not just the
+    #: live event stream, can tell "clean" from "not measured". Defaults empty
+    #: so state persisted before this field existed still deserializes.
+    scanners_run: list[str] = Field(default_factory=list)

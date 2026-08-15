@@ -179,7 +179,13 @@ def test_unexpected_websocket_errors_are_not_swallowed(app_client):
         BrokenPipeError(32, "Broken pipe"),
         ConnectionResetError("peer reset"),
         ConnectionAbortedError("aborted"),
-        RuntimeError('Cannot call "send" once a websocket.close message has been sent.'),
+        # The exact message `starlette.websockets.WebSocket.send` raises once
+        # the close handshake is done. This used to be unmatched (the test
+        # asserted an invented wording with a "websocket." prefix that the
+        # installed library never produces), so a normal browser reload mid-send
+        # escaped as an unhandled 500 traceback instead of being recognised here.
+        RuntimeError('Cannot call "send" once a close message has been sent.'),
+        RuntimeError('Cannot call "receive" once a disconnect message has been received.'),
     ],
 )
 def test_expected_disconnects_are_recognised(exc):

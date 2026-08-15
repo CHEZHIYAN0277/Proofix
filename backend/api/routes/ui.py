@@ -16,19 +16,33 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.agents.a5_5_context_engineering import load_context_package
-from backend.agents.repository_intelligence import INTELLIGENCE_STORE_KEY
+from backend.agents.repository_intelligence import (
+    INTELLIGENCE_STORE_KEY,
+    load_repository_intelligence,
+)
 from backend.api.deps import get_runner, get_settings_dep, get_store
 from backend.config import Settings
 from backend.orchestrator.runner import PipelineRunner
+from backend.services.capability_layer import infer_capabilities
+from backend.services.graph_cache import get_knowledge_graph
 from backend.services.run_chat import answer_question
 from backend.services.ui_projection import (
     SURFACE_V1,
     SURFACE_V2,
     build_agent_entries,
+    build_blast_impact,
+    build_dependency_risk,
     build_executive_summary,
+    build_investigation,
     build_repair_attempts,
+    build_repair_plan,
+    build_reproduction_evidence,
+    build_mergeability_decision,
     build_run_report,
+    build_security_rescan,
+    build_semantic_graph,
     build_stage_progress,
+    build_static_findings,
     build_workspace_header,
     group_runs_by_repository,
     repo_display_name,
@@ -253,6 +267,282 @@ async def get_run_stages(
     }
 
 
+@router.get("/runs/{run_id}/semantic-graph")
+async def get_run_semantic_graph(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+    """A1's Semantic Intent Graph — architectural role per file.
+
+    Returns the projection built by `build_semantic_graph`: every file A1
+    indexed with its role, import edges, criticality and churn signal, plus
+    the role counts computed over the whole set. This is A1's own artifact,
+    distinct from A0.5's Repository Knowledge Graph — A0.5 answers what exists
+    and how it is wired, A1 answers what the code appears to do.
+
+    A 404 means A1 has not published a SIG for this run yet, which the caller
+    renders as pending rather than substituting an empty graph.
+    """
+    state = await _load_run(store, run_id)
+    projection = build_semantic_graph(state)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No semantic graph for this run — A1 has not completed",
+        )
+    return projection
+
+
+@router.get("/runs/{run_id}/dependency-risk")
+async def get_run_dependency_risk(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+    """A2's dependency/CVE reachability report.
+
+    Returns the projection built by `build_dependency_risk`: every advisory A2
+    found, narrowed by reachability against A1's import graph, plus the total
+    dependency count the manifest declared. This is A2's own artifact — a
+    reachability verdict over OSV advisories — distinct from A1's semantic
+    roles and A0.5's structural graph.
+
+    A 404 means A2 has not run for this run yet. A 200 with an empty
+    `findings` list means A2 ran and found nothing — those are different facts
+    and the caller must render them differently.
+    """
+    state = await _load_run(store, run_id)
+    projection = build_dependency_risk(state)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No dependency analysis for this run — A2 has not completed",
+        )
+    return projection
+
+
+@router.get("/runs/{run_id}/static-findings")
+async def get_run_static_findings(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+    """A3's static-analysis findings.
+
+    Returns the projection built by `build_static_findings`: which scanners
+    ran and how (`scannerStatus`), the raw finding count before clustering,
+    and the ranked findings with every factor of `blast_radius_score`
+    (`severity`, `criticality`, `churnWeight`, tool count) so the client can
+    show why a finding outranked another without recomputing the formula.
+
+    A 404 means A3 has not produced a durable result for this run yet. A 200
+    with an empty `findings` list means A3 ran and ranked nothing — those are
+    different facts and the caller must render them differently.
+    """
+    state = await _load_run(store, run_id)
+    projection = build_static_findings(state)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No static analysis for this run — A3 has not completed",
+        )
+    return projection
+
+
+@router.get("/runs/{run_id}/security")
+async def get_run_security_rescan(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+    """A9's post-patch security re-scan.
+
+    Returns the projection built by `build_security_rescan`: whether the
+    re-scan measured anything at all (`scannersRun`), the real differential
+    verdict against A3's baseline (`verdict`, `rejected`), and every newly
+    introduced finding A9 found — no severity (A9 never measures it), no
+    resolved/unchanged tally (A9 never computes it).
+
+    A 404 means A9 has not produced a durable result for this run yet. A 200
+    with an empty `newFindings` list means A9 ran and found nothing new —
+    that is different from A9 never having run, and the caller must render
+    them differently.
+    """
+    state = await _load_run(store, run_id)
+    projection = build_security_rescan(state)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No security re-scan for this run — A9 has not completed",
+        )
+    return projection
+
+
+@router.get("/runs/{run_id}/decision")
+async def get_run_mergeability_decision(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+    """A10's routing decision.
+
+    Returns the projection built by `build_mergeability_decision`: the four
+    axes (with A10's own stricter security auto-merge threshold alongside the
+    generic one), the ten-gate hard-gate trace in the same order and wording
+    the router itself uses, the routing modifiers that only apply once every
+    gate clears, and the PR/proof-bundle outcome A10 actually produced.
+
+    A 404 means A10 has not produced a routing decision for this run yet.
+    """
+    state = await _load_run(store, run_id)
+    projection = build_mergeability_decision(state)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No mergeability decision for this run — A10 has not completed",
+        )
+    return projection
+
+
+@router.get("/runs/{run_id}/reproduction")
+async def get_run_reproduction(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+    """A3.5's failure-reproduction evidence.
+
+    Returns the projection built by `build_reproduction_evidence`: the real
+    outcome of A3.5's full-suite pytest gate — command, exit code, stdout,
+    stderr, timing, the failing test's exception and traceback when one was
+    found, and a deterministic five-stage breakdown of what that outcome
+    proves happened. A3.5 does not target a specific A3 finding, so this
+    endpoint never claims one.
+
+    A 404 means A3.5 has not run for this run yet.
+    """
+    state = await _load_run(store, run_id)
+    projection = build_reproduction_evidence(state)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No reproduction result for this run — A3.5 has not completed",
+        )
+    return projection
+
+
+@router.get("/runs/{run_id}/investigation")
+async def get_run_investigation(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+    """A4's evidence investigation.
+
+    Returns the projection built by `build_investigation`: what A4
+    investigated, every upstream source it consulted with what that source
+    actually said, the citations the verifier could and could not anchor, the
+    root cause and where it came from, and the itemised sum behind the
+    confidence. Nothing is recomputed here.
+
+    A 404 means A4 has not produced a report for this run. That is distinct
+    from a 200 carrying `status: "no_finding"` — A4 ran, consulted its sources
+    and had no subject to investigate — and from `status: "error"`, where A4
+    ran and degraded. All three are real outcomes the caller renders
+    differently; none of them is a reason to substitute a value.
+    """
+    state = await _load_run(store, run_id)
+    projection = build_investigation(state)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No investigation for this run — A4 has not completed",
+        )
+    return projection
+
+
+async def _capability_rollup(
+    store: RedisStore, settings: Settings, run_id: str, scope_paths: set[str]
+) -> list[dict] | None:
+    """A0.5's business-capability inference, narrowed to a blast scope.
+
+    Best-effort and additive, same pattern as `_index_pointer`: A0.5 is an
+    optional layer, so its absence is not an error, and a failure reading its
+    cached index must never take the blast endpoint down with it. Returns
+    `None` when A0.5 has not produced an index for this run — the caller
+    renders that as "not available", never as zero capabilities.
+    """
+    try:
+        index = await load_repository_intelligence(store, run_id, settings)
+    except Exception:  # noqa: BLE001 — capability rollup is additive, never fatal
+        logger.warning("blast_capability_rollup_failed", extra={"run_id": run_id})
+        return None
+    if index is None:
+        return None
+
+    graph = get_knowledge_graph(index)
+    rollup = []
+    classified: set[str] = set()
+    for capability in infer_capabilities(graph):
+        in_scope = sorted(set(capability.files) & scope_paths)
+        classified |= set(capability.files)
+        if not in_scope:
+            continue
+        rollup.append(
+            {
+                "name": capability.name,
+                "slug": capability.slug,
+                "confidence": capability.confidence,
+                "filesInScope": in_scope,
+                "totalFilesInCapability": len(capability.files),
+                "why": capability.explanation.summary,
+            }
+        )
+    rollup.sort(key=lambda c: len(c["filesInScope"]), reverse=True)
+    unclassified = sorted(scope_paths - classified)
+    return rollup + (
+        [
+            {
+                "name": "Unclassified",
+                "slug": "unclassified",
+                "confidence": None,
+                "filesInScope": unclassified,
+                "totalFilesInCapability": None,
+                "why": "No capability signal (filename, import, route, doc or config) matched these files.",
+            }
+        ]
+        if unclassified
+        else []
+    )
+
+
+@router.get("/runs/{run_id}/blast")
+async def get_run_blast_impact(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+    settings: Annotated[Settings, Depends(get_settings_dep)],
+) -> dict:
+    """A5's blast-radius impact.
+
+    Returns the projection built by `build_blast_impact`: the resolved origin
+    and how A5 got there, every file in scope with its hop distance,
+    direction(s), how it was reached, and the propagation/priority scores A5
+    computed — joined read-only against A1's role/criticality/churn and A3's
+    findings — plus, when A0.5 has run, the business capabilities the scope
+    touches. Nothing here is a second analysis: every judgement is A5's,
+    A1's or A3's, carried through unchanged.
+
+    A 404 means A5 has not produced a result for this run. That is distinct
+    from a 200 with an empty `scope` and `origin: null` — A5 ran and had
+    nothing to traverse (no SIG, or no citations to start from).
+    """
+    state = await _load_run(store, run_id)
+    projection = build_blast_impact(state)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No blast-radius impact for this run — A5 has not completed",
+        )
+
+    scope_paths = {s["path"] for s in projection["scope"] if s.get("path")}
+    projection["capabilities"] = await _capability_rollup(store, settings, run_id, scope_paths)
+    return projection
+
+
 @router.get("/runs/{run_id}/context")
 async def get_run_context(
     run_id: str,
@@ -299,6 +589,52 @@ async def get_run_plan(
             detail="No repair plan for this run — A6 has not completed",
         )
     return state.fix_dag
+
+
+@router.get("/runs/{run_id}/repair-plan")
+async def get_run_repair_plan(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+    """A6's repair plan, joined with why each step exists and what A5.5 requires of it.
+
+    Returns the projection built by `build_repair_plan`: every planned step in
+    order, its files, its dependencies, which other steps it conflicts with
+    over a shared file, and — joined read-only against A3's findings and A2's
+    CVE records — why the step exists, since `FixNode` itself carries no
+    message. When A5.5 has produced a context package, its
+    `acceptance_criteria` and `patch_constraints` are attached as A5.5's own
+    evidence, not recomputed or claimed as A6's.
+
+    This is not `/plan`: `/plan` returns `state.fix_dag` verbatim for API
+    consumers that already depend on that exact shape. This route is the one
+    the workspace board reads, and it is explicit that A7 currently consumes
+    only `execution_order[0]` as a label — the ordered list here is A6's
+    proposal, not a guarantee of what will execute.
+
+    A 404 means A6 has not produced a plan for this run.
+    """
+    state = await _load_run(store, run_id)
+    projection = build_repair_plan(state)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No repair plan for this run — A6 has not completed",
+        )
+
+    package = await load_context_package(store, run_id)
+    projection["carriedForward"] = (
+        {
+            "acceptanceCriteria": list(package.acceptance_criteria),
+            "patchConstraints": list(package.patch_constraints),
+            # A5.5's own field, attached as-is. A6 has no function-level
+            # analysis of its own — this must never read as A6's finding.
+            "targetFunction": package.target_function,
+        }
+        if package is not None
+        else None
+    )
+    return projection
 
 
 @router.get("/runs/{run_id}/patch")

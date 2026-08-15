@@ -1,4 +1,14 @@
-import { LayoutGrid, Settings, Plus, Sun, Moon, ChevronRight, Folder } from "lucide-react";
+import {
+  LayoutGrid,
+  Settings,
+  Plus,
+  Sun,
+  Moon,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Folder,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 export interface SidebarRun {
@@ -41,7 +51,7 @@ function ProoFixMark({ className = "" }: { className?: string }) {
   );
 }
 
-function ThemeToggle() {
+function useTheme() {
   const [theme, setTheme] = useState<"light" | "dark">("dark");
 
   useEffect(() => {
@@ -58,6 +68,11 @@ function ThemeToggle() {
     document.documentElement.classList.toggle("dark", next === "dark");
   };
 
+  return { theme, toggle };
+}
+
+function ThemeToggle() {
+  const { theme, toggle } = useTheme();
   const isDark = theme === "dark";
 
   return (
@@ -84,6 +99,27 @@ function ThemeToggle() {
       <span className="relative z-10 flex h-7 w-1/2 items-center justify-center text-ink-soft">
         <Moon className="h-3 w-3" strokeWidth={1.75} />
       </span>
+    </button>
+  );
+}
+
+function ThemeToggleCompact() {
+  const { theme, toggle } = useTheme();
+  const isDark = theme === "dark";
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label="Toggle theme"
+      title={isDark ? "Switch to light theme" : "Switch to dark theme"}
+      className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-soft transition-colors hover:bg-surface-muted hover:text-ink"
+    >
+      {isDark ? (
+        <Moon className="h-3.5 w-3.5" strokeWidth={1.75} />
+      ) : (
+        <Sun className="h-3.5 w-3.5" strokeWidth={1.75} />
+      )}
     </button>
   );
 }
@@ -202,13 +238,112 @@ export function Sidebar({
   selectedRunId: string | null;
   onSelectRun: (runId: string) => void;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    const stored = localStorage.getItem("proofix-sidebar-collapsed");
+    if (stored !== null) setCollapsed(stored === "1");
+  }, []);
+
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem("proofix-sidebar-collapsed", next ? "1" : "0");
+      return next;
+    });
+  };
+
+  if (collapsed) {
+    return (
+      <aside className="hidden h-screen w-[56px] shrink-0 flex-col border-r border-border bg-surface lg:flex sticky top-0">
+        <div className="flex flex-col items-center gap-2 px-2 pt-3 pb-2">
+          <ProoFixMark className="h-[20px] w-[20px] text-ink" />
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-label="Expand sidebar"
+            title="Expand sidebar"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-soft transition-colors hover:bg-surface-muted hover:text-ink"
+          >
+            <ChevronsRight className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </button>
+        </div>
+
+        <div className="px-2 pb-2">
+          <button
+            type="button"
+            onClick={onNewRun}
+            aria-label="Analyze Repository"
+            title="Analyze Repository"
+            className="flex h-9 w-full items-center justify-center rounded-lg border border-border bg-surface text-ink transition-colors hover:border-primary/30 hover:bg-surface-muted"
+          >
+            <Plus className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </button>
+        </div>
+
+        <nav className="px-2">
+          <ul className="space-y-0.5">
+            {PRIMARY_NAV.map(({ key, label, icon: Icon }) => {
+              const active = currentView === key;
+              return (
+                <li key={key}>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate?.(key)}
+                    aria-label={label}
+                    title={label}
+                    className={`flex h-9 w-full items-center justify-center rounded-lg transition-colors ${
+                      active
+                        ? "bg-surface-muted font-medium text-ink"
+                        : "text-ink-soft hover:bg-surface-muted hover:text-ink"
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+
+        <div className="mt-4 min-h-0 flex-1" />
+
+        <div className="flex flex-col items-center gap-1 border-t border-border px-2 py-3">
+          <ThemeToggleCompact />
+          <button
+            type="button"
+            onClick={() => onNavigate?.("settings")}
+            aria-label="Settings"
+            title="Settings"
+            className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
+              currentView === "settings"
+                ? "bg-surface-muted text-ink"
+                : "text-ink-soft hover:bg-surface-muted hover:text-ink"
+            }`}
+          >
+            <Settings className="h-3.5 w-3.5" strokeWidth={1.75} />
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
   return (
     <aside className="hidden h-screen w-[208px] shrink-0 flex-col border-r border-border bg-surface lg:flex sticky top-0">
-      <div className="px-3 pt-3 pb-2">
+      <div className="flex items-center justify-between px-3 pt-3 pb-2">
         <div className="flex items-center gap-1.5">
           <ProoFixMark className="h-[20px] w-[20px] text-ink" />
           <div className="text-[13px] font-semibold tracking-tight text-ink">ProoFix</div>
         </div>
+        <button
+          type="button"
+          onClick={toggleCollapsed}
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar"
+          className="flex h-6 w-6 items-center justify-center rounded-md text-ink-soft transition-colors hover:bg-surface-muted hover:text-ink"
+        >
+          <ChevronsLeft className="h-3.5 w-3.5" strokeWidth={1.75} />
+        </button>
       </div>
 
       <div className="px-3 pb-2">

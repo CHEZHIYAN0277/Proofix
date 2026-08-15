@@ -10,11 +10,30 @@ import { AnimatedNumber } from "@/components/proofix/AnimatedNumber";
 
 import { useExecutionRun, type LiveAgent } from "@/components/proofix/useExecutionRun";
 import { EvidenceHandoff } from "@/components/proofix/AgentVisualization";
+import { EnvironmentPreflightBoard } from "@/components/proofix/EnvironmentPreflightBoard";
+import { RepositoryIntelligencePanel } from "@/components/proofix/RepositoryIntelligencePanel";
+import { SemanticArchitecturePanel } from "@/components/proofix/SemanticArchitecturePanel";
+import { DependencyRiskPanel } from "@/components/proofix/DependencyRiskPanel";
+import { StaticFindingsPanel } from "@/components/proofix/StaticFindingsPanel";
+import { SecurityRescanPanel } from "@/components/proofix/SecurityRescanPanel";
+import { MergeabilityDecisionPanel } from "@/components/proofix/MergeabilityDecisionPanel";
+import { ReproductionEvidencePanel } from "@/components/proofix/ReproductionEvidencePanel";
+import { EvidenceInvestigationBoard } from "@/components/proofix/EvidenceInvestigationBoard";
+import { BlastRadiusPanel } from "@/components/proofix/BlastRadiusPanel";
+import { RepairPlanPanel } from "@/components/proofix/RepairPlanPanel";
+import { ContextEngineeringPanel } from "@/components/proofix/ContextEngineeringPanel";
+import type { IntelligencePayload } from "@/components/proofix/visualizationTypes";
 import { NewRunScreen } from "@/components/proofix/NewRunScreen";
 import { AnalyzingSequence } from "@/components/proofix/AnalyzingSequence";
 
 import { RetrySequence } from "@/components/proofix/RetrySequence";
-import { DiffView, diffStats, parseUnifiedDiff } from "@/components/proofix/DiffView";
+import {
+  DiffView,
+  diffStats,
+  parseUnifiedDiff,
+  splitDiffByFile,
+} from "@/components/proofix/DiffView";
+import type { PatchFileProvenance } from "@/components/proofix/visualizationTypes";
 
 import { ProgressRing } from "@/components/proofix/ProgressRing";
 import { GitBranch, Hash, Clock, RefreshCcw, Sparkles, GitPullRequest } from "lucide-react";
@@ -23,8 +42,8 @@ import {
   type WorkspaceHeaderModel,
   type ExecutiveSummaryModel,
   type RunReportModel,
-  type ContextPackageModel,
   type PatchBundleModel,
+  type PatchCandidateModel,
 } from "@/mocks";
 import { scrollBehavior } from "@/hooks/useCountUp";
 import { useRunData, type ModelState } from "@/components/proofix/useRunData";
@@ -201,6 +220,7 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
   const repairAttemptsRef = useRef<HTMLDivElement | null>(null);
   const pendingRunIdRef = useRef<Promise<string | null> | null>(null);
   const executiveSummaryRef = useRef<HTMLDivElement | null>(null);
+  const chatAnchorRef = useRef<HTMLDivElement | null>(null);
   const activeScrollGenerationRef = useRef(0);
   const anchoredAgentRef = useRef<number | null>(null);
   const primaryAlignUntilRef = useRef(0);
@@ -445,7 +465,10 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
         {view === "execution" && isLive && runData.loading && <WorkspaceLoading />}
         {view === "execution" && !(isLive && runData.loading) && (
           <div className="mx-auto flex max-w-[1480px] gap-6 px-6 py-6">
-            <div className={`min-w-0 flex-1 space-y-6 ${done ? "pb-[160px]" : "pb-24"}`}>
+            <div
+              ref={chatAnchorRef}
+              className={`min-w-0 flex-1 space-y-6 ${done ? "pb-[160px]" : "pb-24"}`}
+            >
               {runData.status.header.error && (
                 <PanelError
                   panel="run header"
@@ -468,6 +491,7 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
                   done={done}
                   summary={runData.summary}
                   report={runData.report}
+                  header={runData.header}
                 />
               </div>
 
@@ -561,6 +585,66 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
                             active={isActive}
                             expanded={expanded}
                             outputLabel={entry.handoff}
+                            liveView={
+                              entry.id === "environment" ? (
+                                <EnvironmentPreflightBoard
+                                  environment={runData.header.environment}
+                                  probeError={runData.header.environmentProbeError}
+                                />
+                              ) : entry.id === "intelligence" ? (
+                                <RepositoryIntelligencePanel
+                                  runId={runId}
+                                  intelligence={
+                                    entry.visualization?.kind === "intelligence"
+                                      ? (entry.visualization.data as IntelligencePayload)
+                                      : undefined
+                                  }
+                                />
+                              ) : entry.id === "repo-intel" ? (
+                                <SemanticArchitecturePanel
+                                  runId={runId}
+                                  status={entry.liveStatus}
+                                />
+                              ) : entry.id === "deps" ? (
+                                <DependencyRiskPanel runId={runId} status={entry.liveStatus} />
+                              ) : entry.id === "static" ? (
+                                <StaticFindingsPanel runId={runId} status={entry.liveStatus} />
+                              ) : entry.id === "reproduce" ? (
+                                <ReproductionEvidencePanel
+                                  runId={runId}
+                                  status={entry.liveStatus}
+                                />
+                              ) : entry.id === "root" ? (
+                                <EvidenceInvestigationBoard
+                                  runId={runId}
+                                  status={entry.liveStatus}
+                                />
+                              ) : entry.id === "blast" ? (
+                                <BlastRadiusPanel runId={runId} status={entry.liveStatus} />
+                              ) : entry.id === "context" ? (
+                                <ContextEngineeringPanel runId={runId} status={entry.liveStatus} />
+                              ) : entry.id === "planner" ? (
+                                <RepairPlanPanel runId={runId} status={entry.liveStatus} />
+                              ) : entry.id === "security" ? (
+                                <SecurityRescanPanel runId={runId} status={entry.liveStatus} />
+                              ) : entry.id === "patch" ? (
+                                <PatchPanel
+                                  bundle={runData.patch}
+                                  state={runData.status.patch}
+                                  onRetry={runData.retry}
+                                  provenance={
+                                    entry.visualization?.kind === "patch"
+                                      ? entry.visualization.data.files
+                                      : []
+                                  }
+                                />
+                              ) : entry.id === "merge" ? (
+                                <MergeabilityDecisionPanel
+                                  runId={runId}
+                                  status={entry.liveStatus}
+                                />
+                              ) : undefined
+                            }
                             onSelect={() => {
                               toggleOverride(i, defaultExpanded);
                             }}
@@ -584,32 +668,6 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
                   })}
                 </div>
               </section>
-
-              {/* Only once the journal has reached context engineering. Showing
-                  it earlier would render "Pending" for a stage the pipeline has
-                  not yet arrived at, which reads as late rather than upcoming. */}
-              {(() => {
-                const contextIdx = agents.findIndex((a) => a.id === "context");
-                return contextIdx >= 0 && activeIndex >= contextIdx ? (
-                  <ContextPanel
-                    pkg={runData.context}
-                    state={runData.status.context}
-                    onRetry={runData.retry}
-                  />
-                ) : null;
-              })()}
-
-              {/* The diff, once generation has been reached. */}
-              {(() => {
-                const patchIdx = agents.findIndex((a) => a.id === "patch");
-                return patchIdx >= 0 && activeIndex >= patchIdx ? (
-                  <PatchPanel
-                    bundle={runData.patch}
-                    state={runData.status.patch}
-                    onRetry={runData.retry}
-                  />
-                ) : null;
-              })()}
 
               {(() => {
                 const mutationIdx = agents.findIndex((a) => a.id === "mutation");
@@ -668,8 +726,11 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
         )}
       </main>
 
-      {view === "execution" && (
-        <ChatPanel answerer={isLive ? (q) => askChat(runId, q) : undefined} />
+      {view === "execution" && done && (
+        <ChatPanel
+          answerer={isLive ? (q) => askChat(runId, q) : undefined}
+          anchorRef={chatAnchorRef}
+        />
       )}
     </div>
   );
@@ -719,174 +780,130 @@ function WorkspaceLoading() {
   );
 }
 
+/** A7's own word for "context_source", turned into a phrase — not a translation of meaning, just spacing. */
+function contextSourceLabel(source: string | null): string | null {
+  if (source === "a5_5_context_package") return "A5.5 context package";
+  if (source === "a7_local_extraction") return "A7 local extraction";
+  return source;
+}
+
 /**
- * Shown in place of, or above, a panel whose model failed to load (B-F01).
- *
- * The point is that the user can tell a fetch that failed from a run that
- * genuinely produced nothing. Without this a broken `/report` and a run with no
- * report render identically — the empty model, silently.
+ * The "⏺ Update(file) / ⎿ Updated file with N additions and M removals"
+ * header a coding-assistant terminal prints above a file edit — real counts
+ * from the real diff, real target-function name only when A7 resolved one,
+ * no invented detail. Fixed dark/mono styling matches `DiffView`'s terminal
+ * palette immediately below it, independent of the host page's theme.
  */
-/**
- * A5.5's package in the detail the agent card cannot carry.
- *
- * The card's visualization is a summary built from the event payload, which is
- * all the polled `/agents` response can afford. The ranking — every file A5.5
- * scored, with the signals behind each score — and the redaction ledger come
- * from `/runs/{id}/context`, fetched once. Until this existed they had no
- * consumer at all: the pipeline recorded exactly which secrets it masked and
- * nobody could see it.
- *
- * Three states, deliberately distinct:
- *
- *   error    the request failed. Reportable, retryable.
- *   pending  the endpoint 404s because A5.5 has not produced a package yet.
- *            That is a fact about the run, not a problem with the request, and
- *            it must never render as "no secrets found".
- *   loaded   the real package.
- */
-function ContextPanel({
-  pkg,
-  state,
-  onRetry,
+function ClaudeStyleEditHeader({
+  patch,
+  provenance,
+  stats,
 }: {
-  pkg: ContextPackageModel | null;
-  state: ModelState;
-  onRetry: () => void;
+  patch: PatchCandidateModel;
+  provenance: PatchFileProvenance | undefined;
+  stats: { added: number; removed: number };
 }) {
-  if (state.error && !state.loaded) {
-    return <PanelError panel="the context package" message={state.error} onRetry={onRetry} />;
-  }
-
-  if (!pkg) {
-    return (
-      <section className="rounded-2xl border border-border bg-surface p-4">
-        <h3 className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
-          Context Package
-        </h3>
-        <p className="mt-1.5 text-xs text-ink-soft">
-          Pending — context engineering has not published a package for this run yet.
-        </p>
-      </section>
-    );
-  }
-
-  const ranked = [...pkg.ranked_files].sort((a, b) => b.score - a.score).slice(0, 8);
-  const topScore = ranked[0]?.score ?? 0;
-
   return (
-    <section className="space-y-3 rounded-2xl border border-border bg-surface p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
-          Context Package
-        </h3>
-        <span className="font-mono text-[11px] text-ink">
-          {pkg.target_file}
-          {pkg.target_function && <span className="text-ink-soft"> :: {pkg.target_function}</span>}
+    <div
+      className="rounded-lg border px-3 py-2 font-mono text-[12px]"
+      style={{ borderColor: "#30363d", backgroundColor: "#0d1117" }}
+    >
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span className="text-[#e6edf3]">●</span>
+        <span className="font-semibold text-[#e6edf3]">
+          Update(
+          <span className="font-normal">{patch.file}</span>
+          {provenance?.targetFunction && (
+            <span className="text-[#7d8590]"> :: {provenance.targetFunction}()</span>
+          )}
+          )
         </span>
       </div>
-
-      {/* The ranking. Every score is shown with the signals that produced it —
-          a ranking you cannot inspect is an oracle, and the whole design of
-          A5.5 is that its selection is deterministic and reviewable. */}
-      {ranked.length > 0 && (
-        <div>
-          <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
-            Ranked files ({pkg.metrics.files_ranked} scored, {pkg.metrics.context_files} included)
-          </div>
-          <ul className="space-y-1">
-            {ranked.map((f) => (
-              <li key={f.file} className="rounded-md border border-border bg-surface-muted/40 p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate font-mono text-[11px] text-ink" title={f.file}>
-                    {f.is_target && (
-                      <span className="mr-1.5 rounded bg-primary/15 px-1 text-[9px] font-semibold uppercase tracking-wider text-primary">
-                        target
-                      </span>
-                    )}
-                    {f.file}
-                  </span>
-                  <span className="shrink-0 font-mono text-[11px] text-ink-soft">
-                    {f.score.toFixed(2)}
-                  </span>
-                </div>
-                <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-surface-muted">
-                  <div
-                    className="h-full rounded-full bg-primary"
-                    style={{ width: `${topScore > 0 ? (f.score / topScore) * 100 : 0}%` }}
-                  />
-                </div>
-                {f.reason && <div className="mt-1 text-[10px] text-ink-soft">{f.reason}</div>}
-                {Object.keys(f.signals).length > 0 && (
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {Object.entries(f.signals)
-                      .filter(([, v]) => v !== 0)
-                      .map(([name, value]) => (
-                        <span
-                          key={name}
-                          className="rounded bg-surface-muted px-1 font-mono text-[9px] text-ink-soft"
-                        >
-                          {name} {value > 0 ? "+" : ""}
-                          {value}
-                        </span>
-                      ))}
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* The redaction ledger: enough to audit, never enough to recover a
-          value. An empty list under a `clean` guard is a real result; an empty
-          list under `failed` is not, and says so. */}
-      <div>
-        <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
-          Privacy guard · {pkg.privacy_guard_status}
-        </div>
-        {pkg.privacy_guard_status === "failed" ? (
-          <p className="rounded-md border border-status-failed/30 bg-status-failed-bg/40 px-2 py-1.5 text-[11px] text-ink">
-            The guard errored. No claim can be made about what this context contained.
-          </p>
-        ) : pkg.redactions.length === 0 ? (
-          <p className="text-[11px] text-ink-soft">
-            No secrets detected in the context handed to the patch generator.
-          </p>
-        ) : (
-          <ul className="space-y-1">
-            {pkg.redactions.map((r, i) => (
-              <li
-                key={`${r.file}:${r.line}:${i}`}
-                className="flex flex-wrap items-center gap-x-2 rounded-md border border-status-retry/30 bg-status-retry-bg/40 px-2 py-1 font-mono text-[10px] text-ink"
-              >
-                <span>
-                  {r.file}:{r.line}
-                </span>
-                <span className="text-ink-soft">{r.identifier || r.kind}</span>
-                <span className="ml-auto text-ink-soft">masked by {r.detector}</span>
-              </li>
-            ))}
-          </ul>
-        )}
+      <div className="mt-0.5 flex items-baseline gap-1.5 pl-3 text-[11px] text-[#7d8590]">
+        <span aria-hidden>⎿</span>
+        <span>
+          Updated {patch.file} with{" "}
+          <span className="text-[#3fb950]">
+            {stats.added} addition{stats.added === 1 ? "" : "s"}
+          </span>{" "}
+          and{" "}
+          <span className="text-[#f85149]">
+            {stats.removed} removal{stats.removed === 1 ? "" : "s"}
+          </span>
+        </span>
       </div>
+    </div>
+  );
+}
 
-      {pkg.acceptance_criteria.length > 0 && (
-        <div>
-          <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
-            Acceptance criteria
-          </div>
-          <ul className="list-inside list-disc space-y-0.5 text-[11px] text-ink-soft">
-            {pkg.acceptance_criteria.map((c) => (
-              <li key={c}>{c}</li>
-            ))}
-          </ul>
+/**
+ * Generation facts for one patched file.
+ *
+ * `method` comes straight from the persisted `PatchCandidate` — always
+ * present, since A7 records it for every write — so "AST validated ✓" shows
+ * even on a run from before per-file provenance existed. `provenance` is the
+ * separate, newer source (`a7_patch_metrics`) and may genuinely be `undefined`
+ * for such a run; its facts (LLM vs. stub, context, retry) are simply omitted
+ * rather than guessed, never backfilled from `method`.
+ */
+function PatchProvenanceRow({
+  method,
+  provenance,
+}: {
+  method: string | null;
+  provenance: PatchFileProvenance | undefined;
+}) {
+  const items: { label: string; value: string }[] = [];
+
+  if (provenance?.generationSource === "stub") {
+    items.push({ label: "Generated", value: "Stub mode — no LLM configured, file unchanged" });
+  } else if (provenance?.generationSource === "llm") {
+    items.push({ label: "Generated", value: "LLM" });
+  }
+  const context = contextSourceLabel(provenance?.contextSource ?? null);
+  if (context) items.push({ label: "Context", value: context });
+  if (method === "ast_validated_write") {
+    items.push({ label: "Validation", value: "AST validated ✓" });
+  }
+  if (provenance) {
+    items.push({
+      label: "Retry",
+      value: provenance.retryNumber
+        ? `Retry ${provenance.retryNumber}${provenance.retryReason ? ` — ${provenance.retryReason}` : ""}`
+        : "No retry",
+    });
+  }
+
+  if (items.length === 0) return null;
+
+  return (
+    <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] sm:grid-cols-4">
+      {items.map((it) => (
+        <div key={it.label}>
+          <dt className="uppercase tracking-wider text-ink-soft">{it.label}</dt>
+          <dd className="mt-0.5 text-ink">{it.value}</dd>
         </div>
-      )}
+      ))}
+    </dl>
+  );
+}
 
-      {state.error && (
-        <PanelError panel="the latest context package" message={state.error} onRetry={onRetry} />
-      )}
-    </section>
+/**
+ * A7 → A8 handoff. A statement of what happens next, not a validation
+ * result — A8 has not run yet from this panel's point of view, so nothing
+ * here may read as "passed" or "failed".
+ */
+function A7ToA8Handoff() {
+  return (
+    <div className="flex items-center justify-center gap-2 border-t border-border/60 pt-2.5 text-[10px] text-ink-soft">
+      <span className="rounded-md bg-surface-muted px-2 py-1 font-medium uppercase tracking-wider text-ink">
+        A7 generated patch
+      </span>
+      <span aria-hidden>↓</span>
+      <span className="rounded-md border border-border px-2 py-1 font-medium uppercase tracking-wider">
+        A8 validation
+      </span>
+    </div>
   );
 }
 
@@ -898,16 +915,33 @@ function ContextPanel({
  * context panel — a 404 is "generation never completed", distinct from a bundle
  * whose patch list is empty, which is "generation completed and changed
  * nothing". Those are different facts and the panel says which.
+ *
+ * `provenance` is a second, independent source — A7's own `a7_patch_metrics`,
+ * projected onto the "patch" agent card — carrying facts the bundle itself
+ * does not: which file was the resolved target, whether generation was real
+ * LLM output or stub mode, and what context A7 reasoned over. It is additive;
+ * the diff renders in full even when provenance for a file is unavailable.
  */
 function PatchPanel({
   bundle,
   state,
   onRetry,
+  provenance,
 }: {
   bundle: PatchBundleModel | null;
   state: ModelState;
   onRetry: () => void;
+  provenance: PatchFileProvenance[];
 }) {
+  const provenanceByFile = useMemo(() => new Map(provenance.map((p) => [p.file, p])), [provenance]);
+  const diffChunks = useMemo(
+    () => (bundle ? splitDiffByFile(bundle.diff_text) : new Map<string, string>()),
+    [bundle],
+  );
+  const targetFile = provenance.find((p) => p.isTarget)?.file ?? bundle?.patches[0]?.file ?? null;
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const activeFile = selectedFile ?? targetFile;
+
   if (state.error && !state.loaded) {
     return <PanelError panel="the patch" message={state.error} onRetry={onRetry} />;
   }
@@ -924,6 +958,10 @@ function PatchPanel({
   }
 
   const stats = diffStats(parseUnifiedDiff(bundle.diff_text));
+  const activePatch = bundle.patches.find((p) => p.file === activeFile) ?? bundle.patches[0];
+  const activeDiff = activeFile
+    ? (diffChunks.get(activeFile) ?? bundle.diff_text)
+    : bundle.diff_text;
 
   return (
     <section className="space-y-3 rounded-2xl border border-border bg-surface p-4">
@@ -947,25 +985,62 @@ function PatchPanel({
         </p>
       ) : (
         <>
-          <ul className="flex flex-wrap gap-1">
-            {bundle.patches.map((p) => (
-              <li
-                key={p.file}
-                className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[10px] text-ink-soft"
-              >
-                {p.file}
-                {/* A7's own word for how it wrote the file, passed through. */}
-                <span className="ml-1 opacity-70">· {p.method}</span>
-              </li>
-            ))}
-          </ul>
+          {/* File selector — only when there is a real choice to make. A
+              single file stays compact (the header stat line already carries
+              its counts); with more than one, each gets its own real diff
+              rather than being merged into one ambiguous view. */}
+          {bundle.patches.length > 1 && (
+            <ul className="flex flex-wrap gap-1">
+              {bundle.patches.map((p) => {
+                const prov = provenanceByFile.get(p.file);
+                const fileStats = diffStats(parseUnifiedDiff(diffChunks.get(p.file) ?? ""));
+                const isActive = p.file === activeFile;
+                return (
+                  <li key={p.file}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFile(p.file)}
+                      aria-pressed={isActive}
+                      className={`flex items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors ${
+                        isActive
+                          ? "bg-primary/15 text-primary"
+                          : "bg-surface-muted text-ink-soft hover:bg-surface-muted/70"
+                      }`}
+                    >
+                      {p.file}
+                      {prov?.isTarget && (
+                        <span className="rounded bg-primary/20 px-1 text-[9px] font-semibold uppercase tracking-wider">
+                          target
+                        </span>
+                      )}
+                      <span className="text-status-completed">+{fileStats.added}</span>
+                      <span className="text-status-failed">−{fileStats.removed}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
 
-          <DiffView diff={bundle.diff_text} />
+          {activePatch && (
+            <ClaudeStyleEditHeader
+              patch={activePatch}
+              provenance={provenanceByFile.get(activePatch.file)}
+              stats={diffStats(parseUnifiedDiff(activeDiff))}
+            />
+          )}
+
+          <DiffView diff={activeDiff} />
+
+          <PatchProvenanceRow
+            method={activePatch?.method ?? null}
+            provenance={activePatch ? provenanceByFile.get(activePatch.file) : undefined}
+          />
 
           {bundle.contracts.length > 0 && (
             <div>
               <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
-                Behavioural contracts
+                Repair contracts
               </div>
               <ul className="space-y-0.5 text-[11px] text-ink-soft">
                 {bundle.contracts.map((c, i) => (
@@ -976,6 +1051,8 @@ function PatchPanel({
               </ul>
             </div>
           )}
+
+          <A7ToA8Handoff />
         </>
       )}
 
@@ -1013,14 +1090,6 @@ function PanelError({
   );
 }
 
-/** What the "Current Agent" tile reads once nothing is streaming any more. */
-const CURRENT_AGENT_BY_STATE: Record<string, string> = {
-  running: "Streaming…",
-  completed: "Completed",
-  failed: "Stopped",
-  blocked: "Stopped",
-};
-
 function WorkspaceHeader({
   done,
   header,
@@ -1035,11 +1104,21 @@ function WorkspaceHeader({
   // Mock mode has no backend status, so `done` alone settles it as completed.
   const state = lifecycle.terminal ? lifecycle.state : done ? "completed" : "running";
   const settled = state !== "running";
+  // "Current Agent" must name an agent, never a run/state word. A terminal
+  // run's `header.currentAgent` is the backend's own record of which agent
+  // last owned it (e.g. "A0.7" for blocked, "A10" for completed) — rendering
+  // a synthetic "Completed"/"Stopped" here instead was exactly the "state
+  // wearing an agent identity" contradiction this pass exists to remove.
+  const currentAgentValue = !settled
+    ? "Streaming…"
+    : header.currentAgent && header.currentAgent !== "A0"
+      ? header.currentAgent
+      : "Not active";
   const items = [
     { label: "Repository", value: header.repository, mono: true },
     { label: "Branch", value: header.branch, icon: <GitBranch className="h-3 w-3" />, mono: true },
     { label: "Run", value: header.shortRunId, icon: <Hash className="h-3 w-3" />, mono: true },
-    { label: "Current Agent", value: CURRENT_AGENT_BY_STATE[state] ?? "Streaming…" },
+    { label: "Current Agent", value: currentAgentValue },
     { label: "Retries", value: String(header.retries), icon: <RefreshCcw className="h-3 w-3" /> },
     { label: "Execution Time", value: header.executionTime, icon: <Clock className="h-3 w-3" /> },
   ];
@@ -1184,6 +1263,7 @@ function ExecutiveSummary({
   done,
   summary,
   report,
+  header,
 }: {
   agents: LiveAgent[];
   activeIndex: number;
@@ -1192,6 +1272,8 @@ function ExecutiveSummary({
   summary: ExecutiveSummaryModel;
   /** Source of the evidence flags. Absent until the report request resolves. */
   report?: RunReportModel | null;
+  /** Carries the backend's own blocked-reason label (B-B19) — never re-derived here. */
+  header: WorkspaceHeaderModel;
 }) {
   void agents;
 
@@ -1225,7 +1307,7 @@ function ExecutiveSummary({
           // the pipeline never made.
           decision === "blocked"
           ? {
-              label: "Environment not prepared",
+              label: header.decisionLabel || "Environment not prepared",
               tint: "bg-status-blocked-bg/40 border-status-blocked/30",
               dot: "bg-status-blocked",
               text: "text-status-blocked",

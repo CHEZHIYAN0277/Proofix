@@ -17,11 +17,61 @@ Audit date: 2026-08-08. Legend: ✅ COMPLETE · 🟡 PARTIAL · 🔴 MISSING · 
 | **6** | Validation & scoring correctness | ✅ COMPLETE | mutation card ✅; null axes render "Not measured" | B-B01 ✅ (`measurement.py`); B-B02 ✅ (line-free finding key); B-B16 ✅ (absent scanner ≠ 100) | 15 A9 tests + `measured_mean` arithmetic + projection | none |
 | **7** | Final decision & report | ✅ COMPLETE | every draft reason on screen ✅ | B-B10 ✅ single writer; B-B11 ✅ shim deleted; B-B09 ✅ decided | 16 authority tests + 4 UI | none |
 | **8** | Production hardening | 🟡 PARTIAL | reduced motion ✅, poll cost ✅ | B-B04 ✅, B-B05 ✅, B-B14 ✅, B-B15 ✅, B-B13 broadcaster ✅ | 23 new | **B-B12 sandbox + B-B13 checkpointer need a decision** |
-| **9** | Final QA / certification | 🔴 MISSING | — | — | no real-GitHub E2E | all above |
+| **9** | Final QA / certification | 🟡 PARTIAL | tsc clean, build ✅, 66 tests ✅; **browser pass not run** | 5 real-GitHub E2E runs, all 3 terminal outcomes ✅ | backend 2078✓/1 env-fail; frontend 66✓ | **B-B17 must be fixed before certifying** |
 
 ---
 
 ## What "complete" rests on
+
+**Phase 9 🟡** (2026-08-09) — the E2E half ran and found four defects; the
+certification half cannot be signed while one of them is open. Full record in
+`docs/PRODUCTION_CERTIFICATION.md` §13.
+
+Five real public GitHub repositories, nothing prepared, real LLM calls, real
+subprocesses, `GITHUB_DRY_RUN=true`. All three terminal outcomes reached:
+`unsupported` (node), `no_manifest`, `not_prepared` (`freezegun`), **completed**
+(`toolz`, full twelve-agent chain, three retries, 35 s), and **failed** (clone
+of a nonexistent repository).
+
+Before any of it, a bare `"python"` at seven subprocess call sites was replaced
+with `sys.executable`. That string resolved through `PATH` — not the interpreter
+ProoFix runs under — so the probe could report `No module named 'pytest'` inside
+a message claiming to describe *"the interpreter ProoFix would run its tests
+with"*. Every blocked verdict depended on which interpreter the server happened
+to inherit; a test now fails if any runner reintroduces a bare interpreter.
+
+**The routing layer held. The evidence layer did not.**
+
+* **B-B17 (S1, open)** — `scan_text` de-anchors the `_VALUE_RULES` email pattern
+  and runs it unanchored, so `[^@\s]+` spans slashes and any absolute path
+  containing `@` is matched *in full* and replaced. On Homebrew macOS the
+  interpreter path is `python@3.14` by construction, so every traceback entering
+  the stdlib loses its frames to `<REDACTED_EMAIL>` — with the guard reporting
+  `masked` and a tidy ledger, believing it protected an email. Stack frames are
+  the pipeline's highest-weighted ranking signal (`STACK_FRAME_EXACT = 1.00`),
+  so this deletes the strongest evidence *before* ranking runs. Observed
+  consequence: `target_function: None`, an unrelated target file, and four
+  rejected patch attempts.
+* **B-B18 (S2, open)** — the mirror of the Flask false-block this project fixed
+  last round. `--collect-only` succeeding does not mean the project is
+  installed, and `toolz`'s sole failing test is its own installation self-check.
+  A0.7 said `ready`; A3.5 recorded `CONFIRMED` at 90 %.
+* **B-B19 (S2, open)** — `unsupported` and `no_manifest` both render
+  "Environment not prepared", contradicting the reason printed beneath them.
+* **B-B20 (S4, open)** — `currentAgent` is stale on every terminal run.
+
+**Measured, not asserted.** Per-agent cost attribution by `run_id` works live
+(B-B05 confirmed outside unit tests): 9 calls, 25,290 tokens, $0.0094, 33 s.
+Two assumptions in `CLAUDE.md` are now contradicted by measurement — A7 is *not*
+the most expensive call (A4 cost 31 % more), and A4's reinvestigation loop spent
+12,647 tokens across three calls to finish with **zero** verified citations,
+exactly the discard-the-verification-result defect §3 predicts.
+
+**Not verified:** the browser pass. No Playwright exists in this repository and
+`vitest` runs on jsdom, so "console clean, no error boundary, responsive, a11y"
+was not re-established this round — earlier rounds' results stand on their own
+evidence. Sandboxing (B-B12) and the checkpointer (B-B13) remain open by
+decision.
 
 **Phase 3 ✅** — A3.5, A4, A5 all execute, publish typed payloads, have V1 cards
 with bespoke visualizations, and are covered by backend tests. Citation

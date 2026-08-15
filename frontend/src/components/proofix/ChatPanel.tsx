@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type RefObject } from "react";
 import { scrollBehavior } from "@/hooks/useCountUp";
-import { Send, ChevronDown } from "lucide-react";
+import { ArrowUp, AudioLines, ChevronDown } from "lucide-react";
 import { MOCK_CHAT_SUGGESTIONS, mockAnswerer } from "@/mocks";
 import { DATA_SOURCE } from "@/lib/api";
 
@@ -30,11 +30,19 @@ type Mode = "idle" | "hover" | "open";
 export function ChatPanel({
   suggestions = isLive ? LIVE_CHAT_SUGGESTIONS : MOCK_CHAT_SUGGESTIONS,
   answerer = mockAnswerer,
+  anchorRef,
 }: {
   /** Suggestion chips. Override per-run from the backend if desired. */
   suggestions?: string[];
   /** Resolver for user questions. Wire to `runService.askChat(runId, q)` once the backend is live. */
   answerer?: (q: string) => string | Promise<string>;
+  /**
+   * The content column this bar should track. Its measured viewport rect
+   * (left + width) drives the fixed bar's position, so the composer stays
+   * aligned to the real content column — sidebar collapsed or not, report
+   * panel open or not — instead of guessing pixel offsets per breakpoint.
+   */
+  anchorRef?: RefObject<HTMLDivElement | null>;
 } = {}) {
   const [messages, setMessages] = useState<Msg[]>([
     {
@@ -44,8 +52,26 @@ export function ChatPanel({
   ]);
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<Mode>("idle");
+  const [bounds, setBounds] = useState<{ left: number; width: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const el = anchorRef?.current;
+    if (!el) return;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setBounds({ left: r.left, width: r.width });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [anchorRef]);
 
   useEffect(() => {
     if (mode === "open") {
@@ -72,11 +98,16 @@ export function ChatPanel({
   const showFullChat = mode === "open";
 
   return (
-    <div className="pointer-events-none fixed bottom-0 z-30 left-0 lg:left-[176px] right-0 xl:right-[404px] px-4 pb-3">
+    <div
+      className={`pointer-events-none fixed bottom-0 z-30 px-4 pb-4 sm:px-6 ${
+        bounds ? "" : "left-0 right-0"
+      }`}
+      style={bounds ? { left: bounds.left, width: bounds.width } : undefined}
+    >
       <section
         onMouseEnter={() => setMode((m) => (m === "idle" ? "hover" : m))}
         onMouseLeave={() => setMode((m) => (m === "hover" ? "idle" : m))}
-        className="pointer-events-auto mx-auto max-w-[calc(1480px-176px-404px)] overflow-hidden rounded-2xl border border-border bg-surface/95 backdrop-blur shadow-[0_10px_30px_-12px_rgba(15,23,42,0.18)] transition-all duration-[250ms]"
+        className="pointer-events-auto mx-auto w-full max-w-2xl overflow-hidden rounded-[18px] border border-border bg-surface/95 backdrop-blur shadow-[0_16px_40px_-16px_rgba(15,23,42,0.28)] transition-all duration-[250ms]"
       >
         {/* Expanded content (hover/open) */}
         <div
@@ -132,13 +163,13 @@ export function ChatPanel({
         </div>
 
         {/* Prompt bar (always visible) */}
-        <div className="flex items-center gap-2 px-4 py-2">
+        <div className="flex items-end gap-1.5 px-2 py-2">
           <form
             onSubmit={(e) => {
               e.preventDefault();
               void send(input);
             }}
-            className="flex h-9 flex-1 items-center gap-2 rounded-full border border-border bg-surface-muted/60 px-4 transition focus-within:border-primary/40"
+            className="flex min-h-[36px] flex-1 items-center gap-1.5 rounded-full bg-surface-muted/60 pl-3.5 pr-1 transition"
             onClick={() => {
               setMode("open");
               inputRef.current?.focus();
@@ -150,22 +181,32 @@ export function ChatPanel({
               onChange={(e) => setInput(e.target.value)}
               onFocus={() => setMode("open")}
               placeholder="Ask about this run..."
-              className="flex-1 bg-transparent text-[14px] text-ink placeholder:text-ink-soft focus:outline-none"
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-ink-soft focus:outline-none"
             />
-            <button
-              type="submit"
-              disabled={!input.trim()}
-              className="flex h-6 w-6 items-center justify-center rounded-full bg-ink text-surface transition disabled:opacity-30"
-              aria-label="Send"
-            >
-              <Send className="h-3 w-3" />
-            </button>
+            {input.trim() ? (
+              <button
+                type="submit"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-white transition hover:brightness-110"
+                aria-label="Send"
+              >
+                <ArrowUp className="h-3.5 w-3.5 text-white" strokeWidth={2.25} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                title="Voice input isn't available yet"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-white transition hover:brightness-110"
+                aria-label="Voice input"
+              >
+                <AudioLines className="h-3.5 w-3.5 text-white" strokeWidth={2.25} />
+              </button>
+            )}
           </form>
           {showFullChat && (
             <button
               type="button"
               onClick={() => setMode("idle")}
-              className="flex h-7 w-7 items-center justify-center rounded-full text-ink-soft hover:bg-surface-muted hover:text-ink"
+              className="mb-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-surface-muted hover:text-ink"
               aria-label="Collapse chat"
             >
               <ChevronDown className="h-4 w-4" />

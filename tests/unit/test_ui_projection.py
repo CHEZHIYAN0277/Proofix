@@ -6,14 +6,22 @@ import pytest
 
 from backend.services.ui_projection import (
     AGENT_REGISTRY,
+    SEMANTIC_ROLES,
     STAGE_REGISTRY,
     SURFACE_V1,
     SURFACE_V2,
+    _visualization_for,
     agents_for_surface,
     build_agent_entries,
+    build_dependency_risk,
     build_executive_summary,
     build_repair_attempts,
     build_run_report,
+    build_mergeability_decision,
+    build_reproduction_evidence,
+    build_security_rescan,
+    build_semantic_graph,
+    build_static_findings,
     build_workspace_header,
     group_runs_by_repository,
     repo_display_name,
@@ -110,6 +118,96 @@ def test_failed_run_decision_wins_over_pr_type():
     assert run_decision(state)[0] == "failed"
 
 
+@pytest.mark.parametrize(
+    "env_status,expected_label",
+    [
+        ("unsupported", "Unsupported repository"),
+        ("no_manifest", "No dependency manifest"),
+        ("not_prepared", "Environment not prepared"),
+        ("no_test_runner", "No test runner available"),
+    ],
+)
+def test_blocked_run_decision_label_matches_the_probe_status(env_status, expected_label):
+    # B-B19: all three blocking statuses used to collapse onto one label that
+    # contradicted the `reason` text printed directly beneath it.
+    state = _completed_state(status="blocked", environment={"status": env_status})
+    assert run_decision(state) == ("blocked", expected_label)
+
+
+def test_blocked_run_decision_label_falls_back_when_environment_is_absent():
+    state = _completed_state(status="blocked", environment=None)
+    assert run_decision(state) == ("blocked", "Environment not prepared")
+
+
+class TestMutationCardTriState:
+    """`mutant_survived` defaults to `False` whether mutation ran or not — only
+    `mutation_status == "scored"` distinguishes measured from unmeasured."""
+
+    def test_mutation_unavailable_reports_survived_as_none(self):
+        state = _completed_state(
+            mutation_result={"pytest_passed": True, "mutation_status": "unavailable"}
+        )
+        viz = _visualization_for("mutation", state)
+        assert viz["data"]["score"] is None
+        assert viz["data"]["survived"] is None
+        assert viz["data"]["survivedMutants"] is None
+
+    def test_mutation_scored_with_zero_survivors(self):
+        state = _completed_state(
+            mutation_result={
+                "pytest_passed": True,
+                "mutation_status": "scored",
+                "mutation_score": 1.0,
+                "mutant_survived": False,
+                "survived_mutants": 0,
+            }
+        )
+        viz = _visualization_for("mutation", state)
+        assert viz["data"]["survived"] is False
+        assert viz["data"]["survivedMutants"] == 0
+
+    def test_mutation_scored_with_survivors(self):
+        state = _completed_state(
+            mutation_result={
+                "pytest_passed": True,
+                "mutation_status": "scored",
+                "mutation_score": 0.7,
+                "mutant_survived": True,
+                "survived_mutants": 3,
+            }
+        )
+        viz = _visualization_for("mutation", state)
+        assert viz["data"]["survived"] is True
+        assert viz["data"]["survivedMutants"] == 3
+
+
+class TestMergeCardCompositeIsSingleSourced:
+    """The merge card's composite score must be `_trust_score`'s own number —
+    not a second formula recomputed from the per-axis metrics in the frontend."""
+
+    def test_composite_matches_trust_score_when_all_axes_measured(self):
+        state = _completed_state(
+            pr_decision={
+                "pr_type": "auto_mergeable",
+                "axis_scores": {
+                    "correctness": 100.0,
+                    "security": 100.0,
+                    "fidelity": 100.0,
+                    "scope_risk": 75.0,
+                },
+            }
+        )
+        viz = _visualization_for("merge", state)
+        # (100+100+100+75)/4 = 93.75 -> 0.94 -> 94
+        assert viz["data"]["compositeScore"] == 94
+        assert "weights" not in viz["data"]
+
+    def test_composite_is_none_when_nothing_measured(self):
+        state = _completed_state(pr_decision={"pr_type": "draft", "axis_scores": {}})
+        viz = _visualization_for("merge", state)
+        assert viz is None  # no axis_scores at all -> no card
+
+
 def test_sidebar_status_reports_running_while_in_flight():
     assert sidebar_status(_completed_state(status="running")) == "running"
     assert sidebar_status(_completed_state()) == "completed"
@@ -128,7 +226,13 @@ def test_every_registry_agent_produces_a_card(surface):
     for entry in entries:
         assert entry["lines"], f"{entry['id']} has no narrative"
         assert entry["evidence"]["title"]
-        assert isinstance(entry["metrics"], list)
+        # `context` is the one deliberate exception: its Supporting Metrics
+        # grid duplicated `ContextEngineeringPanel` field-for-field, so it is
+        # `None` (the card omits the section) rather than a list.
+        if entry["id"] == "context":
+            assert entry["metrics"] is None
+        else:
+            assert isinstance(entry["metrics"], list)
         # Identity and stage travel with the card so no client rebuilds them.
         assert entry["agentId"]
         assert entry["stage"] in {s.id for s in STAGE_REGISTRY}
@@ -495,3 +599,746 @@ def test_blocked_run_is_never_projected_as_running_or_completed():
     state = _blocked_state()
     assert sidebar_status(state) == "blocked"
     assert run_decision(state) == ("blocked", "Environment not prepared")
+
+
+# -- A1 semantic graph projection ------------------------------------------
+
+
+def _sig_state(files: dict) -> RunStateModel:
+    return RunStateModel(
+        run_id=RUN_ID,
+        repo_path="vulnapi",
+        status="completed",
+        sig={
+            "repo_path": "/tmp/vulnapi",
+            "source_roots": ["vulnapi"],
+            "files": files,
+            "edges": [["vulnapi/routes.py", "vulnapi/auth.py"]],
+            "generated_at": "2026-08-13T00:00:00",
+        },
+    )
+
+
+def test_semantic_graph_is_none_before_a1_completes():
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="running")
+    assert build_semantic_graph(state) is None
+
+
+def test_semantic_graph_counts_every_declared_role_even_at_zero():
+    state = _sig_state(
+        {
+            "vulnapi/auth.py": {
+                "role": "auth-boundary",
+                "imports": [],
+                "imported_by": ["vulnapi/routes.py"],
+                "churn_weight": 0.2,
+                "criticality": 0.9,
+            },
+        }
+    )
+    graph = build_semantic_graph(state)
+    assert graph is not None
+    assert set(graph["roleCounts"]) == set(SEMANTIC_ROLES)
+    assert graph["roleCounts"]["auth-boundary"] == 1
+    assert graph["roleCounts"]["data-access"] == 0
+
+
+def test_semantic_graph_files_are_camelcased_and_sorted_by_criticality():
+    state = _sig_state(
+        {
+            "vulnapi/utils.py": {
+                "role": "internal-util",
+                "imports": ["vulnapi/config.py"],
+                "imported_by": [],
+                "churn_weight": 0.1,
+                "criticality": 0.2,
+            },
+            "vulnapi/routes.py": {
+                "role": "public-api",
+                "imports": ["vulnapi/auth.py"],
+                "imported_by": [],
+                "churn_weight": 0.5,
+                "criticality": 0.8,
+            },
+        }
+    )
+    graph = build_semantic_graph(state)
+    assert graph is not None
+    assert [f["path"] for f in graph["files"]] == ["vulnapi/routes.py", "vulnapi/utils.py"]
+    top = graph["files"][0]
+    assert top["role"] == "public-api"
+    assert top["imports"] == ["vulnapi/auth.py"]
+    assert top["importedBy"] == []
+    assert top["churnWeight"] == 0.5
+    assert top["criticality"] == 0.8
+    assert graph["sourceRoots"] == ["vulnapi"]
+    assert graph["edges"] == [["vulnapi/routes.py", "vulnapi/auth.py"]]
+    assert graph["totalFiles"] == 2
+    assert graph["totalEdges"] == 1
+
+
+def test_dependency_risk_is_none_before_a2_completes():
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="running")
+    assert build_dependency_risk(state) is None
+
+
+def test_dependency_risk_reports_a_clean_manifest_distinctly_from_never_ran():
+    """A2 completed, found no advisories, but the manifest was real — this must
+    not collapse into the same `None` a never-run A2 returns."""
+    state = RunStateModel(
+        run_id=RUN_ID,
+        repo_path="vulnapi",
+        status="completed",
+        cve_report={
+            "findings": [],
+            "critical_queue": [],
+            "total_dependencies": 12,
+            "manifest": "requirements.txt",
+            "ecosystem": "PyPI",
+        },
+    )
+    risk = build_dependency_risk(state)
+    assert risk is not None
+    assert risk["manifest"] == "requirements.txt"
+    assert risk["totalDependencies"] == 12
+    assert risk["advisoryCount"] == 0
+    assert risk["findings"] == []
+
+
+def test_dependency_risk_reports_no_manifest_when_a2_found_none():
+    state = RunStateModel(
+        run_id=RUN_ID,
+        repo_path="vulnapi",
+        status="completed",
+        cve_report={"findings": [], "critical_queue": [], "total_dependencies": 0},
+    )
+    risk = build_dependency_risk(state)
+    assert risk is not None
+    assert risk["manifest"] is None
+    assert risk["totalDependencies"] == 0
+
+
+def test_dependency_risk_camelcases_and_orders_by_classification():
+    state = RunStateModel(
+        run_id=RUN_ID,
+        repo_path="vulnapi",
+        status="completed",
+        cve_report={
+            "findings": [
+                {
+                    "package": "requests",
+                    "cve_id": "CVE-INFO",
+                    "severity": "5.0",
+                    "installed_version": "2.31.0",
+                    "reachable": False,
+                    "reach_path": None,
+                    "classification": "Informational",
+                },
+                {
+                    "package": "urllib3",
+                    "cve_id": "CVE-2023-45803",
+                    "severity": "7.5",
+                    "installed_version": "1.26.5",
+                    "reachable": True,
+                    "reach_path": ["vulnapi/net.py"],
+                    "classification": "Critical",
+                },
+                {
+                    "package": "mystery",
+                    "cve_id": "CVE-UNK",
+                    "severity": "HIGH",
+                    "installed_version": None,
+                    "reachable": None,
+                    "reach_path": None,
+                    "classification": "Unknown",
+                },
+            ],
+            "critical_queue": ["CVE-2023-45803"],
+            "total_dependencies": 3,
+            "manifest": "requirements.txt",
+            "ecosystem": "PyPI",
+        },
+    )
+    risk = build_dependency_risk(state)
+    assert risk is not None
+    # Reachable (Critical) first, then undetermined, then confirmed-inert.
+    assert [f["package"] for f in risk["findings"]] == ["urllib3", "mystery", "requests"]
+    top = risk["findings"][0]
+    assert top["cveId"] == "CVE-2023-45803"
+    assert top["installedVersion"] == "1.26.5"
+    assert top["reachPath"] == ["vulnapi/net.py"]
+    assert top["affectedSymbol"] is None
+    assert risk["reachableCount"] == 1
+    assert risk["informationalCount"] == 1
+    assert risk["unknownCount"] == 1
+    assert risk["advisoryCount"] == 3
+
+
+def test_static_findings_is_none_before_a3_completes():
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="running")
+    assert build_static_findings(state) is None
+
+
+def test_static_findings_reports_a_clean_run_distinctly_from_never_ran():
+    """A3 completed, ranked nothing, but the scanners really ran — this must
+    not collapse into the same `None` a never-run A3 returns."""
+    state = RunStateModel(
+        run_id=RUN_ID,
+        repo_path="vulnapi",
+        status="completed",
+        static_report={
+            "raw_count": 0,
+            "prioritized": [],
+            "baseline_json": {},
+            "scanner_status": {"bandit": "ok_no_findings", "semgrep": "unavailable", "ruff": "ok_no_findings"},
+        },
+    )
+    result = build_static_findings(state)
+    assert result is not None
+    assert result["rawCount"] == 0
+    assert result["findings"] == []
+    assert result["scannerStatus"]["bandit"] == "ok_no_findings"
+    assert result["scannerStatus"]["semgrep"] == "unavailable"
+
+
+def test_static_findings_camelcases_and_ranks_in_backend_order():
+    state = RunStateModel(
+        run_id=RUN_ID,
+        repo_path="vulnapi",
+        status="completed",
+        static_report={
+            "raw_count": 5,
+            "prioritized": [
+                {
+                    "id": "finding-0",
+                    "file": "vulnapi/auth.py",
+                    "line": 12,
+                    "message": "pickle usage",
+                    "tools": ["bandit"],
+                    "severity": 0.9,
+                    "blast_radius_score": 0.62,
+                    "consensus": False,
+                    "criticality": 0.81,
+                    "churn_weight": 0.37,
+                    "severity_measured": True,
+                },
+                {
+                    "id": "finding-1",
+                    "file": "vulnapi/routes.py",
+                    "line": 3,
+                    "message": "unused import",
+                    "tools": ["ruff"],
+                    "severity": 0.4,
+                    "blast_radius_score": 0.18,
+                    "consensus": False,
+                    "criticality": 0.55,
+                    "churn_weight": 0.1,
+                    "severity_measured": False,
+                },
+            ],
+            "baseline_json": {},
+            "scanner_status": {"bandit": "ok", "semgrep": "unavailable", "ruff": "ok"},
+        },
+    )
+    result = build_static_findings(state)
+    assert result is not None
+    assert result["rawCount"] == 5
+    assert result["prioritizedCount"] == 2
+    # Backend order is preserved — never re-ranked in the projection.
+    assert [f["file"] for f in result["findings"]] == ["vulnapi/auth.py", "vulnapi/routes.py"]
+    assert [f["rank"] for f in result["findings"]] == [1, 2]
+    top = result["findings"][0]
+    assert top["severityMeasured"] is True
+    assert top["blastRadiusScore"] == 0.62
+    assert top["criticality"] == 0.81
+    assert top["churnWeight"] == 0.37
+    bottom = result["findings"][1]
+    assert bottom["severityMeasured"] is False
+    assert bottom["tools"] == ["ruff"]
+
+
+def test_security_rescan_is_none_before_a9_completes():
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="running")
+    assert build_security_rescan(state) is None
+
+
+def test_security_rescan_not_measured_when_no_scanner_ran():
+    """`security_score is None` must project to `not_measured`, never `clean`."""
+    state = RunStateModel(
+        run_id=RUN_ID,
+        repo_path="vulnapi",
+        status="completed",
+        security_result={
+            "new_findings": [],
+            "rejected": False,
+            "security_score": None,
+            "scanners_run": [],
+            "reexecution_command": "bandit -f json -q -r vulnapi",
+            "reexecution_timeout_seconds": 60,
+        },
+    )
+    result = build_security_rescan(state)
+    assert result is not None
+    assert result["verdict"] == "not_measured"
+    assert result["securityScore"] is None
+    assert result["scannersRun"] == []
+    assert result["newFindings"] == []
+
+
+def test_security_rescan_clean_run_reports_real_score():
+    state = RunStateModel(
+        run_id=RUN_ID,
+        repo_path="vulnapi",
+        status="completed",
+        security_result={
+            "new_findings": [],
+            "rejected": False,
+            "security_score": 100.0,
+            "scanners_run": ["bandit", "semgrep"],
+            "reexecution_command": "bandit -f json -q -r vulnapi",
+            "reexecution_timeout_seconds": 60,
+        },
+    )
+    result = build_security_rescan(state)
+    assert result is not None
+    assert result["verdict"] == "clean"
+    assert result["rejected"] is False
+    assert result["securityScore"] == 100.0
+    assert result["scannersRun"] == ["bandit", "semgrep"]
+    assert result["retryContext"] is None
+
+
+def test_security_rescan_new_finding_projects_no_severity_field():
+    """A9's findings carry no measured severity — the projection must not
+    invent one by leaking the constant `severity` field through."""
+    state = RunStateModel(
+        run_id=RUN_ID,
+        repo_path="vulnapi",
+        status="completed",
+        security_result={
+            "new_findings": [
+                {
+                    "id": "new-0",
+                    "file": "vulnapi/auth.py",
+                    "line": 42,
+                    "message": "Possible hardcoded password: 'hunter2'",
+                    "tools": ["bandit"],
+                    "severity": 0.7,
+                }
+            ],
+            "rejected": True,
+            "security_score": 75.0,
+            "scanners_run": ["bandit"],
+            "failure_brief": {"security_constraint": "must not introduce hardcoded secrets"},
+            "validation_failure": {"assertion_message": "New security finding: hardcoded password"},
+            "reexecution_command": "bandit -f json -q -r vulnapi",
+            "reexecution_timeout_seconds": 60,
+        },
+    )
+    result = build_security_rescan(state)
+    assert result is not None
+    assert result["verdict"] == "new_findings"
+    assert result["rejected"] is True
+    assert result["securityScore"] == 75.0
+    finding = result["newFindings"][0]
+    assert finding == {
+        "id": "new-0",
+        "file": "vulnapi/auth.py",
+        "line": 42,
+        "message": "Possible hardcoded password: 'hunter2'",
+        "tools": ["bandit"],
+    }
+    assert "severity" not in finding
+    assert result["retryContext"] == {
+        "assertionMessage": "New security finding: hardcoded password",
+        "securityConstraint": "must not introduce hardcoded secrets",
+    }
+
+
+def test_security_rescan_backward_compatible_with_state_missing_scanners_run():
+    """State persisted before `scanners_run` existed must still project cleanly."""
+    state = RunStateModel(
+        run_id=RUN_ID,
+        repo_path="vulnapi",
+        status="completed",
+        security_result={
+            "new_findings": [],
+            "rejected": False,
+            "security_score": 100.0,
+            "reexecution_command": "",
+            "reexecution_timeout_seconds": 150,
+        },
+    )
+    result = build_security_rescan(state)
+    assert result is not None
+    assert result["scannersRun"] == []
+    assert result["verdict"] == "clean"
+
+
+def _mergeable_state(**overrides) -> RunStateModel:
+    base = dict(
+        run_id=RUN_ID,
+        repo_path="vulnapi",
+        status="completed",
+        reproduction={"status": "CONFIRMED"},
+        reproduction_confidence="exact_test",
+        mutation_result={
+            "pytest_passed": True,
+            "target_test_passed": True,
+            "regression_tests_passed": True,
+            "patch_retry_required": False,
+            "correctness_score": 92.0,
+        },
+        security_result={"rejected": False, "security_score": 100.0},
+        pr_decision={
+            "pr_type": "auto_mergeable",
+            "axis_scores": {
+                "correctness": 92.0,
+                "security": 100.0,
+                "fidelity": 100.0,
+                "scope_risk": 90.0,
+            },
+            "pr_url": "https://github.com/acme/vulnapi/pull/DRY_RUN",
+            "description_why": "Token expiry not checked",
+            "description_what": "Adds an expiry comparison in validate_token.",
+            "review_note": None,
+            "phantom_changes_detected": False,
+        },
+        proof_bundle={
+            "issue_id": "issue-1",
+            "steps": [
+                {
+                    "name": "reproduction_before",
+                    "command": "pytest tests/test_auth.py::test_expired",
+                    "base_commit": "abc123",
+                    "patch_commit": "",
+                    "expected_result": "fails",
+                    "timeout_seconds": 60,
+                    "is_targeted": True,
+                }
+            ],
+            "bundle_hash": "deadbeef1234",
+            "reproduction_confidence": "exact_test",
+        },
+    )
+    base.update(overrides)
+    return RunStateModel(**base)
+
+
+def test_mergeability_decision_is_none_before_a10_completes():
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="running")
+    assert build_mergeability_decision(state) is None
+
+
+def test_mergeability_decision_clean_run_all_gates_pass():
+    state = _mergeable_state()
+    result = build_mergeability_decision(state)
+    assert result is not None
+    assert result["prType"] == "auto_mergeable"
+    assert result["trust"] == 0.95
+
+    correctness = next(a for a in result["axes"] if a["name"] == "correctness")
+    assert correctness == {
+        "name": "correctness",
+        "label": "Correctness",
+        "value": 92.0,
+        "measured": True,
+        "lowThreshold": 80.0,
+        "meetsLowThreshold": True,
+    }
+
+    security = next(a for a in result["axes"] if a["name"] == "security")
+    assert security["meetsLowThreshold"] is True
+    assert security["autoMergeThreshold"] == 90.0
+    assert security["meetsAutoMergeThreshold"] is True
+
+    assert len(result["hardGates"]) == 10
+    assert all(g["checked"] and g["passed"] for g in result["hardGates"])
+
+    assert result["routingModifiers"] == {
+        "hardGatesClear": True,
+        "citationReviewNeeded": False,
+        "reproductionConfidence": "exact_test",
+        "securityMeetsAutoMergeThreshold": True,
+    }
+    assert result["phantomChangesDetected"] is False
+    assert result["prUrl"] == "https://github.com/acme/vulnapi/pull/DRY_RUN"
+    assert result["proofBundle"]["bundleHash"] == "deadbeef1234"
+    assert result["proofBundle"]["steps"][0]["command"] == "pytest tests/test_auth.py::test_expired"
+
+
+def test_mergeability_decision_unmeasured_axis_is_not_a_zero():
+    state = _mergeable_state(
+        security_result={},
+        pr_decision={
+            "pr_type": "draft",
+            "axis_scores": {
+                "correctness": 92.0,
+                "security": None,
+                "fidelity": 100.0,
+                "scope_risk": 90.0,
+            },
+            "pr_url": None,
+            "description_why": "",
+            "description_what": "",
+            "review_note": "Not measured: security. Manual verification required before merge.",
+            "phantom_changes_detected": False,
+        },
+    )
+    result = build_mergeability_decision(state)
+    assert result is not None
+
+    security = next(a for a in result["axes"] if a["name"] == "security")
+    assert security["value"] is None
+    assert security["measured"] is False
+    assert security["meetsLowThreshold"] is None
+    assert security["meetsAutoMergeThreshold"] is None
+
+    firing = [g for g in result["hardGates"] if g["checked"] and g["passed"] is False]
+    assert len(firing) == 1
+    assert firing[0]["code"] == "axes_measured"
+    assert "security" in firing[0]["detail"]
+
+    not_reached = [g for g in result["hardGates"] if not g["checked"]]
+    assert len(not_reached) == 1
+    assert not_reached[0]["code"] == "reproduction_confirmed"
+
+    # A hard-blocked run never reaches the routing modifiers.
+    assert result["routingModifiers"] == {
+        "hardGatesClear": False,
+        "citationReviewNeeded": None,
+        "reproductionConfidence": None,
+        "securityMeetsAutoMergeThreshold": None,
+    }
+    assert result["prUrl"] is None
+
+
+def test_mergeability_decision_security_gate_asymmetry_is_visible():
+    """A security score of 85 clears the generic 80 bar but not the stricter
+    90 auto-merge bar — both facts must be visible, not collapsed into one."""
+    state = _mergeable_state(
+        security_result={"rejected": False, "security_score": 85.0},
+        pr_decision={
+            "pr_type": "diff_only",
+            "axis_scores": {
+                "correctness": 92.0,
+                "security": 85.0,
+                "fidelity": 100.0,
+                "scope_risk": 90.0,
+            },
+            "pr_url": None,
+            "description_why": "",
+            "description_what": "",
+            "review_note": "Lower-confidence full-suite reproduction proof. "
+            "Manual review required — not eligible for auto-merge.",
+            "phantom_changes_detected": False,
+        },
+    )
+    result = build_mergeability_decision(state)
+    assert result is not None
+    security = next(a for a in result["axes"] if a["name"] == "security")
+    assert security["meetsLowThreshold"] is True
+    assert security["meetsAutoMergeThreshold"] is False
+    assert result["routingModifiers"]["hardGatesClear"] is True
+    assert result["routingModifiers"]["securityMeetsAutoMergeThreshold"] is False
+
+
+def test_mergeability_decision_phantoms_true_leaks_no_fabricated_identity():
+    """`phantoms` is re-derived as a non-empty placeholder set purely to drive
+    `bool(phantoms)` — the phantom entity names are never persisted, so the
+    projection must not claim to know what they were."""
+    state = _mergeable_state(
+        pr_decision={
+            "pr_type": "draft",
+            "axis_scores": {
+                "correctness": 92.0,
+                "security": 100.0,
+                "fidelity": 50.0,
+                "scope_risk": 90.0,
+            },
+            "pr_url": None,
+            "description_why": "",
+            "description_what": "",
+            "review_note": "Phantom changes detected between PR description and diff. "
+            "Manual verification required before merge.",
+            "phantom_changes_detected": True,
+        },
+    )
+    result = build_mergeability_decision(state)
+    assert result is not None
+    assert result["phantomChangesDetected"] is True
+    firing = [g for g in result["hardGates"] if g["checked"] and g["passed"] is False]
+    assert firing[0]["code"] == "phantoms_detected"
+
+
+def test_reproduction_evidence_is_none_before_a3_5_completes():
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="running")
+    assert build_reproduction_evidence(state) is None
+
+
+def _confirmed_repro(**overrides) -> dict:
+    base = {
+        "status": "CONFIRMED",
+        "reproduced": True,
+        "failing_test": "tests/test_auth.py::test_expired_token_rejected",
+        "exception_type": "AssertionError",
+        "exception_message": "assert True is False",
+        "failing_file": "vulnapi/tests/test_auth.py",
+        "failing_line": 27,
+        "traceback": "E   AssertionError: assert True is False",
+        "stack_trace": "E   AssertionError: assert True is False",
+        "confidence": 0.9,
+        "force_draft_pr": False,
+        "report_path": "/tmp/pytest_x.json",
+        "infra_detail": None,
+        "reexecution_command": "python -m pytest tests/test_auth.py::test_expired_token_rejected -v --tb=long",
+        "reexecution_is_targeted": True,
+        "reexecution_timeout_seconds": 120,
+        "pre_existing_failures": [
+            "tests/test_auth.py::test_expired_token_rejected",
+            "tests/test_config.py::test_secret_from_env",
+        ],
+        "command": "python -m pytest --tb=long --json-report -v",
+        "exit_code": 1,
+        "timed_out": False,
+        "stdout": "collected 12 items",
+        "stderr": "",
+        "duration_seconds": 0.031,
+        "started_at": "2026-08-13T17:30:37.636850",
+        "finished_at": "2026-08-13T17:30:37.976929",
+        "tests_collected": 12,
+        "tests_passed": 8,
+        "tests_failed": 4,
+        "evidence_source": "pytest_report",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_reproduction_evidence_camelcases_a_confirmed_result():
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="completed", reproduction=_confirmed_repro())
+    evidence = build_reproduction_evidence(state)
+    assert evidence is not None
+    assert evidence["status"] == "CONFIRMED"
+    assert evidence["uiStatus"] == "reproduced"
+    assert evidence["confidence"] == 0.9
+    assert evidence["failingTest"] == "tests/test_auth.py::test_expired_token_rejected"
+    assert evidence["failingFile"] == "vulnapi/tests/test_auth.py"
+    assert evidence["errorSignature"] == "AssertionError: assert True is False"
+    assert evidence["command"] == "python -m pytest --tb=long --json-report -v"
+    assert evidence["exitCode"] == 1
+    assert evidence["testsCollected"] == 12
+    assert evidence["testsPassed"] == 8
+    assert evidence["testsFailed"] == 4
+    assert evidence["evidenceSource"] == "pytest_report"
+    # The target itself must not appear twice — once as `failingTest`, once
+    # inside `baselineFailures`.
+    assert evidence["baselineFailures"] == ["tests/test_config.py::test_secret_from_env"]
+
+
+def test_reproduction_evidence_maps_all_four_real_states():
+    cases = [
+        ("CONFIRMED", "reproduced"),
+        ("UNCONFIRMED", "not_reproduced"),
+        ("NO_TESTS", "unavailable"),
+        ("INFRA_ERROR", "error"),
+    ]
+    for status, expected_ui_status in cases:
+        state = RunStateModel(
+            run_id=RUN_ID, repo_path="vulnapi", status="completed",
+            reproduction=_confirmed_repro(status=status),
+        )
+        evidence = build_reproduction_evidence(state)
+        assert evidence is not None
+        assert evidence["uiStatus"] == expected_ui_status, status
+
+
+def test_reproduction_stages_confirmed_are_all_done():
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="completed", reproduction=_confirmed_repro())
+    stages = build_reproduction_evidence(state)["stages"]
+    assert [s["id"] for s in stages] == [
+        "suite_executed", "tests_collected", "tests_run", "failure_observed", "evidence_captured",
+    ]
+    assert all(s["status"] == "done" for s in stages)
+    assert "AssertionError" in stages[3]["detail"]
+
+
+def test_reproduction_stages_unconfirmed_marks_failure_not_triggered():
+    repro = _confirmed_repro(
+        status="UNCONFIRMED", confidence=0.0, failing_test=None, exception_type=None,
+        exception_message=None, failing_file=None, failing_line=None, traceback=None,
+        stack_trace=None, evidence_source=None, tests_failed=0, tests_passed=12,
+    )
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="completed", reproduction=repro)
+    stages = build_reproduction_evidence(state)["stages"]
+    by_id = {s["id"]: s for s in stages}
+    assert by_id["suite_executed"]["status"] == "done"
+    assert by_id["tests_collected"]["status"] == "done"
+    assert by_id["tests_run"]["status"] == "done"
+    assert by_id["failure_observed"]["status"] == "not_triggered"
+    assert by_id["evidence_captured"]["status"] == "skipped"
+
+
+def test_reproduction_stages_no_tests_skips_downstream():
+    repro = _confirmed_repro(
+        status="NO_TESTS", confidence=0.0, failing_test=None, exception_type=None,
+        exception_message=None, failing_file=None, failing_line=None, traceback=None,
+        stack_trace=None, evidence_source=None, exit_code=5,
+        tests_collected=0, tests_passed=None, tests_failed=None,
+        infra_detail="No tests collected by pytest",
+    )
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="completed", reproduction=repro)
+    stages = build_reproduction_evidence(state)["stages"]
+    by_id = {s["id"]: s for s in stages}
+    assert by_id["suite_executed"]["status"] == "done"
+    assert by_id["tests_collected"]["status"] == "failed"
+    assert by_id["tests_run"]["status"] == "skipped"
+    assert by_id["failure_observed"]["status"] == "skipped"
+    assert by_id["evidence_captured"]["status"] == "skipped"
+
+
+def test_reproduction_stages_timeout_fails_at_the_first_stage():
+    repro = _confirmed_repro(
+        status="INFRA_ERROR", confidence=0.0, failing_test=None, exception_type=None,
+        exception_message=None, failing_file=None, failing_line=None, traceback=None,
+        stack_trace=None, evidence_source=None, exit_code=-1, timed_out=True,
+        tests_collected=None, tests_passed=None, tests_failed=None,
+        infra_detail="timeout",
+    )
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="completed", reproduction=repro)
+    evidence = build_reproduction_evidence(state)
+    assert evidence["timedOut"] is True
+    stages = evidence["stages"]
+    by_id = {s["id"]: s for s in stages}
+    assert by_id["suite_executed"]["status"] == "failed"
+    assert "time limit" in by_id["suite_executed"]["detail"]
+    assert by_id["tests_collected"]["status"] == "skipped"
+    assert by_id["tests_run"]["status"] == "skipped"
+    assert by_id["failure_observed"]["status"] == "skipped"
+    assert by_id["evidence_captured"]["status"] == "skipped"
+
+
+def test_reproduction_evidence_no_signature_without_an_exception():
+    repro = _confirmed_repro(status="UNCONFIRMED", exception_type=None, exception_message=None)
+    state = RunStateModel(run_id=RUN_ID, repo_path="vulnapi", status="completed", reproduction=repro)
+    evidence = build_reproduction_evidence(state)
+    assert evidence["errorSignature"] is None
+
+
+def test_semantic_graph_defaults_an_unrecognised_role_to_internal_util_count():
+    """A SIG payload with no role key at all (defensive, should not happen in
+    practice) must not crash the projection or silently drop the file."""
+    state = _sig_state(
+        {
+            "vulnapi/mystery.py": {
+                "imports": [],
+                "imported_by": [],
+                "churn_weight": 0.0,
+                "criticality": 0.4,
+            },
+        }
+    )
+    graph = build_semantic_graph(state)
+    assert graph is not None
+    assert graph["files"][0]["role"] == "internal-util"
+    assert graph["roleCounts"]["internal-util"] == 1

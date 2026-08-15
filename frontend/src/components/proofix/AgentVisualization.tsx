@@ -58,7 +58,7 @@ export function AgentVisualization({ entry }: { entry: LiveAgent }) {
     case "planner":
       return <PlannerViz data={payload.data} progress={progress} done={done} />;
     case "patch":
-      return <PatchViz data={payload.data} progress={progress} done={done} />;
+      return <PatchViz data={payload.data} />;
     case "mutation":
       return (
         <MutationViz
@@ -1160,110 +1160,47 @@ function PlannerViz({
 }
 
 /* ============================================================
- * A7 — Patch Generator (Cursor-style)
- * ============================================================ */
-function PatchViz({
-  data,
-  progress,
-  done,
-}: {
-  data: PatchPayload;
-  progress: number;
-  done: boolean;
-}) {
-  const thoughtsEnd = 0.35;
-  const thoughtsShown = Math.ceil(Math.min(1, progress / thoughtsEnd) * data.thoughts.length);
-  const editorOpen = progress >= thoughtsEnd;
-
-  const generated = data.generated;
-  const [typed, setTyped] = useState("");
-  useEffect(() => {
-    if (!editorOpen) {
-      setTyped("");
-      return;
-    }
-    let i = 0;
-    const id = setInterval(() => {
-      i++;
-      setTyped(generated.slice(0, i));
-      if (i >= generated.length) clearInterval(id);
-    }, 24);
-    return () => clearInterval(id);
-  }, [editorOpen, generated]);
-
-  const badgeProg = Math.max(0, (progress - 0.75) / 0.25);
-  const badgesShown = Math.ceil(badgeProg * data.badges.length);
+ * A7 — Patch Generator
+ * ============================================================
+ * The real diff and its full per-file board live in `PatchPanel`
+ * (`Workspace.tsx`, backed by `GET /runs/{id}/patch`) — this compact card
+ * shows only generation provenance A7 itself recorded, with no animation:
+ * the patch is a persisted artifact by the time this renders, not something
+ * being typed live. Nothing here is invented — a `null` field is omitted
+ * rather than guessed.
+ */
+function PatchViz({ data }: { data: PatchPayload }) {
+  if (data.files.length === 0) return null;
 
   return (
     <Frame label="Patch Generator">
-      {!editorOpen && (
-        <ul className="space-y-1 rounded-md border border-border bg-surface-muted/40 p-2 font-mono text-[11px]">
-          {data.thoughts.slice(0, thoughtsShown).map((t, i) => (
-            <li
-              key={t}
-              className="animate-line-in flex items-center gap-1.5 text-ink"
-              style={{ animationDelay: `${i * 60}ms` }}
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-status-running animate-soft-pulse" />
-              {t}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {editorOpen && (
-        <div className="animate-line-in grid grid-cols-2 gap-2">
-          <div className="rounded-md border border-border bg-surface-muted/60">
-            <div className="border-b border-border px-2 py-1 text-[9px] font-medium uppercase tracking-wider text-ink-soft">
-              Original
-            </div>
-            <pre className="p-2 font-mono text-[10px] leading-relaxed">
-              {data.original.map((l, i) => (
-                <div
-                  key={i}
-                  className={
-                    l.op === "del"
-                      ? "rounded bg-status-failed-bg/60 px-1 text-status-failed line-through opacity-70 transition-opacity duration-500"
-                      : "px-1 text-ink-soft"
-                  }
-                >
-                  {l.t}
-                </div>
-              ))}
-            </pre>
-          </div>
-          <div className="rounded-md border border-status-completed/30 bg-status-completed-bg/30">
-            <div className="border-b border-status-completed/20 px-2 py-1 text-[9px] font-medium uppercase tracking-wider text-status-completed">
-              Generated Patch
-            </div>
-            <pre className="whitespace-pre p-2 font-mono text-[10px] leading-relaxed text-ink">
-              {typed}
-              {typed.length < generated.length && <span className="animate-soft-pulse">▌</span>}
-            </pre>
-          </div>
-        </div>
-      )}
-
-      {(badgesShown > 0 || done) && (
-        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
-          {data.badges.map((t, i) => {
-            const on = i < badgesShown || done;
-            return (
-              <span
-                key={t}
-                className={`rounded-md px-1.5 py-0.5 font-mono transition-all duration-[250ms] ${
-                  on
-                    ? "animate-line-in bg-status-completed-bg text-status-completed"
-                    : "bg-surface-muted text-ink-soft opacity-40"
-                }`}
-                style={{ animationDelay: `${i * 100}ms` }}
-              >
-                ✓ {t}
+      <ul className="space-y-1.5">
+        {data.files.map((f) => (
+          <li
+            key={f.file}
+            className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-surface-muted/40 px-2 py-1.5 font-mono text-[10px]"
+          >
+            <span className="text-ink">{f.file}</span>
+            {f.isTarget && (
+              <span className="rounded bg-primary/15 px-1 text-[9px] font-semibold uppercase tracking-wider text-primary">
+                target
               </span>
-            );
-          })}
-        </div>
-      )}
+            )}
+            {f.targetFunction && <span className="text-ink-soft">{f.targetFunction}()</span>}
+            <span className="ml-auto flex items-center gap-1.5 text-ink-soft">
+              {f.generationSource === "stub" ? (
+                <span className="text-status-retry">stub mode</span>
+              ) : f.generationSource === "llm" ? (
+                <span>LLM</span>
+              ) : null}
+              {f.method === "ast_validated_write" && (
+                <span className="text-status-completed">✓ AST validated</span>
+              )}
+              {!!f.retryNumber && <span>retry {f.retryNumber}</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
     </Frame>
   );
 }
@@ -1288,16 +1225,25 @@ function MutationViz({
   const scorePct = scored ? Math.round(data.score! * 100) : 0;
   const animatedScore = useCountUp(scorePct, scored, 400);
 
-  const checks: { label: string; ok: boolean; detail: string }[] = [
+  // `survived` is `null` when A8 never scored mutation — distinct from
+  // `false`, which means it scored and nothing survived. Rendering "none
+  // survived" for an unmeasured run claims a check that never happened.
+  const mutationMeasured = data.survived !== null;
+
+  const checks: { label: string; state: "measured" | "unmeasured" | "failed"; detail: string }[] = [
     {
       label: "Test suite",
-      ok: data.pytestPassed,
+      state: data.pytestPassed ? "measured" : "failed",
       detail: data.pytestPassed ? "passed" : "did not pass",
     },
     {
       label: "Surviving mutants",
-      ok: !data.survived,
-      detail: data.survived ? "one or more survived" : "none survived",
+      state: !mutationMeasured ? "unmeasured" : data.survived ? "failed" : "measured",
+      detail: !mutationMeasured
+        ? "not measured"
+        : data.survived
+          ? `${data.survivedMutants ?? "one or more"} survived`
+          : "none survived",
     },
   ];
 
@@ -1308,29 +1254,37 @@ function MutationViz({
           <li
             key={c.label}
             className={`animate-line-in flex items-center justify-between rounded px-2 py-1 ${
-              c.ok ? "opacity-70" : "bg-status-failed-bg/60 ring-1 ring-status-failed/30"
+              c.state === "failed"
+                ? "bg-status-failed-bg/60 ring-1 ring-status-failed/30"
+                : "opacity-70"
             }`}
           >
             <span className="flex items-center gap-2 truncate">
               <span
                 className={`h-1.5 w-1.5 rounded-full ${
-                  c.ok ? "bg-status-completed" : "bg-status-failed"
+                  c.state === "measured"
+                    ? "bg-status-completed"
+                    : c.state === "failed"
+                      ? "bg-status-failed"
+                      : "bg-ink-soft"
                 }`}
               />
               <span className="text-ink">{c.label}</span>
             </span>
             <span
               className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                c.ok
+                c.state === "measured"
                   ? "bg-status-completed-bg text-status-completed"
-                  : "bg-status-failed-bg text-status-failed"
+                  : c.state === "failed"
+                    ? "bg-status-failed-bg text-status-failed"
+                    : "bg-surface-muted text-ink-soft"
               }`}
             >
-              {c.ok ? (
+              {c.state === "measured" ? (
                 <Check className="h-2.5 w-2.5" strokeWidth={3} />
-              ) : (
+              ) : c.state === "failed" ? (
                 <Skull className="h-2.5 w-2.5" />
-              )}
+              ) : null}
               {c.detail}
             </span>
           </li>
@@ -1406,9 +1360,14 @@ function MergeViz({
   const v3 = useCountUp(metrics[3]?.value ?? 0, progress > 0.54);
   const animated = [v0, v1, v2, v3];
 
-  const [w0, w1, w2] = data.weights;
-  const composite = Math.round(v0 * w0 + v1 * w1 + v2 * w2);
-  const compositeAnim = useCountUp(composite, progress > 0.72, 600);
+  // The gauge renders the backend's own composite (`_trust_score`, the same
+  // number shown as "Trust Score" elsewhere on the page) rather than
+  // recomputing one from `metrics` here — a second, disagreeing trust
+  // formula in the frontend is exactly the contradiction this product exists
+  // to avoid.
+  const weightedMeasured = data.compositeScore !== null;
+  const composite = data.compositeScore ?? 0;
+  const compositeAnim = useCountUp(composite, weightedMeasured && progress > 0.72, 600);
 
   const allDone = progress >= 0.85;
 
@@ -1418,9 +1377,10 @@ function MergeViz({
   const stroke = 8;
   const r = (size - stroke) / 2;
   const C = 2 * Math.PI * r;
-  const gaugeOffset = C - (compositeAnim / 100) * C;
-  const gaugeColor =
-    compositeAnim >= 85
+  const gaugeOffset = weightedMeasured ? C - (compositeAnim / 100) * C : C;
+  const gaugeColor = !weightedMeasured
+    ? "stroke-ink-soft"
+    : compositeAnim >= 85
       ? "stroke-status-completed"
       : compositeAnim >= 70
         ? "stroke-status-retry"
@@ -1433,8 +1393,12 @@ function MergeViz({
           {metrics.map((m, i) => {
             const v = animated[i] ?? 0;
             const reveal = progress > 0.05 + i * 0.16;
-            const tone = m.ok ? "text-status-completed" : "text-status-retry";
-            const display = m.scopeLabel && v >= m.value - 1 ? m.scopeLabel : `${v}%`;
+            const tone = !m.measured ? "text-ink-soft" : m.ok ? "text-status-completed" : "text-status-retry";
+            const display = !m.measured
+              ? "Not measured"
+              : m.scopeLabel && m.value !== null && v >= m.value - 1
+                ? m.scopeLabel
+                : `${v}%`;
             return (
               <div
                 key={m.label}
@@ -1474,8 +1438,14 @@ function MergeViz({
               />
             </svg>
             <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-              <span className="font-mono text-[18px] font-semibold text-ink">{compositeAnim}</span>
-              <span className="text-[8px] uppercase tracking-wider text-ink-soft">Trust</span>
+              <span
+                className={`font-mono font-semibold text-ink ${weightedMeasured ? "text-[18px]" : "text-[11px]"}`}
+              >
+                {weightedMeasured ? compositeAnim : "—"}
+              </span>
+              <span className="text-[8px] uppercase tracking-wider text-ink-soft">
+                {weightedMeasured ? "Trust" : "Not measured"}
+              </span>
             </div>
           </div>
           <span className="mt-1 text-[9px] uppercase tracking-wider text-ink-soft">Composite</span>

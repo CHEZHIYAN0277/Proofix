@@ -4,7 +4,13 @@ from typing import NamedTuple
 
 from backend.agents.base import AgentBase
 from backend.models.findings import Finding, StaticAnalysisReport
-from backend.services.repo_layout import get_scan_targets, iter_python_files, resolve_source_roots
+from backend.services.repo_layout import (
+    bandit_exclude_arg,
+    get_scan_targets,
+    iter_python_files,
+    resolve_source_roots,
+    semgrep_exclude_args,
+)
 from backend.services.sig_helpers import get_file_criticality, get_sig_or_defaults
 from backend.services.subprocess_runner import parse_json_safe, run_command
 from backend.state.schema import RunStateModel
@@ -69,8 +75,13 @@ class A3StaticAnalysisAgent(AgentBase):
         baseline["ruff"] = ruff.findings
 
         for tool, outcome in (("bandit", bandit), ("semgrep", semgrep), ("ruff", ruff)):
+            # Only bandit derives severity from the tool's own issue category;
+            # semgrep/ruff assign a fixed constant. A stub-mode fallback finding
+            # carries the tool's name but is not a real bandit measurement
+            # either, so `outcome.executed` gates this, not the tool name alone.
+            measured = tool == "bandit" and outcome.executed
             for f in outcome.findings:
-                raw_findings.append({**f, "tool": tool})
+                raw_findings.append({**f, "tool": tool, "severity_measured": measured})
 
         clustered = self._cluster_findings(raw_findings)
         prioritized = self._rank_findings(clustered, sig, default_crit)[:8]
@@ -79,6 +90,7 @@ class A3StaticAnalysisAgent(AgentBase):
             raw_count=len(raw_findings),
             prioritized=prioritized,
             baseline_json=baseline,
+            scanner_status=scanner_status,
         )
         report_dict = report.model_dump(mode="json")
         await self.store.set_json(state.run_id, "static", report_dict)
@@ -118,7 +130,7 @@ class A3StaticAnalysisAgent(AgentBase):
     async def _run_bandit(self, repo: Path, scan_targets: list[Path]) -> ScanOutcome:
         if not scan_targets:
             return ScanOutcome.failed("no scan targets resolved")
-        cmd = ["bandit", "-f", "json", "-q"]
+        cmd = ["bandit", "-f", "json", "-q", "-x", bandit_exclude_arg()]
         for target in scan_targets:
             cmd.extend(["-r", str(target)])
         code, stdout, stderr = await run_command(cmd, cwd=repo, timeout=60)
@@ -173,7 +185,7 @@ class A3StaticAnalysisAgent(AgentBase):
     async def _run_semgrep(self, repo: Path, scan_targets: list[Path]) -> ScanOutcome:
         if not scan_targets:
             return ScanOutcome.failed("no scan targets resolved")
-        cmd = ["semgrep", "--config=auto", "--json"]
+        cmd = ["semgrep", "--config=auto", "--json", *semgrep_exclude_args()]
         cmd.extend(str(t) for t in scan_targets)
         code, stdout, stderr = await run_command(cmd, cwd=repo, timeout=90)
         if code == -1:
@@ -243,18 +255,27 @@ class A3StaticAnalysisAgent(AgentBase):
             file = f.get("file", "")
             line = f.get("line", 0)
             key = f"{file}:{line // 5 * 5}"
+            tool = f.get("tool", "unknown")
+            severity = f.get("severity", 0.5)
+            measured = bool(f.get("severity_measured", False))
             if key not in clusters:
                 clusters[key] = {
                     "file": file,
                     "line": line,
                     "message": f.get("message", ""),
                     "tools": [],
-                    "severity": f.get("severity", 0.5),
+                    "severity": severity,
+                    # Whether the finding currently holding `severity` (the
+                    # cluster's max) came from a real measurement. Tracked
+                    # alongside the value itself so `_rank_findings` can say
+                    # whether the number on screen was measured or assigned.
+                    "severity_measured": measured,
                 }
-            tool = f.get("tool", "unknown")
             if tool not in clusters[key]["tools"]:
                 clusters[key]["tools"].append(tool)
-            clusters[key]["severity"] = max(clusters[key]["severity"], f.get("severity", 0.5))
+            if severity > clusters[key]["severity"]:
+                clusters[key]["severity"] = severity
+                clusters[key]["severity_measured"] = measured
         for c in clusters.values():
             c["consensus"] = len(c["tools"]) >= 2
         return list(clusters.values())
@@ -277,6 +298,9 @@ class A3StaticAnalysisAgent(AgentBase):
                     severity=c["severity"],
                     blast_radius_score=blast,
                     consensus=c["consensus"],
+                    criticality=crit,
+                    churn_weight=churn,
+                    severity_measured=bool(c.get("severity_measured", False)),
                 )
             )
         ranked.sort(key=lambda x: x.blast_radius_score, reverse=True)

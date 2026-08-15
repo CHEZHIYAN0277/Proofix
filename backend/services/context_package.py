@@ -403,9 +403,27 @@ def build_package(inputs: PackageInputs) -> ContextPackage:
     # it is smaller than the baseline, or it masked a secret the baseline would
     # have sent in clear. Otherwise A7 keeps its existing path unchanged and the
     # layer reports a reduction of zero rather than a regression.
-    package.prefer_focused = bool(focused) and (
-        len(focused) <= len(baseline_focus) or bool(redactions)
-    )
+    smaller_than_baseline = len(focused) <= len(baseline_focus)
+    masked_a_leak = bool(redactions)
+    package.prefer_focused = bool(focused) and (smaller_than_baseline or masked_a_leak)
+
+    if not focused:
+        metrics.adoption_reason = "no context could be extracted for this file"
+    elif smaller_than_baseline and masked_a_leak:
+        metrics.adoption_reason = (
+            "smaller than A7's own baseline extraction and masked a secret the baseline "
+            "would have sent unredacted"
+        )
+    elif smaller_than_baseline:
+        metrics.adoption_reason = "smaller than A7's own baseline extraction"
+    elif masked_a_leak:
+        metrics.adoption_reason = (
+            "masked a secret A7's own baseline extraction would have sent unredacted"
+        )
+    else:
+        metrics.adoption_reason = (
+            "no smaller than A7's own baseline extraction, and found nothing to mask"
+        )
 
     metrics.original_tokens = estimate_tokens(baseline_focus)
     metrics.reduced_tokens = (

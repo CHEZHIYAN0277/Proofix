@@ -118,6 +118,11 @@ class ContextMetrics(BaseModel):
     privacy_redactions: int = 0
     budget_chars: int = 0
     degraded: bool = False
+    #: Why `ContextPackage.prefer_focused` came out the way it did, in the
+    #: adoption rule's own terms — derived from the real sizes and redaction
+    #: count `build_package` already computed at the point it decides adoption,
+    #: never invented after the fact. Empty on a run predating this field.
+    adoption_reason: str = ""
 
 
 class ContextPackage(BaseModel):

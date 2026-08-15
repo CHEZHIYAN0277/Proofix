@@ -46,6 +46,20 @@ async def test_successful_run_announces_start_and_completion(store):
     assert completed.reason is None
 
 
+async def test_completed_run_current_agent_is_not_stale(store):
+    # B-B20: `current_agent` used to freeze at "fan-in" (set by
+    # `layer1_fan_in`) because no node after it ever updated the pointer, so a
+    # completed run reported the wrong "current agent" forever.
+    redis_store, settings = store
+    runner = PipelineRunner(redis_store, settings)
+    run_id = str(uuid.uuid4())
+    await redis_store.init_run(run_id, VULNAPI_PATH)
+
+    result = await runner.execute(run_id)
+
+    assert result.current_agent == "A10"
+
+
 async def test_completion_reports_the_routing_decision(store):
     redis_store, settings = store
     runner = PipelineRunner(redis_store, settings)

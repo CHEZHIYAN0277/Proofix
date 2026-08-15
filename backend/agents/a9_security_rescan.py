@@ -25,7 +25,12 @@ from backend.models.findings import Finding
 from backend.models.validation import SecurityRescanResult, ValidationFailure
 from backend.services.path_resolution import normalize_path_token
 from backend.services.retry_brief_builder import build_retry_brief
-from backend.services.repo_layout import get_scan_targets, resolve_source_roots
+from backend.services.repo_layout import (
+    bandit_exclude_arg,
+    get_scan_targets,
+    resolve_source_roots,
+    semgrep_exclude_args,
+)
 from backend.services.security_rescan_commands import build_security_rescan_command
 from backend.services.subprocess_runner import parse_json_safe, run_command
 from backend.state.schema import RunStateModel
@@ -167,6 +172,7 @@ class A9SecurityRescanAgent(AgentBase):
             validation_failure=validation_failure,
             reexecution_command=reexecution_command,
             reexecution_timeout_seconds=reexecution_timeout,
+            scanners_run=scanners_run,
         )
         result_dict = result.model_dump(mode="json")
         if validation_failure:
@@ -219,7 +225,7 @@ class A9SecurityRescanAgent(AgentBase):
         """
         if not scan_targets:
             return False, []
-        cmd = ["bandit", "-f", "json", "-q"]
+        cmd = ["bandit", "-f", "json", "-q", "-x", bandit_exclude_arg()]
         for target in scan_targets:
             cmd.extend(["-r", str(target)])
         code, stdout, _ = await run_command(cmd, cwd=repo, timeout=60)
@@ -244,7 +250,7 @@ class A9SecurityRescanAgent(AgentBase):
     async def _run_semgrep(self, repo: Path, scan_targets: list[Path]) -> tuple[bool, list[dict]]:
         if not scan_targets:
             return False, []
-        cmd = ["semgrep", "--config=auto", "--json"]
+        cmd = ["semgrep", "--config=auto", "--json", *semgrep_exclude_args()]
         cmd.extend(str(t) for t in scan_targets)
         code, stdout, _ = await run_command(cmd, cwd=repo, timeout=90)
         if code == -1:

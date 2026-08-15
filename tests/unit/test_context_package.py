@@ -205,6 +205,31 @@ def test_adopted_when_it_masks_a_secret_even_if_larger(tmp_path):
     assert "sk-live-abcdefghijklmnopqrst" not in package.focused_context
 
 
+def test_adoption_reason_matches_the_real_decision_smaller_than_baseline(repo):
+    """The reason must agree with `prefer_focused`, not narrate independently."""
+    baseline = extract_relevant_code(MODULE, "target")
+    package = make(repo)
+    if package.prefer_focused and len(package.focused_context) <= len(baseline) and not package.redactions:
+        assert package.metrics.adoption_reason == "smaller than A7's own baseline extraction"
+
+
+def test_adoption_reason_when_a_secret_was_masked(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "m.py").write_text(
+        'API_KEY = "sk-live-abcdefghijklmnopqrst"\n\ndef target():\n    return API_KEY\n'
+    )
+    package = build_package(
+        PackageInputs(repo_path=tmp_path, target_file="pkg/m.py", target_function="target")
+    )
+    assert package.prefer_focused is True
+    assert "masked a secret" in package.metrics.adoption_reason
+
+
+def test_adoption_reason_is_never_empty_when_a_decision_was_made(repo):
+    package = make(repo)
+    assert package.metrics.adoption_reason != ""
+
+
 def test_tiny_budget_never_truncates_the_target(repo):
     """The core is a floor: a half-extracted function is worse than the baseline."""
     package = make(repo, budget_chars=20, respect_baseline_budget=False)

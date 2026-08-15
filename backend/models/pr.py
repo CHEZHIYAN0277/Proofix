@@ -42,3 +42,22 @@ class PRRoutingDecision(BaseModel):
     description_what: str = ""
     review_note: str | None = None
     phantom_changes_detected: bool = False
+
+
+class GateCheck(BaseModel):
+    """One hard gate from `a10_routing.hard_draft_reason`'s short-circuit chain.
+
+    Read-only and explanatory — `a10_routing.gate_checks` re-evaluates the same
+    conditions in the same order for display, but the routing decision itself
+    is still made exactly once, by `hard_draft_reason`. `checked=False` means
+    an earlier gate already fired and this one was never reached, which is a
+    different fact from "passed" and must not be drawn as one.
+    """
+
+    code: str
+    label: str
+    checked: bool
+    #: `None` when `checked` is `False` — a gate that was never reached has
+    #: neither passed nor failed.
+    passed: bool | None = None
+    detail: str | None = None

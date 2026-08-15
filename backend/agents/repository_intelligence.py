@@ -226,6 +226,11 @@ class RepositoryIntelligenceAgent(AgentBase):
         payload = index.metrics.model_dump()
         payload["cache"] = cache.metrics.to_dict()
         payload["repository_id"] = index.repository_id
+        # Known the moment the index runs (`discover_source_roots` in `run()`),
+        # but never published anywhere a client can read it — the Repository DNA
+        # panel needs it and there is no reason to add an endpoint for one field
+        # already sitting on the object this event already serializes.
+        payload["source_roots"] = list(index.source_roots)
         return payload
 
 

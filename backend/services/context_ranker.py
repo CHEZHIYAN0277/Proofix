@@ -19,6 +19,7 @@ from pathlib import PurePosixPath
 from backend.models.context import RankedContextFile
 from backend.models.sig import SemanticIntentGraph
 from backend.services.path_resolution import normalize_path_token
+from backend.services.repo_layout import is_vendor_path
 
 RANKING_VERSION = "v1"
 
@@ -197,6 +198,14 @@ def rank_files(inputs: RankingInputs) -> list[RankedContextFile]:
             if matched:
                 candidates.add(matched)
     candidates.discard("")
+
+    # Belt-and-suspenders: upstream (blast origin resolution, the SIG itself)
+    # already excludes vendor/VCS/cache/build directories, but this is the
+    # one place every candidate source converges before a file can enter the
+    # repair context. A candidate reaching here from `.venv`, `node_modules`,
+    # or `site-packages` — however it got in — must never be ranked or
+    # extracted as if it were the repository's own code.
+    candidates = {path for path in candidates if not is_vendor_path(path)}
 
     if not candidates:
         return []

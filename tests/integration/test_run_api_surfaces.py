@@ -169,6 +169,960 @@ async def test_stage_status_reflects_agent_events(client):
     assert a1["message"] == "SIG built"
 
 
+# -- A1: semantic graph endpoint --------------------------------------------
+
+
+async def _seed_sig(store: RedisStore, files: dict) -> None:
+    state = await store.load_state(RUN_ID)
+    assert state is not None
+    state.sig = {
+        "repo_path": "/tmp/clones/vulnapi",
+        "source_roots": ["vulnapi"],
+        "files": files,
+        "edges": [["vulnapi/routes.py", "vulnapi/auth.py"]],
+        "generated_at": "2026-08-13T00:00:00",
+    }
+    await store.save_state(state)
+
+
+async def test_semantic_graph_endpoint_returns_the_projected_sig(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_sig(
+        store,
+        {
+            "vulnapi/auth.py": {
+                "role": "auth-boundary",
+                "imports": [],
+                "imported_by": ["vulnapi/routes.py"],
+                "churn_weight": 0.3,
+                "criticality": 0.9,
+            },
+            "vulnapi/routes.py": {
+                "role": "public-api",
+                "imports": ["vulnapi/auth.py"],
+                "imported_by": [],
+                "churn_weight": 0.5,
+                "criticality": 0.7,
+            },
+        },
+    )
+
+    response = await http.get(f"/api/runs/{RUN_ID}/semantic-graph")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["totalFiles"] == 2
+    assert body["roleCounts"]["auth-boundary"] == 1
+    assert body["roleCounts"]["public-api"] == 1
+    assert body["roleCounts"]["data-access"] == 0
+    # Highest criticality first.
+    assert body["files"][0]["path"] == "vulnapi/auth.py"
+    assert body["files"][0]["importedBy"] == ["vulnapi/routes.py"]
+    assert body["edges"] == [["vulnapi/routes.py", "vulnapi/auth.py"]]
+    assert body["sourceRoots"] == ["vulnapi"]
+
+
+async def test_semantic_graph_endpoint_404s_before_a1_completes(client):
+    http, store = client
+    await _seed_run(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/semantic-graph")
+    assert response.status_code == 404
+    assert "semantic graph" in response.json()["detail"].lower()
+
+
+async def test_semantic_graph_endpoint_404s_for_an_unknown_run(client):
+    http, _store = client
+    response = await http.get(f"/api/runs/{MISSING_RUN_ID}/semantic-graph")
+    assert response.status_code == 404
+
+
+# -- A2: dependency risk endpoint --------------------------------------------
+
+
+async def _seed_cve(store: RedisStore, **fields) -> None:
+    state = await store.load_state(RUN_ID)
+    assert state is not None
+    state.cve_report = {
+        "findings": [],
+        "critical_queue": [],
+        "total_dependencies": 0,
+        "manifest": None,
+        "ecosystem": None,
+        **fields,
+    }
+    await store.save_state(state)
+
+
+async def test_dependency_risk_endpoint_returns_the_projected_report(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_cve(
+        store,
+        findings=[
+            {
+                "package": "urllib3",
+                "cve_id": "CVE-2023-45803",
+                "severity": "7.5",
+                "installed_version": "1.26.5",
+                "reachable": True,
+                "reach_path": ["vulnapi/net.py"],
+                "classification": "Critical",
+            }
+        ],
+        critical_queue=["CVE-2023-45803"],
+        total_dependencies=2,
+        manifest="requirements.txt",
+        ecosystem="PyPI",
+    )
+
+    response = await http.get(f"/api/runs/{RUN_ID}/dependency-risk")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["totalDependencies"] == 2
+    assert body["advisoryCount"] == 1
+    assert body["reachableCount"] == 1
+    assert body["findings"][0]["package"] == "urllib3"
+    assert body["findings"][0]["reachPath"] == ["vulnapi/net.py"]
+    assert body["manifest"] == "requirements.txt"
+
+
+async def test_dependency_risk_endpoint_200s_with_zero_advisories_when_a2_ran_clean(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_cve(store, total_dependencies=5, manifest="requirements.txt", ecosystem="PyPI")
+
+    response = await http.get(f"/api/runs/{RUN_ID}/dependency-risk")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["advisoryCount"] == 0
+    assert body["totalDependencies"] == 5
+    assert body["findings"] == []
+
+
+async def test_dependency_risk_endpoint_404s_before_a2_completes(client):
+    http, store = client
+    await _seed_run(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/dependency-risk")
+    assert response.status_code == 404
+    assert "dependency analysis" in response.json()["detail"].lower()
+
+
+async def test_dependency_risk_endpoint_404s_for_an_unknown_run(client):
+    http, _store = client
+    response = await http.get(f"/api/runs/{MISSING_RUN_ID}/dependency-risk")
+    assert response.status_code == 404
+
+
+# -- A3: static findings endpoint --------------------------------------------
+
+
+async def _seed_static(store: RedisStore, **fields) -> None:
+    state = await store.load_state(RUN_ID)
+    assert state is not None
+    state.static_report = {
+        "raw_count": 0,
+        "prioritized": [],
+        "baseline_json": {},
+        "scanner_status": {},
+        **fields,
+    }
+    await store.save_state(state)
+
+
+async def test_static_findings_endpoint_returns_the_projected_report(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_static(
+        store,
+        raw_count=3,
+        prioritized=[
+            {
+                "id": "finding-0",
+                "file": "vulnapi/auth.py",
+                "line": 12,
+                "message": "pickle usage",
+                "tools": ["bandit"],
+                "severity": 0.9,
+                "blast_radius_score": 0.62,
+                "consensus": False,
+                "criticality": 0.81,
+                "churn_weight": 0.37,
+                "severity_measured": True,
+            }
+        ],
+        scanner_status={"bandit": "ok", "semgrep": "unavailable", "ruff": "ok_no_findings"},
+    )
+
+    response = await http.get(f"/api/runs/{RUN_ID}/static-findings")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["rawCount"] == 3
+    assert body["prioritizedCount"] == 1
+    assert body["scannerStatus"]["semgrep"] == "unavailable"
+    assert body["findings"][0]["rank"] == 1
+    assert body["findings"][0]["severityMeasured"] is True
+    assert body["findings"][0]["blastRadiusScore"] == 0.62
+
+
+async def test_static_findings_endpoint_200s_with_zero_findings_when_a3_ran_clean(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_static(
+        store,
+        raw_count=0,
+        scanner_status={"bandit": "ok_no_findings", "semgrep": "ok_no_findings", "ruff": "ok_no_findings"},
+    )
+
+    response = await http.get(f"/api/runs/{RUN_ID}/static-findings")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["findings"] == []
+    assert body["scannerStatus"]["bandit"] == "ok_no_findings"
+
+
+async def test_static_findings_endpoint_404s_before_a3_completes(client):
+    http, store = client
+    await _seed_run(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/static-findings")
+    assert response.status_code == 404
+    assert "static analysis" in response.json()["detail"].lower()
+
+
+async def test_static_findings_endpoint_404s_for_an_unknown_run(client):
+    http, _store = client
+    response = await http.get(f"/api/runs/{MISSING_RUN_ID}/static-findings")
+    assert response.status_code == 404
+
+
+# -- A9: security re-scan endpoint -------------------------------------------
+
+
+async def _seed_security(store: RedisStore, **fields) -> None:
+    state = await store.load_state(RUN_ID)
+    assert state is not None
+    state.security_result = {
+        "new_findings": [],
+        "rejected": False,
+        "security_score": None,
+        "scanners_run": [],
+        "reexecution_command": "",
+        "reexecution_timeout_seconds": 150,
+        **fields,
+    }
+    await store.save_state(state)
+
+
+async def test_security_endpoint_returns_the_projected_report(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_security(
+        store,
+        rejected=True,
+        security_score=75.0,
+        scanners_run=["bandit"],
+        new_findings=[
+            {
+                "id": "new-0",
+                "file": "vulnapi/auth.py",
+                "line": 42,
+                "message": "Possible hardcoded password: 'hunter2'",
+                "tools": ["bandit"],
+                "severity": 0.7,
+            }
+        ],
+    )
+
+    response = await http.get(f"/api/runs/{RUN_ID}/security")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["verdict"] == "new_findings"
+    assert body["rejected"] is True
+    assert body["securityScore"] == 75.0
+    assert body["scannersRun"] == ["bandit"]
+    assert body["newFindings"][0]["file"] == "vulnapi/auth.py"
+    assert "severity" not in body["newFindings"][0]
+
+
+async def test_security_endpoint_200s_with_zero_findings_when_a9_ran_clean(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_security(store, security_score=100.0, scanners_run=["bandit", "semgrep"])
+
+    response = await http.get(f"/api/runs/{RUN_ID}/security")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verdict"] == "clean"
+    assert body["newFindings"] == []
+    assert body["scannersRun"] == ["bandit", "semgrep"]
+
+
+async def test_security_endpoint_reports_not_measured_when_no_scanner_ran(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_security(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/security")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verdict"] == "not_measured"
+    assert body["securityScore"] is None
+    assert body["scannersRun"] == []
+
+
+async def test_security_endpoint_404s_before_a9_completes(client):
+    http, store = client
+    await _seed_run(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/security")
+    assert response.status_code == 404
+    assert "security" in response.json()["detail"].lower()
+
+
+async def test_security_endpoint_404s_for_an_unknown_run(client):
+    http, _store = client
+    response = await http.get(f"/api/runs/{MISSING_RUN_ID}/security")
+    assert response.status_code == 404
+
+
+# -- A10: mergeability decision endpoint -------------------------------------
+
+
+async def _seed_decision(store: RedisStore, **fields) -> None:
+    state = await store.load_state(RUN_ID)
+    assert state is not None
+    state.reproduction = {"status": "CONFIRMED"}
+    state.reproduction_confidence = "exact_test"
+    state.mutation_result = {
+        "pytest_passed": True,
+        "target_test_passed": True,
+        "regression_tests_passed": True,
+        "patch_retry_required": False,
+        "correctness_score": 92.0,
+    }
+    state.security_result = {"rejected": False, "security_score": 100.0}
+    state.pr_decision = {
+        "pr_type": "auto_mergeable",
+        "axis_scores": {
+            "correctness": 92.0,
+            "security": 100.0,
+            "fidelity": 100.0,
+            "scope_risk": 90.0,
+        },
+        "pr_url": None,
+        "description_why": "",
+        "description_what": "",
+        "review_note": None,
+        "phantom_changes_detected": False,
+        **fields,
+    }
+    await store.save_state(state)
+
+
+async def test_decision_endpoint_returns_the_projected_report(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_decision(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/decision")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["prType"] == "auto_mergeable"
+    assert len(body["hardGates"]) == 10
+    assert all(g["checked"] and g["passed"] for g in body["hardGates"])
+    assert body["routingModifiers"]["hardGatesClear"] is True
+
+
+async def test_decision_endpoint_reports_unmeasured_axis_without_zero(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_decision(
+        store,
+        pr_type="draft",
+        axis_scores={
+            "correctness": 92.0,
+            "security": None,
+            "fidelity": 100.0,
+            "scope_risk": 90.0,
+        },
+        review_note="Not measured: security. Manual verification required before merge.",
+    )
+
+    response = await http.get(f"/api/runs/{RUN_ID}/decision")
+    assert response.status_code == 200
+    body = response.json()
+    security = next(a for a in body["axes"] if a["name"] == "security")
+    assert security["value"] is None
+    assert security["meetsLowThreshold"] is None
+    firing = [g for g in body["hardGates"] if g["checked"] and g["passed"] is False]
+    assert firing[0]["code"] == "axes_measured"
+
+
+async def test_decision_endpoint_404s_before_a10_completes(client):
+    http, store = client
+    await _seed_run(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/decision")
+    assert response.status_code == 404
+    assert "mergeability" in response.json()["detail"].lower()
+
+
+async def test_decision_endpoint_404s_for_an_unknown_run(client):
+    http, _store = client
+    response = await http.get(f"/api/runs/{MISSING_RUN_ID}/decision")
+    assert response.status_code == 404
+
+
+# -- A3.5: reproduction endpoint ---------------------------------------------
+
+
+async def _seed_reproduction(store: RedisStore, **fields) -> None:
+    state = await store.load_state(RUN_ID)
+    assert state is not None
+    state.reproduction = {
+        "status": "CONFIRMED",
+        "reproduced": True,
+        "failing_test": "tests/test_auth.py::test_expired_token_rejected",
+        "exception_type": "AssertionError",
+        "exception_message": "assert True is False",
+        "failing_file": "vulnapi/tests/test_auth.py",
+        "failing_line": 27,
+        "traceback": "E   AssertionError: assert True is False",
+        "confidence": 0.9,
+        "force_draft_pr": False,
+        "command": "python -m pytest --tb=long --json-report -v",
+        "exit_code": 1,
+        "timed_out": False,
+        "stdout": "collected 12 items",
+        "stderr": "",
+        "duration_seconds": 0.03,
+        "started_at": "2026-08-13T17:30:37",
+        "finished_at": "2026-08-13T17:30:38",
+        "tests_collected": 12,
+        "tests_passed": 8,
+        "tests_failed": 4,
+        "evidence_source": "pytest_report",
+        "reexecution_command": "python -m pytest tests/test_auth.py::test_expired_token_rejected -v --tb=long",
+        "reexecution_is_targeted": True,
+        "reexecution_timeout_seconds": 120,
+        "pre_existing_failures": ["tests/test_auth.py::test_expired_token_rejected"],
+        **fields,
+    }
+    await store.save_state(state)
+
+
+async def test_reproduction_endpoint_returns_the_projected_evidence(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_reproduction(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/reproduction")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["status"] == "CONFIRMED"
+    assert body["uiStatus"] == "reproduced"
+    assert body["failingTest"] == "tests/test_auth.py::test_expired_token_rejected"
+    assert body["failingFile"] == "vulnapi/tests/test_auth.py"
+    assert body["command"] == "python -m pytest --tb=long --json-report -v"
+    assert body["testsCollected"] == 12
+    assert len(body["stages"]) == 5
+    assert body["stages"][0]["id"] == "suite_executed"
+
+
+async def test_reproduction_endpoint_reports_unconfirmed_distinctly(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_reproduction(
+        store,
+        status="UNCONFIRMED",
+        reproduced=False,
+        force_draft_pr=True,
+        failing_test=None,
+        exception_type=None,
+        exception_message=None,
+        failing_file=None,
+        failing_line=None,
+        traceback=None,
+        confidence=0.0,
+        evidence_source=None,
+        tests_failed=0,
+        tests_passed=12,
+    )
+
+    response = await http.get(f"/api/runs/{RUN_ID}/reproduction")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["uiStatus"] == "not_reproduced"
+    assert body["failingTest"] is None
+
+
+async def test_reproduction_endpoint_404s_before_a3_5_completes(client):
+    http, store = client
+    await _seed_run(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/reproduction")
+    assert response.status_code == 404
+    assert "reproduction result" in response.json()["detail"].lower()
+
+
+async def test_reproduction_endpoint_404s_for_an_unknown_run(client):
+    http, _store = client
+    response = await http.get(f"/api/runs/{MISSING_RUN_ID}/reproduction")
+    assert response.status_code == 404
+
+
+# -- A4: investigation endpoint ----------------------------------------------
+
+
+async def _seed_investigation(store: RedisStore, **fields) -> None:
+    """Seed A4's real artifacts: the brief it publishes and the audit of it.
+
+    Built by running the real builder over the real upstream shapes rather than
+    hand-writing a response body, so a change to either side fails here.
+    """
+    from backend.models.root_cause import Citation, EvidenceReference, RootCauseBrief
+    from backend.services.evidence_investigation import build_investigation_report
+
+    state = await store.load_state(RUN_ID)
+    assert state is not None
+    state.static_report = {
+        "raw_count": 2,
+        "scanner_status": {"bandit": "ok", "semgrep": "ok_no_findings", "ruff": "unavailable"},
+        "prioritized": [
+            {
+                "id": "finding-0",
+                "file": "vulnapi/auth.py",
+                "line": 27,
+                "message": "hardcoded secret",
+                "tools": ["bandit"],
+                "severity": 0.9,
+                "severity_measured": True,
+            }
+        ],
+    }
+    brief = RootCauseBrief(
+        summary="Expired tokens are accepted",
+        root_cause="validate_token never compares exp against the clock",
+        citations=[
+            Citation(file="vulnapi/auth.py", line=27, claim="no exp check", verified=True),
+            Citation(file="vulnapi/ghost.py", line=4, claim="phantom", verified=False),
+        ],
+        evidence_refs=[
+            EvidenceReference(
+                source="runtime", ref_id="t", claim="AssertionError", weight=0.35
+            )
+        ],
+        confidence=0.6,
+    )
+    state.root_cause = brief.model_dump(mode="json")
+    report = build_investigation_report(
+        brief=brief,
+        static_report=state.static_report,
+        reproduction=state.reproduction,
+        cve_report=None,
+        confidence_components=[("runtime evidence", 0.35, "1 runtime reference(s)")],
+        root_cause_source="deterministic",
+        **fields,
+    )
+    state.investigation = report.model_dump(mode="json")
+    await store.save_state(state)
+
+
+async def test_investigation_endpoint_returns_the_projected_report(client):
+    http, store = client
+    await _seed_run(store)
+    # The failure lands in the same file bandit flagged, which is what makes
+    # the two independent sources corroborating rather than unrelated.
+    await _seed_reproduction(store, failing_file="vulnapi/auth.py")
+    await _seed_investigation(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/investigation")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["subjectKind"] == "runtime_failure"
+    assert body["reproductionStatus"] == "reproduced"
+    assert body["rootCause"] == "validate_token never compares exp against the clock"
+    assert body["rootCauseSource"] == "deterministic"
+    assert body["confidence"] == 0.6
+    assert body["confidenceBreakdown"][0]["component"] == "runtime evidence"
+
+    stances = {e["id"]: e["stance"] for e in body["evidence"]}
+    assert stances["reproduction"] == "supporting"
+    assert stances["scanner:bandit"] == "supporting"
+    # Ran clean and could not run are both non-arguments, and neither is
+    # allowed to read as evidence against the finding.
+    assert stances["scanner:semgrep"] == "neutral"
+    assert stances["scanner:ruff"] == "neutral"
+    assert stances["citation:1"] == "contradicting"
+
+    assert body["completeness"]["categoryStatus"]["dependency"] == "unavailable"
+    assert any(u["source"] == "ruff" for u in body["unavailableSources"])
+
+
+async def test_investigation_endpoint_reports_unmeasured_values_as_null(client):
+    """A runtime failure has no severity — no tool assigned one."""
+    http, store = client
+    await _seed_run(store)
+    await _seed_reproduction(store, failing_file="vulnapi/auth.py")
+    await _seed_investigation(store)
+
+    body = (await http.get(f"/api/runs/{RUN_ID}/investigation")).json()
+    assert body["severity"] is None
+    assert body["severityMeasured"] is False
+    strengths = {e["id"]: e["strength"] for e in body["evidence"]}
+    assert strengths["scanner:semgrep"] is None
+    assert strengths["scanner:ruff"] is None
+
+
+async def test_investigation_endpoint_surfaces_a_degraded_investigation(client):
+    """A4 falling back to the deterministic path is reported, not hidden."""
+    http, store = client
+    await _seed_run(store)
+    await _seed_reproduction(store)
+    await _seed_investigation(store, errors=["LLM investigation unavailable (TimeoutError)"])
+
+    body = (await http.get(f"/api/runs/{RUN_ID}/investigation")).json()
+    assert body["status"] == "error"
+    assert body["errors"] == ["LLM investigation unavailable (TimeoutError)"]
+    assert body["evidence"]  # degraded, but the evidence it did gather survives
+
+
+async def test_investigation_endpoint_404s_before_a4_completes(client):
+    http, store = client
+    await _seed_run(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/investigation")
+    assert response.status_code == 404
+    assert "investigation" in response.json()["detail"].lower()
+
+
+async def test_investigation_endpoint_404s_for_an_unknown_run(client):
+    http, _store = client
+    response = await http.get(f"/api/runs/{MISSING_RUN_ID}/investigation")
+    assert response.status_code == 404
+
+
+# -- A5: blast-radius impact endpoint ----------------------------------------
+
+
+async def _seed_blast(store: RedisStore, **fields) -> None:
+    state = await store.load_state(RUN_ID)
+    assert state is not None
+    state.sig = {
+        "repo_path": "/tmp/clones/vulnapi",
+        "source_roots": ["vulnapi"],
+        "files": {
+            "vulnapi/auth.py": {
+                "role": "auth-boundary", "imports": [], "imported_by": ["vulnapi/middleware.py"],
+                "churn_weight": 0.0, "criticality": 0.9,
+            },
+            "vulnapi/middleware.py": {
+                "role": "internal-util", "imports": ["auth"], "imported_by": [],
+                "churn_weight": 0.0, "criticality": 0.5,
+            },
+        },
+        "edges": [["vulnapi/middleware.py", "auth"]],
+        "generated_at": "2026-08-13T00:00:00",
+    }
+    state.static_report = {
+        "raw_count": 1,
+        "scanner_status": {"bandit": "ok"},
+        "prioritized": [{"id": "f0", "file": "vulnapi/middleware.py", "line": 4, "message": "x", "tools": ["bandit"], "severity": 0.6, "severity_measured": True}],
+    }
+    state.blast_graph = {
+        "scope": [
+            {
+                "path": "vulnapi/auth.py", "direction": "forward", "directions": ["forward"],
+                "propagation_confidence": 1.0, "risk_score": 0.0, "hop_count": 0,
+                "origin": "vulnapi/auth.py", "reached_via": None, "edge_basis": None,
+            },
+            {
+                "path": "vulnapi/middleware.py", "direction": "backward", "directions": ["backward"],
+                "propagation_confidence": 0.42, "risk_score": 0.0, "hop_count": 1,
+                "origin": "vulnapi/auth.py", "reached_via": "vulnapi/auth.py",
+                "edge_basis": "resolved_suffix",
+            },
+        ],
+        "human_review_required": ["vulnapi/middleware.py"],
+        "auto_patch_scope": ["vulnapi/auth.py"],
+        "origins": ["vulnapi/auth.py"],
+        "edges": [
+            {
+                "from_path": "vulnapi/auth.py", "to_path": "vulnapi/middleware.py",
+                "direction": "backward", "basis": "resolved_suffix", "hop_count": 1,
+            }
+        ],
+        "target_resolution": {
+            "original_path": "/tmp/clones/vulnapi/vulnapi/auth.py",
+            "normalized_path": "vulnapi/auth.py",
+            "resolved_path": "vulnapi/auth.py",
+            "source": "stack_trace",
+            "confidence": 0.9,
+            "runtime_confirmed": True,
+            "pinned": False,
+        },
+        **fields,
+    }
+    await store.save_state(state)
+
+
+async def test_blast_endpoint_returns_the_projected_impact(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_blast(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/blast")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["origin"]["resolvedPath"] == "vulnapi/auth.py"
+    assert body["origin"]["source"] == "stack_trace"
+    assert body["maxHop"] == 1
+
+    by_path = {s["path"]: s for s in body["scope"]}
+    assert by_path["vulnapi/middleware.py"]["role"] == "internal-util"
+    assert by_path["vulnapi/middleware.py"]["hasStaticFinding"] is True
+    assert by_path["vulnapi/auth.py"]["hasStaticFinding"] is False
+    assert by_path["vulnapi/middleware.py"]["directions"] == ["backward"]
+
+    assert body["edges"] == [
+        {
+            "from": "vulnapi/auth.py",
+            "to": "vulnapi/middleware.py",
+            "direction": "backward",
+            "basis": "resolved_suffix",
+            "hopCount": 1,
+        }
+    ]
+    # A0.5 never ran in this fixture — capabilities must say so, not silently
+    # report zero.
+    assert body["capabilities"] is None
+
+
+async def test_blast_endpoint_reports_patch_authority_overlap(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_blast(
+        store,
+        auto_patch_scope=["vulnapi/auth.py", "vulnapi/middleware.py"],
+        human_review_required=["vulnapi/middleware.py"],
+    )
+
+    body = (await http.get(f"/api/runs/{RUN_ID}/blast")).json()
+    assert body["patchAuthorityOverlap"] == ["vulnapi/middleware.py"]
+
+
+async def test_blast_endpoint_never_calls_risk_a_certainty(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_blast(store)
+
+    body = (await http.get(f"/api/runs/{RUN_ID}/blast")).json()
+    assert "priorityScore" in body["scope"][0]
+    assert "riskScore" not in body["scope"][0]
+    assert body["riskMeasurementCaveat"]
+
+
+async def test_blast_endpoint_returns_empty_scope_as_a_real_answer(client):
+    http, store = client
+    await _seed_run(store)
+    state = await store.load_state(RUN_ID)
+    state.blast_graph = {"scope": [], "origins": []}
+    await store.save_state(state)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/blast")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scope"] == []
+    assert body["origin"] is None
+
+
+async def test_blast_endpoint_404s_before_a5_completes(client):
+    http, store = client
+    await _seed_run(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/blast")
+    assert response.status_code == 404
+    assert "blast" in response.json()["detail"].lower()
+
+
+async def test_blast_endpoint_404s_for_an_unknown_run(client):
+    http, _store = client
+    response = await http.get(f"/api/runs/{MISSING_RUN_ID}/blast")
+    assert response.status_code == 404
+
+
+# -- A6: repair-plan endpoint -------------------------------------------------
+
+
+async def _seed_repair_plan(store: RedisStore, **fields) -> None:
+    state = await store.load_state(RUN_ID)
+    assert state is not None
+    state.static_report = {
+        "raw_count": 1,
+        "scanner_status": {"bandit": "ok"},
+        "prioritized": [
+            {
+                "id": "finding-0", "file": "vulnapi/auth.py", "message": "hardcoded secret",
+                "tools": ["bandit"], "severity": 0.9, "severity_measured": True,
+            }
+        ],
+    }
+    state.cve_report = {
+        "manifest": "requirements.txt", "total_dependencies": 2,
+        "findings": [
+            {
+                "cve_id": "CVE-1", "package": "pyjwt", "severity": "HIGH",
+                "installed_version": "1.0.0", "classification": "Critical",
+                "reach_path": ["vulnapi/auth.py"],
+            }
+        ],
+    }
+    state.fix_dag = {
+        "nodes": [
+            {"issue_id": "cve-CVE-1", "files": ["vulnapi/auth.py"], "depends_on": []},
+            {"issue_id": "finding-0", "files": ["vulnapi/auth.py"], "depends_on": ["cve-CVE-1"]},
+        ],
+        "execution_order": ["cve-CVE-1", "finding-0"],
+        "conflict_batches": [],
+        "dependency_edges": [
+            {
+                "from_issue": "cve-CVE-1", "to_issue": "finding-0",
+                "reason": "cve_reachability:pyjwt->vulnapi/auth.py",
+            }
+        ],
+        "ordering_source": "deterministic",
+        "ordering_rationale": "",
+        **fields,
+    }
+    await store.save_state(state)
+
+
+async def test_repair_plan_endpoint_returns_the_projected_plan(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_repair_plan(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/repair-plan")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert [s["issueId"] for s in body["steps"]] == ["cve-CVE-1", "finding-0"]
+
+    cve_step = body["steps"][0]
+    assert cve_step["why"] == {
+        "kind": "cve", "package": "pyjwt", "severity": "HIGH",
+        "installedVersion": "1.0.0", "reachPath": ["vulnapi/auth.py"],
+    }
+    # The step named by `execution_order[0]` — the one value A7 actually reads.
+    assert cve_step["isHandoffTarget"] is True
+
+    finding_step = body["steps"][1]
+    assert finding_step["why"]["kind"] == "static_finding"
+    assert finding_step["isHandoffTarget"] is False
+    assert finding_step["incomingEdges"] == [
+        {"fromIssue": "cve-CVE-1", "reason": "cve_reachability:pyjwt->vulnapi/auth.py"}
+    ]
+
+    assert body["orderingSource"] == "deterministic"
+    assert body["executionAuthority"]["field"] == "execution_order[0]"
+    # A5.5 never ran in this fixture — carried-forward evidence must say so.
+    assert body["carriedForward"] is None
+
+
+async def test_repair_plan_endpoint_carries_forward_a5_5_evidence(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_repair_plan(store)
+    await store.set_json(RUN_ID, CONTEXT_STORE_KEY, _package().to_storage_dict())
+
+    body = (await http.get(f"/api/runs/{RUN_ID}/repair-plan")).json()
+
+    assert body["carriedForward"]["acceptanceCriteria"] == _package().acceptance_criteria
+    assert body["carriedForward"]["patchConstraints"] == _package().patch_constraints
+    # A5.5's own field, attached as-is — A6 has no function-level analysis.
+    assert body["carriedForward"]["targetFunction"] == "validate_token"
+
+
+async def test_repair_plan_endpoint_omits_target_function_when_a5_5_never_ran(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_repair_plan(store)
+
+    body = (await http.get(f"/api/runs/{RUN_ID}/repair-plan")).json()
+    assert body["carriedForward"] is None
+
+
+async def test_repair_plan_endpoint_reports_no_target_function_honestly(client):
+    """A5.5 ran but resolved no target function for this file."""
+    http, store = client
+    await _seed_run(store)
+    await _seed_repair_plan(store)
+    package = _package()
+    package.target_function = None
+    await store.set_json(RUN_ID, CONTEXT_STORE_KEY, package.to_storage_dict())
+
+    body = (await http.get(f"/api/runs/{RUN_ID}/repair-plan")).json()
+    assert body["carriedForward"]["targetFunction"] is None
+
+
+async def test_repair_plan_endpoint_never_fabricates_a_confidence(client):
+    http, store = client
+    await _seed_run(store)
+    await _seed_repair_plan(store)
+
+    body = (await http.get(f"/api/runs/{RUN_ID}/repair-plan")).json()
+    assert "confidence" not in body
+    assert all("confidence" not in s for s in body["steps"])
+
+
+async def test_repair_plan_endpoint_returns_empty_steps_as_a_real_answer(client):
+    http, store = client
+    await _seed_run(store)
+    state = await store.load_state(RUN_ID)
+    state.fix_dag = {"nodes": [], "execution_order": []}
+    await store.save_state(state)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/repair-plan")
+    assert response.status_code == 200
+    assert response.json()["steps"] == []
+
+
+async def test_repair_plan_endpoint_404s_before_a6_completes(client):
+    http, store = client
+    await _seed_run(store)
+
+    response = await http.get(f"/api/runs/{RUN_ID}/repair-plan")
+    assert response.status_code == 404
+    assert "repair plan" in response.json()["detail"].lower()
+
+
+async def test_repair_plan_endpoint_404s_for_an_unknown_run(client):
+    http, _store = client
+    response = await http.get(f"/api/runs/{MISSING_RUN_ID}/repair-plan")
+    assert response.status_code == 404
+
+
+async def test_plan_route_still_returns_the_raw_dict_unchanged(client):
+    """`/plan` is a separate, already-documented contract — verbatim `fix_dag`."""
+    http, store = client
+    await _seed_run(store)
+    await _seed_repair_plan(store)
+
+    body = (await http.get(f"/api/runs/{RUN_ID}/plan")).json()
+    assert body["ordering_source"] == "deterministic"
+    assert "steps" not in body
+
+
 # -- G2: context endpoint --------------------------------------------------
 
 
@@ -479,6 +1433,13 @@ async def test_agent_timeline_excludes_lifecycle_frames(client):
 @pytest.mark.parametrize(
     "path",
     [
+        "/api/runs/{run_id}/semantic-graph",
+        "/api/runs/{run_id}/dependency-risk",
+        "/api/runs/{run_id}/static-findings",
+        "/api/runs/{run_id}/reproduction",
+        "/api/runs/{run_id}/investigation",
+        "/api/runs/{run_id}/blast",
+        "/api/runs/{run_id}/repair-plan",
         "/api/runs/{run_id}/context",
         "/api/runs/{run_id}/plan",
         "/api/runs/{run_id}/patch",

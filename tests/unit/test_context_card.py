@@ -137,8 +137,60 @@ class TestAbsenceIsNotZero:
 
         assert card["status"] == "skipped"
         assert "visualization" not in card
-        assert [m["label"] for m in card["metrics"]] == ["Duration"]
+        # The generic Supporting Metrics grid is dropped for this card
+        # unconditionally — `ContextEngineeringPanel` is the one place these
+        # numbers are shown, and a stage that never ran has none to show there
+        # either.
+        assert card["metrics"] is None
         assert card["evidence"]["subtitle"] == "Not yet published by this run."
+
+
+class TestSupportingMetricsAndActivityAreDeduplicated:
+    """`ContextEngineeringPanel` now shows every one of these numbers more
+    prominently than the generic card chrome did — this is the narrow,
+    context-only removal of the resulting duplication."""
+
+    def test_supporting_metrics_grid_is_absent_for_the_context_card(self):
+        card = _card(_state(), _events(BUILT))
+
+        assert card["metrics"] is None
+
+    def test_other_cards_keep_their_supporting_metrics_unchanged(self):
+        events = [
+            _event("A3", "started", "Scanning", 0),
+            _event("A3", "completed", "Ranked findings", 1),
+        ]
+        card = _card(_state(), events, card="static")
+
+        assert card["metrics"] is not None
+        assert len(card["metrics"]) > 0
+
+    def test_the_redundant_completed_sentence_is_filtered_from_activity(self):
+        card = _card(_state(), _events(BUILT))
+
+        assert "Engineering minimal repair context" in card["lines"]
+        assert not any(line.startswith("Context: ") for line in card["lines"])
+
+    def test_other_cards_keep_their_completed_message_in_activity(self):
+        events = [
+            _event("A6", "started", "Planning repair order", 0),
+            _event("A6", "completed", "Planned 2 fixes", 1),
+        ]
+        card = _card(_state(fix_dag={"execution_order": []}), events, card="planner")
+
+        assert "Planned 2 fixes" in card["lines"]
+
+    def test_a_context_message_that_only_happens_to_start_the_same_way_elsewhere_is_untouched(self):
+        """The filter is scoped to card == "context" only — an unrelated
+        agent whose message happens to start with "Context: " (unlikely, but
+        the scoping must be by card identity, not by string shape) keeps it."""
+        events = [
+            _event("A6", "started", "Planning repair order", 0),
+            _event("A6", "completed", "Context: not actually A5.5's message", 1),
+        ]
+        card = _card(_state(fix_dag={"execution_order": []}), events, card="planner")
+
+        assert "Context: not actually A5.5's message" in card["lines"]
 
 
 class TestPlannerReadsTheRealDAG:

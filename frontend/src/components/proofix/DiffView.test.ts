@@ -11,7 +11,7 @@
  * the diff would point at the wrong line in anything with two hunks.
  */
 import { describe, expect, it } from "vitest";
-import { diffStats, parseUnifiedDiff } from "./DiffView";
+import { diffStats, parseUnifiedDiff, splitDiffByFile } from "./DiffView";
 
 const DIFF = `--- a/pkg/auth.py
 +++ b/pkg/auth.py
@@ -84,5 +84,47 @@ describe("parseUnifiedDiff", () => {
     const added = lines.find((l) => l.kind === "add");
     expect(added?.text).toBe("    if token.exp < time.time():");
     expect(added?.text.startsWith("+")).toBe(false);
+  });
+});
+
+describe("splitDiffByFile", () => {
+  const TWO_FILE_DIFF = `--- a/pkg/auth.py
++++ b/pkg/auth.py
+@@ -1,2 +1,2 @@
+ def validate(token):
+-    return True
++    return False
+--- a/pkg/utils.py
++++ b/pkg/utils.py
+@@ -1,2 +1,2 @@
+ def helper():
+-    pass
++    return None
+`;
+
+  it("partitions a multi-file diff into one chunk per file", () => {
+    const chunks = splitDiffByFile(TWO_FILE_DIFF);
+    expect([...chunks.keys()]).toEqual(["pkg/auth.py", "pkg/utils.py"]);
+  });
+
+  it("each chunk parses to only that file's own change, not the whole diff", () => {
+    const chunks = splitDiffByFile(TWO_FILE_DIFF);
+    const authLines = parseUnifiedDiff(chunks.get("pkg/auth.py")!);
+    expect(diffStats(authLines)).toEqual({ added: 1, removed: 1 });
+    expect(authLines.some((l) => l.text.includes("helper"))).toBe(false);
+
+    const utilsLines = parseUnifiedDiff(chunks.get("pkg/utils.py")!);
+    expect(utilsLines.some((l) => l.text.includes("return None"))).toBe(true);
+    expect(utilsLines.some((l) => l.text.includes("validate"))).toBe(false);
+  });
+
+  it("a single-file diff yields exactly one chunk equal to the whole text", () => {
+    const chunks = splitDiffByFile(DIFF);
+    expect(chunks.size).toBe(1);
+    expect(chunks.get("pkg/auth.py")).toBe(DIFF);
+  });
+
+  it("returns nothing for an empty diff", () => {
+    expect(splitDiffByFile("").size).toBe(0);
   });
 });

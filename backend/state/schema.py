@@ -34,6 +34,10 @@ class RunStateModel(BaseModel):
     environment: dict | None = None
     reproduction: dict | None = None
     root_cause: dict | None = None
+    #: A4's `InvestigationReport` — the audit of the root-cause brief above:
+    #: which sources it consulted, what each said, and how the confidence was
+    #: arrived at. `None` before A4 runs.
+    investigation: dict | None = None
     blast_graph: dict | None = None
     fix_dag: dict | None = None
     patch_bundle: dict | None = None
@@ -70,6 +74,7 @@ class RunState(TypedDict, total=False):
     environment: dict
     reproduction: dict
     root_cause: dict
+    investigation: dict
     blast_graph: dict
     fix_dag: dict
     patch_bundle: dict

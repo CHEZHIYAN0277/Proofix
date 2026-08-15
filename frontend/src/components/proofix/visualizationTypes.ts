@@ -156,16 +156,31 @@ export interface PlannerPayload {
   edges: [number, number][];
 }
 
-export type PatchOp = "ctx" | "del";
-export interface PatchLine {
-  t: string;
-  op: PatchOp;
+/**
+ * A7's own generation provenance for one patched file — not the diff itself
+ * (that is `PatchBundle`, fetched separately from `GET /runs/{id}/patch`).
+ * Every field here is a direct read of `a7_patch_metrics`, the same dict A7
+ * computes for its own retry-history feed; nothing is inferred or guessed.
+ */
+export interface PatchFileProvenance {
+  file: string;
+  /** A7's own word for how it wrote the file (e.g. "ast_validated_write"), or `null` if unknown. */
+  method: string | null;
+  /** True only when this file equals the blast graph's resolved origin — real set membership, not a guess. */
+  isTarget: boolean;
+  /** `null` when A7 could not resolve a function-level target for this file. */
+  targetFunction: string | null;
+  /** "llm" or "stub" — `null` only if A7 never recorded an attempt for this file. */
+  generationSource: "llm" | "stub" | null;
+  /** "a5_5_context_package" or "a7_local_extraction", or `null` in stub mode (no prompt was built). */
+  contextSource: string | null;
+  runtimePrompt: boolean | null;
+  retryNumber: number | null;
+  retryReason: string | null;
+  semanticDiff: boolean | null;
 }
 export interface PatchPayload {
-  thoughts: string[];
-  original: PatchLine[];
-  generated: string;
-  badges: string[];
+  files: PatchFileProvenance[];
 }
 
 /**
@@ -176,8 +191,10 @@ export interface PatchPayload {
 export interface MutationPayload {
   /** Fraction of mutants killed (0-1), or `null` when mutation testing never ran. */
   score: number | null;
-  /** Whether any mutant survived the suite. */
-  survived: boolean;
+  /** Whether any mutant survived the suite, or `null` when mutation was never scored. */
+  survived: boolean | null;
+  /** Count of surviving mutants, or `null` when mutation was never scored. */
+  survivedMutants: number | null;
   /** Whether the target repo's test suite passed at all. */
   pytestPassed: boolean;
   /** Correctness score (0-100), or `null` when unmeasured. */
@@ -189,15 +206,23 @@ export interface MutationPayload {
 
 export interface MergeMetric {
   label: string;
-  value: number;
+  /** `null` when the backend never measured this axis — never a substituted 0. */
+  value: number | null;
   ok: boolean;
+  /** False for a `null` value; true only for an axis the backend actually scored. */
+  measured: boolean;
   /** When supplied, the value renders as a label (e.g. "Low") once the count-up reaches it. */
   scopeLabel?: string;
 }
 export interface MergePayload {
   metrics: MergeMetric[];
-  /** Weights applied to first three numeric metrics for the composite gauge. */
-  weights: [number, number, number];
+  /**
+   * The backend's own composite trust score (0-100), or `null` when nothing
+   * was measured. The one authoritative number — never recomputed from
+   * `metrics` here, which would be a second trust formula disagreeing with
+   * the one shown elsewhere on the page.
+   */
+  compositeScore: number | null;
   decisionLabel: string;
   reviewNote: string;
 }

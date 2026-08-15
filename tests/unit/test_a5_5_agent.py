@@ -313,6 +313,44 @@ async def test_no_evidence_at_all_skips_without_failing(store, repo):
 
 
 @pytest.mark.asyncio
+async def test_vendor_path_blast_origin_never_becomes_the_repair_target(store, repo):
+    """Belt-and-suspenders at the agent boundary: even if `blast_graph`
+    somehow named a vendor path as its origin — bypassing
+    `resolve_origins`'s own filter — A5.5 must not adopt it as the target.
+    With no application-scoped evidence left, this is honestly "no target",
+    not a vendor file dressed up as one."""
+    state = make_state(
+        repo,
+        blast_graph={
+            "auto_patch_scope": [".venv/Lib/site-packages/httpx/_auth.py"],
+            "origins": [".venv/Lib/site-packages/httpx/_auth.py"],
+            "scope": [],
+            "human_review_required": [],
+        },
+        root_cause={
+            "summary": "weak hash",
+            "citations": [
+                {
+                    "file": ".venv/Lib/site-packages/httpx/_auth.py",
+                    "line": 309,
+                    "verified": True,
+                }
+            ],
+            "affected_modules": [],
+        },
+    )
+    result = await run_agent(store, state)
+
+    assert result is state
+    package = await load_context_package(store, state.run_id)
+    assert package is None
+
+    events = await store.get_events(state.run_id)
+    completed = [e for e in events if e.agent_id == "A5.5" and e.status == "completed"]
+    assert completed[-1].payload["context_engineering"]["skipped"] == "no_target_file"
+
+
+@pytest.mark.asyncio
 async def test_missing_sig_still_produces_a_package(store, repo):
     state = make_state(repo, sig=None)
     await run_agent(store, state)

@@ -36,7 +36,32 @@ def parse_pytest_report(
 ) -> ReproductionResult:
     """Classify reproduction outcome and extract runtime evidence from pytest output."""
     report_path_str = str(report_path)
+    result = _classify(report, exit_code, stdout, stderr, report_path_str, repo_root)
 
+    # Execution metadata every branch shares — attached once here rather than
+    # repeated at each return, so no branch can forget to carry it.
+    result.exit_code = exit_code
+    result.timed_out = exit_code == -1 and stderr.strip() == "timeout"
+    result.stdout = stdout[:TRACE_LIMIT] if stdout else None
+    result.stderr = stderr[:TRACE_LIMIT] if stderr else None
+    if report is not None:
+        summary = report.get("summary") or {}
+        result.tests_collected = summary.get("collected")
+        result.tests_passed = summary.get("passed")
+        result.tests_failed = summary.get("failed")
+        if isinstance(report.get("duration"), (int, float)):
+            result.duration_seconds = float(report["duration"])
+    return result
+
+
+def _classify(
+    report: dict | None,
+    exit_code: int,
+    stdout: str,
+    stderr: str,
+    report_path_str: str,
+    repo_root: Path | None,
+) -> ReproductionResult:
     if exit_code == -1:
         detail = stderr.strip() or stdout.strip() or "pytest subprocess failed"
         return ReproductionResult(
@@ -122,7 +147,10 @@ def _from_failed_test(
     failing_line = crash.get("lineno") or test.get("lineno")
     tb = call.get("traceback") or []
     if tb and tb[0].get("path"):
-        failing_file = tb[0]["path"]
+        # pytest's own traceback frames carry absolute filesystem paths, not
+        # repo-relative ones — this branch previously used the raw path
+        # unmodified, leaking the host's directory layout into `failing_file`.
+        failing_file = _relative_path(tb[0]["path"], repo_root)
         if tb[0].get("lineno"):
             failing_line = tb[0]["lineno"]
 
@@ -152,6 +180,7 @@ def _from_failed_test(
         stack_trace=clipped_tb,
         confidence=0.9,
         report_path=report_path,
+        evidence_source="pytest_report",
     )
 
 
@@ -190,6 +219,7 @@ def _extract_from_text(text: str, repo_root: Path | None) -> ReproductionResult 
         traceback=clipped,
         stack_trace=clipped,
         confidence=0.7,
+        evidence_source="output_text",
     )
 
 

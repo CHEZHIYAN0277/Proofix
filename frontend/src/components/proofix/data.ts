@@ -49,7 +49,10 @@ export interface AgentEntry {
   status: AgentStatus;
   duration: string;
   lines: string[];
-  metrics?: MetricItem[];
+  /** `null` (not just absent) when a card deliberately omits the generic
+   * Supporting Metrics grid — today only `context`, whose own panel already
+   * shows every one of these numbers more prominently. */
+  metrics?: MetricItem[] | null;
   pills?: string[];
   modifiedFiles?: string[];
   evidence: EvidencePayload;
@@ -468,20 +471,32 @@ export const AGENTS: AgentEntry[] = [
     visualization: {
       kind: "patch",
       data: {
-        thoughts: [
-          "Understanding runtime evidence…",
-          "Checking dependent modules…",
-          "Generating repository-safe repair…",
+        files: [
+          {
+            file: "auth/token.py",
+            method: "ast_validated_write",
+            isTarget: true,
+            targetFunction: "validate_token",
+            generationSource: "llm",
+            contextSource: "a5_5_context_package",
+            runtimePrompt: true,
+            retryNumber: 0,
+            retryReason: null,
+            semanticDiff: true,
+          },
+          {
+            file: "api/session.py",
+            method: "ast_validated_write",
+            isTarget: false,
+            targetFunction: null,
+            generationSource: "llm",
+            contextSource: "a7_local_extraction",
+            runtimePrompt: true,
+            retryNumber: 0,
+            retryReason: null,
+            semanticDiff: true,
+          },
         ],
-        original: [
-          { t: "def validate_token(t):", op: "ctx" },
-          { t: "    p = decode(t)", op: "ctx" },
-          { t: "    # (missing expiry)", op: "del" },
-          { t: "    return p", op: "ctx" },
-        ],
-        generated:
-          "def validate_token(t):\n    p = decode(t)\n    if p.expired_at < now():\n        raise Expired()\n    return p",
-        badges: ["AST Valid", "Syntax Valid", "Semantic Difference"],
       },
     },
   },
@@ -521,6 +536,7 @@ export const AGENTS: AgentEntry[] = [
       data: {
         score: 0.57,
         survived: true,
+        survivedMutants: 7,
         pytestPassed: true,
         correctness: 62,
         correctnessThreshold: 80,
@@ -569,12 +585,12 @@ export const AGENTS: AgentEntry[] = [
       kind: "merge",
       data: {
         metrics: [
-          { label: "Correctness", value: 78, ok: false },
-          { label: "Security", value: 91, ok: true },
-          { label: "Fidelity", value: 74, ok: false },
-          { label: "Scope Risk", value: 88, ok: true, scopeLabel: "Low" },
+          { label: "Correctness", value: 78, ok: false, measured: true },
+          { label: "Security", value: 91, ok: true, measured: true },
+          { label: "Fidelity", value: 74, ok: false, measured: true },
+          { label: "Scope Risk", value: 88, ok: true, measured: true, scopeLabel: "Low" },
         ],
-        weights: [0.4, 0.35, 0.25],
+        compositeScore: 83,
         decisionLabel: "Draft PR",
         reviewNote: "Human review recommended — fidelity below auto-merge threshold.",
       },

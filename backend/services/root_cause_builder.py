@@ -131,22 +131,103 @@ def collect_evidence_refs(
     return refs, cve_context, citations
 
 
+RUNTIME_CONFIRMED_BONUS = 0.05
+
+
 def compute_confidence(
     evidence_refs: list[EvidenceReference],
     verified_count: int,
     reproduction: dict,
 ) -> float:
-    score = sum(ref.weight for ref in evidence_refs)
-    score += verified_count * VERIFIED_CITATION_WEIGHT
+    """A4's evidence-weighted confidence, 0..1.
+
+    Thin wrapper over `compute_confidence_breakdown` so there is exactly one
+    implementation of the sum: the number the brief carries and the number the
+    investigation explains are the same number, by construction.
+    """
+    total, _ = compute_confidence_breakdown(evidence_refs, verified_count, reproduction)
+    return total
+
+
+def compute_confidence_breakdown(
+    evidence_refs: list[EvidenceReference],
+    verified_count: int,
+    reproduction: dict,
+) -> tuple[float, list[tuple[str, float, str]]]:
+    """The same confidence, plus the ledger of terms that produced it.
+
+    Returns `(total, components)` where each component is
+    `(name, points, basis)`. Every term is deterministic and traces to real
+    upstream evidence:
+
+    * one term per evidence reference, weighted by its source
+      (`RUNTIME_CONFIRMED_WEIGHT`, `FINDING_WEIGHT`, `CVE_CRITICAL_WEIGHT`,
+      `STACK_WEIGHT` — set where the reference is created, in
+      `collect_evidence_refs`);
+    * `VERIFIED_CITATION_WEIGHT` per citation the verifier anchored to real
+      source — unverified citations contribute nothing;
+    * `SOURCE_DIVERSITY_BONUS` when three or more distinct source kinds agree,
+      because independent corroboration is worth more than repetition;
+    * `RUNTIME_CONFIRMED_BONUS` when A3.5 actually reproduced the failure.
+
+    Capped at 1.0. With no evidence at all the total is 0.0 and the ledger is
+    empty, which callers must render as "no evidence" rather than "0% likely".
+    """
+    components: list[tuple[str, float, str]] = []
+    score = 0.0
+
+    by_source: dict[str, list[EvidenceReference]] = {}
+    for ref in evidence_refs:
+        by_source.setdefault(ref.source, []).append(ref)
+
+    for source, refs in by_source.items():
+        points = sum(r.weight for r in refs)
+        if not points:
+            continue
+        score += points
+        label = source.replace("_", " ")
+        components.append(
+            (
+                f"{label} evidence",
+                round(points, 3),
+                f"{len(refs)} {label} reference(s) at {refs[0].weight} each",
+            )
+        )
+
+    if verified_count:
+        points = verified_count * VERIFIED_CITATION_WEIGHT
+        score += points
+        components.append(
+            (
+                "verified citations",
+                round(points, 3),
+                f"{verified_count} citation(s) anchored to real source "
+                f"at {VERIFIED_CITATION_WEIGHT} each",
+            )
+        )
 
     sources = {ref.source for ref in evidence_refs}
     if len(sources) >= 3:
         score += SOURCE_DIVERSITY_BONUS
+        components.append(
+            (
+                "source diversity",
+                SOURCE_DIVERSITY_BONUS,
+                f"{len(sources)} independent evidence sources agree",
+            )
+        )
 
     if reproduction.get("status") == "CONFIRMED":
-        score += 0.05
+        score += RUNTIME_CONFIRMED_BONUS
+        components.append(
+            (
+                "runtime confirmation",
+                RUNTIME_CONFIRMED_BONUS,
+                "A3.5 reproduced the failure as a failing test",
+            )
+        )
 
-    return min(1.0, round(score, 3))
+    return min(1.0, round(score, 3)), components
 
 
 def synthesize_root_cause_summary(

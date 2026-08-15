@@ -4,9 +4,12 @@ from pathlib import Path
 import pytest
 
 from backend.services.repo_layout import (
+    bandit_exclude_arg,
     discover_source_roots,
     is_production_file,
+    is_vendor_path,
     resolve_scan_paths,
+    semgrep_exclude_args,
 )
 
 
@@ -70,3 +73,37 @@ def test_resolve_scan_paths(repo_tmp):
     paths = resolve_scan_paths(repo_tmp, ["src/pkg/"])
     assert len(paths) == 1
     assert paths[0].name == "pkg"
+
+
+# -- is_vendor_path / scanner exclude args --------------------------------
+
+
+def test_is_vendor_path_flags_installed_dependency_source():
+    assert is_vendor_path("vuln-demo/.venv/Lib/site-packages/httpx/_auth.py") is True
+    assert is_vendor_path("frontend/node_modules/lodash/lodash.js") is True
+    assert is_vendor_path("some/dist-packages/pkg.py") is True
+    assert is_vendor_path(".git/hooks/pre-commit") is True
+    assert is_vendor_path("build/output.py") is True
+
+
+def test_is_vendor_path_does_not_flag_a_repositorys_own_tests_or_docs():
+    """`is_vendor_path` is narrower than `is_excluded_path` on purpose — a
+    test file is the repository's own code, not a dependency, even though
+    source-root discovery (`is_excluded_path`) treats it as non-production."""
+    assert is_vendor_path("tests/test_auth.py") is False
+    assert is_vendor_path("docs/README.md") is False
+    assert is_vendor_path("app/auth.py") is False
+
+
+def test_bandit_exclude_arg_covers_venv_and_site_packages():
+    arg = bandit_exclude_arg()
+    assert "*/.venv/*" in arg
+    assert "*/site-packages/*" in arg
+    assert "*/node_modules/*" in arg
+
+
+def test_semgrep_exclude_args_one_flag_per_directory():
+    args = semgrep_exclude_args()
+    assert "--exclude=.venv" in args
+    assert "--exclude=node_modules" in args
+    assert "--exclude=site-packages" in args

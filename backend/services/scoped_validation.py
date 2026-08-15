@@ -8,7 +8,7 @@ from pathlib import Path
 from backend.models.validation import ValidationFailure
 from backend.services.reproduction_commands import FULL_SUITE_COMMAND, build_targeted_reproduction_command
 from backend.services.reproduction_parser import extract_failed_nodeids, load_pytest_report
-from backend.services.subprocess_runner import run_command
+from backend.services.subprocess_runner import PYTHON, run_command
 from backend.services.validation_failure_parser import parse_validation_failure, validation_report_path
 
 
@@ -90,7 +90,7 @@ async def run_scoped_validation(
 
     target_cmd = build_targeted_reproduction_command(target_test)
     target_args = [
-        "python",
+        PYTHON,
         "-m",
         "pytest",
         target_test,
@@ -140,7 +140,7 @@ async def run_scoped_validation(
         regression_report_path.unlink()
 
     regression_args = [
-        "python",
+        PYTHON,
         "-m",
         "pytest",
         "-v",
@@ -210,7 +210,7 @@ async def _run_full_suite_fallback(
 
     code, stdout, stderr = await run_command(
         [
-            "python",
+            PYTHON,
             "-m",
             "pytest",
             "-v",

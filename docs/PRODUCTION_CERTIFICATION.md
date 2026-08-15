@@ -13,6 +13,12 @@ capability areas remain unverified. Phase 5 recommendation is qualified; see §7
 > document, plus §12 for negative-path runs. `diff_only` and a failing security
 > score remain verified-at-the-gate but unobserved in live execution.
 
+> **Phase 9 round (2026-08-09).** A fresh certification pass against five real
+> public GitHub repositories, covering all three terminal outcomes. **Four new
+> defects found, none yet fixed** — one of them severe enough to change the
+> recommendation. See **§13**. Until D-1 and D-2 are closed, the status below
+> should be read as **FAIL for hosted use on macOS**, not conditional pass.
+
 ---
 
 ## 1. Repositories under test
@@ -628,3 +634,234 @@ and remains unobserved in live execution. Recorded as a limitation, not resolved
 | Mutation measured, failing | **yes** | 0.50 → correctness 40 |
 | `diff_only` | no | gate-verified only (§6) |
 | A9 measured, failing | no | gate-verified only (§12.4) |
+
+---
+
+# 13. Phase 9 — Final QA round (2026-08-09)
+
+Five real public GitHub repositories, cloned as a user's repository actually
+arrives — nothing installed, nothing prepared. Real Mistral calls
+(`codestral-latest`), real subprocesses, `GITHUB_DRY_RUN=true` so no pull
+request was published. All three terminal outcomes reached.
+
+Every earlier round in this document validated the *decision* layer. This round
+validated the *evidence* layer, and that is where it found things.
+
+## 13.1 Runs
+
+| Repository | Outcome | Wall clock | Environment verdict |
+|---|---|---|---|
+| `sindresorhus/is` | blocked | 5.1 s | `unsupported` — node |
+| `github/gitignore` | blocked | 5.4 s | `no_manifest` |
+| `pallets/itsdangerous` | blocked | 7.9 s | `not_prepared` — `freezegun` |
+| `pytoolz/toolz` | **completed** | 35.1 s | `ready` |
+| `pytoolz/<nonexistent>` | failed | 3.9 s | — (clone failed) |
+
+`toolz` executed the full chain: A0.7 → A0.5 → A1 → A2 → A3 → A3.5 → A4 → A5 →
+A5.5 → A6 → A7 → A8 → A10, three retries, ending `draft`.
+
+## 13.2 What the interpreter fix closed first
+
+Before any of the above, a bare `"python"` was argv[0] at seven subprocess call
+sites — the probe, A3.5, three in scoped validation, two mutmut calls. That
+resolves through `PATH`, which is whatever the server process inherited and is
+**not** the interpreter ProoFix runs under. The probe reported
+`No module named 'pytest'` while ProoFix's own interpreter had pytest installed,
+inside a message claiming to describe *"the interpreter ProoFix would run its
+tests with"* — the one thing it was not.
+
+`subprocess_runner.PYTHON = sys.executable` closes it, with a test that fails if
+any of those modules reintroduces a bare interpreter. The probe and reproduction
+now answer the same question by construction. **This is why the four blocked
+verdicts above can be trusted at all**; before it, every one of them was a
+coin toss on the server's `PATH`.
+
+## 13.3 Defects found
+
+### D-1 — the privacy guard eats absolute file paths out of tracebacks `[critical]`
+
+`scan_text` reuses `_VALUE_RULES` — the rule table written for `scan_source`,
+where each pattern matches a whole Python string literal — by **stripping the
+`^` and `$` anchors** and running an unanchored `finditer`. That is harmless for
+the prefix-shaped rules (PEM, JWT, `AKIA…`). For the email rule it is not:
+
+```
+^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$   →   [^@\s]+@[^@\s]+\.[A-Za-z]{2,}
+```
+
+De-anchored, `[^@\s]+` spans slashes. Any absolute path containing `@` and
+ending in a dotted alphabetic extension matches **in full**, and the subsequent
+`result.replace(value, …)` removes every occurrence of it.
+
+Observed on run `46cd2ca6`, `toolz`. The reproduction's traceback:
+
+```
+/opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/
+  Versions/3.14/lib/python3.14/importlib/metadata/__init__.py:407: StopIteration
+```
+
+reached A5.5's context package — and the patch prompt — as:
+
+```
+<REDACTED_EMAIL>:407: StopIteration
+```
+
+Four frames, all four destroyed, ledger reporting four `email_address`
+redactions and `privacy_guard_status: "masked"`. **The guard believes it did its
+job.** Reproduced directly:
+
+| Input | Output |
+|---|---|
+| `/opt/homebrew/Cellar/python@3.14/…/__init__.py:407: StopIteration` | `<REDACTED_EMAIL>:407: StopIteration` |
+| `/Users/dana@corp/project/app.py:12: ValueError` | `<REDACTED_EMAIL>:12: ValueError` |
+| `File "/srv/build@2/pkg/mod.py", line 9, in handler` | `File <REDACTED_EMAIL>", line 9, in handler` |
+| `contact ada@example.com for help` | `contact <REDACTED_EMAIL> for help` (correct) |
+
+**Why this is critical rather than cosmetic.** The traceback is the pipeline's
+strongest deterministic signal: `CLAUDE.md` §6.4 scores `STACK_FRAME_EXACT` at
+`1.00`, above every other input. Destroying the frame paths does not merely
+degrade a display — it removes the top-weighted ranking evidence before ranking
+runs. On this run the consequence was visible end to end:
+
+```
+target_file:     toolz/compatibility.py     ← a deprecated Python-2 shim
+target_function: None                       ← none could be inferred
+```
+
+A7 then spent **four attempts and 9,687 tokens** patching a module with nothing
+to do with the failure, all four were rejected, and the run ended `draft`.
+
+On Homebrew macOS the interpreter path contains `@` **by construction**
+(`python@3.14`), so this fires on every run whose traceback enters the stdlib.
+Elsewhere it needs only a user or build path containing `@`.
+
+The fix is not to weaken detection: anchor the email rule per-token rather than
+per-line, and stop treating one shared rule table as valid under two different
+matching disciplines.
+
+### D-2 — `ready` does not mean the package under test is installed `[high]`
+
+`toolz` was reported `ready` and it was not. `pytest --collect-only` succeeded —
+collection imports test modules from the repository root and needs no
+*installed* distribution — while the package's own metadata was absent. The one
+failing test was the repository's self-check:
+
+```python
+def test_has_version():
+    # If this test fails, then toolz probably isn't installed properly.
+    # For local development, try `pip install -e .` from the project directory
+```
+
+A3.5 recorded it as `CONFIRMED` at 90 % confidence. It is not a bug; it is the
+suite saying the environment is wrong — precisely what A0.7 exists to say, and
+A0.7 had just said the opposite.
+
+This is the exact mirror of §2.1's false block. That round fixed a probe that
+was too strict by moving from import sampling to `--collect-only`; this round
+shows `--collect-only` is too permissive in the other direction. **A false
+`ready` is cheaper than a false block but not free:** it produced a fabricated
+repair target and a full four-attempt retry loop.
+
+The narrow fix is to recognise `importlib.metadata.PackageNotFoundError` naming
+the repository's own distribution as an environment verdict rather than a
+reproduction. The general one is that "collection succeeded" and "the project is
+installed" are different claims and A0.7 currently makes the second on evidence
+for the first.
+
+### D-3 — the blocked decision label contradicts the reason under it `[medium]`
+
+`"Environment not prepared"` is hardcoded at three sites
+(`ui_projection.py:420`, `runner.py:122`, `Workspace.tsx:1228`) and applied to
+all three blocking statuses. Two of them are not about preparation:
+
+| Probe status | Reason shown | Label shown |
+|---|---|---|
+| `not_prepared` | dependencies are not installed | Environment not prepared ✅ |
+| `unsupported` | *"This is a node project. ProoFix … repairs Python only"* | Environment not prepared ❌ |
+| `no_manifest` | *"No dependency manifest was found"* | Environment not prepared ❌ |
+
+Observed on `sindresorhus/is` and `github/gitignore`. Nothing about a node
+repository is unprepared, and no preparation will change the verdict — the label
+sends the user to do work that cannot help, directly over a sentence explaining
+why. The reason is right; the badge above it is wrong.
+
+### D-4 — `currentAgent` is stale on every terminal run `[low]`
+
+Both the blocked and the completed runs report `currentAgent: "fan-in"` after
+finishing. `toolz` ended at A10; the blocked runs ended at `halt_environment`.
+Neither is `fan-in`. The lifecycle record is correct, so nothing user-facing is
+known to depend on it today — filed so it is not discovered later by something
+that does.
+
+## 13.4 Measurements
+
+Per-agent token and cost attribution, run `46cd2ca6`, read from the audit log by
+`run_id` — **B-B05 verified live**, not just unit-tested.
+
+| Agent | Calls | Tokens | Cost | Latency |
+|---|---|---|---|---|
+| A1 | 1 | 2,714 | $0.001211 | 4.7 s |
+| A4 | 3 | 12,647 | $0.004342 | 12.7 s |
+| A6 | 1 | 242 | $0.000104 | 1.0 s |
+| A7 | 4 | 9,687 | $0.003760 | 10.7 s |
+| **Total** | **9** | **25,290** | **$0.009417** | 33.0 s wall |
+
+Two things this contradicts:
+
+* **A7 is not the most expensive call in the pipeline.** `CLAUDE.md` §6.8
+  assumes it is; on this run **A4 cost 31 % more than A7** (12,647 tokens vs
+  9,687) despite A7 running one more time.
+* **A4's reinvestigation loop bought nothing.** Three calls, 12,647 tokens, and
+  `Verified = 0` of 2 citations — the run ended with `citations_unverified` as a
+  draft reason. This is the failure `CLAUDE.md` §3 predicts verbatim: the
+  re-prompt is identical because the verification result is computed and then
+  discarded rather than fed back. It is now measured rather than predicted, and
+  it is the cheapest large saving available in the pipeline.
+
+Environment-blocked runs terminate in **5–8 s** for €0 in LLM spend, including a
+full A1/A2/A3 static pass. That is A0.7 working as designed.
+
+## 13.5 Test suites at certification
+
+| Suite | Result |
+|---|---|
+| Backend `pytest tests` | **2,078 passed**, 1 failed |
+| Frontend `vitest run` | **66 passed** (7 files) |
+| `tsc --noEmit` | clean |
+| `vite build` | succeeds |
+
+The single backend failure is `test_reproduction_stability_gate`, unchanged and
+still environmental: it asserts `get_head_sha(vulnapi)` is non-empty, the
+`vulnapi/` fixture has no `.git`, and its skip guard checks only that the
+directory exists. Confirmed identical on a stashed tree.
+
+## 13.6 Not verified in this round
+
+* **Browser pass.** No browser automation exists in this repository — there is
+  no Playwright, and `vitest` runs on jsdom. Type-check, unit tests and a
+  production build all pass, which is not the same claim as "the console is
+  clean and no error boundary trips". §5 and §10's browser results stand from
+  their own rounds and were **not** re-verified here.
+* **Sandboxing (B-B12)** and **the Redis checkpointer (B-B13)** remain open by
+  decision, not oversight. Every subprocess in this round ran against cloned
+  code with the host interpreter.
+* **`diff_only`** and **a failing security score** are still gate-verified only,
+  unchanged from §12.5.
+
+## 13.7 Verdict
+
+**The routing layer certified in earlier rounds held.** Every decision this
+round reached was correct *given the evidence it was handed* — blocked runs
+blocked for the right reason, the failed run failed, and the completed run
+correctly refused to merge a patch that did not pass.
+
+**The evidence layer did not hold.** D-1 silently deletes the highest-weighted
+input to target selection on any host whose paths contain `@`, and D-2 lets a
+misconfigured environment through as a confirmed bug. Together they produced a
+run that looked healthy at every stage — twelve agents completed, cost
+attributed, guard status reported — and repaired a file chosen from evidence
+that had been destroyed before ranking saw it.
+
+A trust-gated system whose gates are sound and whose evidence is corrupted is
+worse than one that fails loudly, because the gates make the output look
+earned. **D-1 must be fixed before any further certification claim is made.**

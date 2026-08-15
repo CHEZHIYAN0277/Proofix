@@ -181,6 +181,30 @@ class TestPipelineGate:
         assert after_environment(state) == "reproduction_gate"
 
 
+class TestCurrentAgentOnHalt:
+    """B-B20: `current_agent` must name the agent that actually stopped the
+    run, not whatever ran last in `parallel_intel`/`layer1_fan_in`."""
+
+    @pytest.mark.asyncio
+    async def test_halt_environment_sets_current_agent_to_the_probe(self):
+        import fakeredis.aioredis
+
+        from backend.config import Settings
+        from backend.orchestrator.nodes import GraphNodes
+        from backend.state.redis_store import RedisStore
+        from backend.state.schema import RunStateModel
+
+        client = fakeredis.aioredis.FakeRedis(decode_responses=False)
+        store = RedisStore(client, Settings(redis_url="redis://localhost:6379/0"))
+        nodes = GraphNodes(store, Settings(redis_url="redis://localhost:6379/0"))
+
+        state = RunStateModel(run_id="r", repo_path="/tmp/x", current_agent="fan-in")
+        result = await nodes.halt_environment(state)
+
+        assert result.current_agent == "A0.7"
+        await client.aclose()
+
+
 class TestBlockedRunProjection:
     def test_blocked_is_not_failed_and_not_pending(self):
         from backend.services.ui_projection import run_decision
@@ -251,8 +275,13 @@ class TestProjectDependenciesAreChecked:
 
         report = await probe_environment(tmp_path, timeout=120)
 
-        if not report.test_runner_available:
-            pytest.skip("`python` on PATH has no pytest; collection cannot be exercised")
+        # No skip guard. These tests once began with
+        # `if not report.test_runner_available: pytest.skip(...)`, because the
+        # probe shelled out to a bare `python` from PATH which frequently had no
+        # pytest. The probe now uses `sys.executable`, so a test executing under
+        # pytest is proof that the probed interpreter has pytest — the guard
+        # became unreachable, and an unreachable guard around an assertion is
+        # just a way to stop asserting.
 
         assert report.blocking is True
         assert report.status == "not_prepared"
@@ -280,8 +309,13 @@ class TestProjectDependenciesAreChecked:
 
         report = await probe_environment(tmp_path, timeout=120)
 
-        if not report.test_runner_available:
-            pytest.skip("`python` on PATH has no pytest")
+        # No skip guard. These tests once began with
+        # `if not report.test_runner_available: pytest.skip(...)`, because the
+        # probe shelled out to a bare `python` from PATH which frequently had no
+        # pytest. The probe now uses `sys.executable`, so a test executing under
+        # pytest is proof that the probed interpreter has pytest — the guard
+        # became unreachable, and an unreachable guard around an assertion is
+        # just a way to stop asserting.
 
         assert report.blocking is False
         assert report.status == "ready"
@@ -297,8 +331,13 @@ class TestProjectDependenciesAreChecked:
 
         report = await probe_environment(tmp_path, timeout=120)
 
-        if not report.test_runner_available:
-            pytest.skip("`python` on PATH has no pytest")
+        # No skip guard. These tests once began with
+        # `if not report.test_runner_available: pytest.skip(...)`, because the
+        # probe shelled out to a bare `python` from PATH which frequently had no
+        # pytest. The probe now uses `sys.executable`, so a test executing under
+        # pytest is proof that the probed interpreter has pytest — the guard
+        # became unreachable, and an unreachable guard around an assertion is
+        # just a way to stop asserting.
 
         assert report.blocking is False
         assert report.status == "ready"
@@ -348,11 +387,117 @@ class TestMissingModuleParsing:
 
         report = await probe_environment(tmp_path, timeout=120)
 
-        if not report.test_runner_available:
-            pytest.skip("`python` on PATH has no pytest; this case cannot arise here")
+        # No skip guard. These tests once began with
+        # `if not report.test_runner_available: pytest.skip(...)`, because the
+        # probe shelled out to a bare `python` from PATH which frequently had no
+        # pytest. The probe now uses `sys.executable`, so a test executing under
+        # pytest is proof that the probed interpreter has pytest — the guard
+        # became unreachable, and an unreachable guard around an assertion is
+        # just a way to stop asserting.
 
         assert "pytest is not importable" not in report.reason
         assert "definitely_not_a_real_module_xyz" in report.reason
+
+
+class TestTestsCollectedParsing:
+    def test_extracts_collected_count(self):
+        from backend.services.environment_probe import _tests_collected_from_output
+
+        assert _tests_collected_from_output("3 tests collected in 0.01s") == 3
+
+    def test_single_test_is_still_parsed(self):
+        from backend.services.environment_probe import _tests_collected_from_output
+
+        assert _tests_collected_from_output("1 test collected in 0.00s") == 1
+
+    def test_no_tests_collected_is_zero_not_none(self):
+        from backend.services.environment_probe import _tests_collected_from_output
+
+        assert _tests_collected_from_output("no tests collected in 0.00s") == 0
+
+    def test_absent_summary_is_none(self):
+        from backend.services.environment_probe import _tests_collected_from_output
+
+        assert _tests_collected_from_output("") is None
+        assert _tests_collected_from_output("some unrelated output") is None
+
+    def test_collected_with_errors_still_parses_count(self):
+        from backend.services.environment_probe import _tests_collected_from_output
+
+        assert _tests_collected_from_output("3 tests collected, 1 error in 0.01s") == 3
+
+    @pytest.mark.asyncio
+    async def test_ready_environment_reports_a_real_count(self, tmp_path):
+        from backend.services.environment_probe import probe_environment
+
+        (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\n')
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_x.py").write_text("def test_a():\n    assert True\n\ndef test_b():\n    assert True\n")
+
+        report = await probe_environment(tmp_path, timeout=120)
+
+        assert report.status == "ready"
+        assert report.tests_collected == 2
+
+    @pytest.mark.asyncio
+    async def test_empty_suite_reports_zero_not_none(self, tmp_path):
+        from backend.services.environment_probe import probe_environment
+
+        (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\n')
+        (tmp_path / "lib.py").write_text("def add(a, b):\n    return a + b\n")
+
+        report = await probe_environment(tmp_path, timeout=120)
+
+        assert report.status == "ready"
+        assert report.tests_collected == 0
+
+    def test_not_prepared_environment_leaves_count_unset(self):
+        """Collection never ran, so there is nothing to report — not a zero."""
+        from backend.models.environment import EnvironmentReport
+
+        report = EnvironmentReport(status="not_prepared", blocking=True)
+        assert report.tests_collected is None
+
+
+class TestHeaderPublishesProbeError:
+    def test_no_error_recorded_reads_false(self):
+        from backend.services.ui_projection import build_workspace_header
+        from backend.state.schema import RunStateModel
+
+        state = RunStateModel(run_id="r", repo_path="/tmp/x")
+        header = build_workspace_header(state, [])
+
+        assert header["environmentProbeError"] is False
+
+    def test_a07_error_is_surfaced(self):
+        from backend.services.ui_projection import build_workspace_header
+        from backend.state.schema import RunStateModel
+
+        state = RunStateModel(
+            run_id="r",
+            repo_path="/tmp/x",
+            errors=[{"agent": "A0.7", "error": "boom"}],
+        )
+        header = build_workspace_header(state, [])
+
+        assert header["environmentProbeError"] is True
+        # The probe erroring does not mean the environment is known bad —
+        # `environment` itself stays whatever the pipeline last recorded.
+        assert header["environment"] is None
+
+    def test_an_unrelated_agent_error_does_not_trip_the_flag(self):
+        from backend.services.ui_projection import build_workspace_header
+        from backend.state.schema import RunStateModel
+
+        state = RunStateModel(
+            run_id="r",
+            repo_path="/tmp/x",
+            errors=[{"agent": "A4", "error": "boom"}],
+        )
+        header = build_workspace_header(state, [])
+
+        assert header["environmentProbeError"] is False
 
 
 class TestHeaderPublishesEnvironment:

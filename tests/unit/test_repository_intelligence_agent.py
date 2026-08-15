@@ -171,6 +171,18 @@ async def test_loader_returns_none_when_the_layer_did_not_run(store, settings):
 
 
 @pytest.mark.asyncio
+async def test_completed_event_publishes_source_roots(store, settings, repo):
+    """The Repository DNA panel needs this and there is no other endpoint that
+    carries it — `index.source_roots` is real data the agent already computed."""
+    state = make_state(repo)
+    await RepositoryIntelligenceAgent(store, settings).run(state)
+
+    events = await store.get_events(state.run_id)
+    done = [e for e in events if e.agent_id == "A0.5" and e.status == "completed"][-1]
+    assert done.payload["repository_intelligence"]["source_roots"] == ["pkg/"]
+
+
+@pytest.mark.asyncio
 async def test_agent_makes_no_llm_calls(store, settings, repo, monkeypatch):
     """A0.5 is deterministic by construction; assert it stays that way."""
     import backend.services.llm as llm_module

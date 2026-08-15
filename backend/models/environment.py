@@ -41,6 +41,11 @@ class EnvironmentReport(BaseModel):
     #: it is among them, since it is the one that blocks reproduction outright.
     missing_imports: list[str] = Field(default_factory=list)
 
+    #: The number `pytest --collect-only` actually reported, read from its own
+    #: summary line. `None` when collection never ran (runner unavailable) —
+    #: distinct from `0`, which means collection ran and found nothing.
+    tests_collected: int | None = None
+
     #: User-facing explanation, in the backend's own words.
     reason: str = ""
 

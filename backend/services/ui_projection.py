@@ -15,10 +15,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from backend.agents.a10_routing import SCORE_THRESHOLD
+from backend.agents.a10_routing import (
+    SCORE_THRESHOLD,
+    SECURITY_TECHNICAL_THRESHOLD,
+    citation_review_needed,
+    gate_checks,
+)
+from backend.models.pr import AxisScores
 from backend.orchestrator.trust_gating import draft_reasons
 from backend.state.events import AgentStatusEvent
-from backend.services.measurement import measured_mean
+from backend.services.measurement import measured_mean, meets_threshold
 from backend.state.schema import RunStateModel
 
 # ---------------------------------------------------------------- registry --
@@ -409,6 +415,17 @@ def repo_display_name(state: RunStateModel) -> str:
     return tail.replace(".git", "") or "repository"
 
 
+#: B-B19. `state.environment.status` names the actual reason a run halted at
+#: A0.7; collapsing all three blocking statuses into one label contradicted the
+#: `reason` text printed directly beneath the badge.
+_ENVIRONMENT_BLOCK_LABELS: dict[str, str] = {
+    "unsupported": "Unsupported repository",
+    "no_manifest": "No dependency manifest",
+    "not_prepared": "Environment not prepared",
+    "no_test_runner": "No test runner available",
+}
+
+
 def run_decision(state: RunStateModel) -> tuple[str, str]:
     """Return (decision, human label) in the UI's vocabulary."""
     if state.status == "failed":
@@ -417,7 +434,9 @@ def run_decision(state: RunStateModel) -> tuple[str, str]:
     # produced a patch, so there is no PR type to read — reporting "Pending"
     # here (the old fallthrough) implied work still in progress.
     if state.status == "blocked":
-        return "blocked", "Environment not prepared"
+        env_status = (state.environment or {}).get("status")
+        label = _ENVIRONMENT_BLOCK_LABELS.get(env_status, "Environment not prepared")
+        return "blocked", label
     decision = (state.pr_decision or {}).get("pr_type")
     if decision == "auto_mergeable":
         return "merge", "Auto Merge"
@@ -526,6 +545,16 @@ def _agent_duration(events_for_agent: list[AgentStatusEvent]) -> str:
 def _lines_for(card: str, state: RunStateModel, events_for_agent: list[AgentStatusEvent]) -> list[str]:
     """Narrate what the agent did, from its own emitted messages plus state."""
     lines = [e.message for e in events_for_agent if e.message]
+    if card == "context":
+        # The completed-event summary ("Context: N function(s) from M
+        # file(s), X% token reduction") repeats, in prose, exactly what the
+        # funnel panel (`ContextEngineeringPanel`) already shows visually —
+        # real candidate/extracted/function counts, named files and
+        # functions, and token reduction in its own labelled section.
+        # Filtered here only, not at the source: the event itself still
+        # carries the message for `/events` and the audit trail, this only
+        # keeps it out of the duplicated card-level narration.
+        lines = [line for line in lines if not line.startswith("Context: ")]
     detail = _narrative_detail(card, state)
     if card == "intelligence":
         # A0.5 publishes nothing to run state, so its detail comes from the
@@ -716,12 +745,35 @@ def _latest_payload(events_for_agent: list[AgentStatusEvent], key: str) -> dict:
     return {}
 
 
+def _a7_patch_metrics_by_file(events_for_agent: list[AgentStatusEvent]) -> dict[str, dict]:
+    """A7's own per-file generation provenance, keyed by the file it patched.
+
+    `a7_patch_metrics` is a single dict when A7 attempted one plan and a list
+    when it attempted several (`a7_code_generation.py`); this normalizes both
+    and keys on `file`, the one field that ties an attempt back to a specific
+    `PatchCandidate` in the bundle. Reads only the most recent completed A7
+    event — a retry regenerates the whole bundle, so an earlier event's
+    provenance no longer describes what is on `state.patch_bundle` now.
+    """
+    for event in reversed(events_for_agent):
+        if event.status != "completed":
+            continue
+        raw = (event.payload or {}).get("a7_patch_metrics")
+        if not raw:
+            continue
+        entries = raw if isinstance(raw, list) else [raw]
+        return {
+            m["file"]: m for m in entries if isinstance(m, dict) and m.get("file")
+        }
+    return {}
+
+
 def _metrics_for(
     card: str,
     state: RunStateModel,
     duration: str,
     events_for_agent: list[AgentStatusEvent] | None = None,
-) -> list[dict]:
+) -> list[dict] | None:
     def metric(label: str, value: Any) -> dict:
         return {"label": label, "value": str(value)}
 
@@ -731,11 +783,13 @@ def _metrics_for(
         env = state.environment or {}
         if not env:
             return [metric("Duration", duration)]
+        tests_collected = env.get("tests_collected")
         return [
             metric("Environment", env.get("status") or "unknown"),
             metric("Language", env.get("language") or "—"),
             metric("Test Runner", env.get("test_runner") or "—"),
             metric("Blocking", "yes" if env.get("blocking") else "no"),
+            metric("Tests Collected", "not measured" if tests_collected is None else tests_collected),
         ]
 
     if card == "intelligence":
@@ -755,23 +809,13 @@ def _metrics_for(
         ]
 
     if card == "context":
-        published = _latest_payload(events_for_agent, "context_engineering")
-        if not published or published.get("skipped"):
-            return [metric("Duration", duration)]
-        reduction = published.get("token_reduction")
-        return [
-            metric("Files Ranked", published.get("files_ranked", 0)),
-            metric("Context Files", published.get("context_files", 0)),
-            metric("Context Functions", published.get("context_functions", 0)),
-            metric(
-                "Token Reduction",
-                f"{float(reduction) * 100:.0f}%" if reduction is not None else "—",
-            ),
-            metric("Prompt Tokens", published.get("estimated_prompt_tokens", 0)),
-            metric("Redactions", published.get("privacy_redactions", 0)),
-            metric("Privacy Guard", published.get("privacy_guard_status", "—")),
-            metric("Duration", duration),
-        ]
+        # `ContextEngineeringPanel` (`GET /api/runs/{id}/context`) already
+        # shows every one of these numbers — files ranked, extracted,
+        # context functions, token reduction, redactions, privacy status —
+        # more prominently than this generic grid ever did. `None` (not an
+        # empty list) so `AgentCard` omits the "Supporting metrics" section
+        # entirely rather than rendering it with nothing to say.
+        return None
 
     if card == "repo-intel":
         sig = state.sig or {}
@@ -897,6 +941,7 @@ def _evidence_for(
         manifests = [
             str(m.get("path")) for m in (env.get("manifests") or []) if m.get("path")
         ]
+        tests_collected = env.get("tests_collected")
         return payload(
             "Environment Report",
             "Whether this repository's tests can execute here.",
@@ -904,6 +949,20 @@ def _evidence_for(
                 field("Status", env.get("status") or "unknown", True),
                 field("Language", env.get("language") or "—", True),
                 field("Test runner", env.get("test_runner") or "—", True),
+                field(
+                    "Test runner available",
+                    "yes" if env.get("test_runner_available") else "no",
+                    True,
+                ),
+                field(
+                    "Tests collected",
+                    "not measured" if tests_collected is None else tests_collected,
+                    True,
+                ),
+                field(
+                    "Missing imports",
+                    ", ".join(env.get("missing_imports") or []) or "none",
+                ),
                 field("Reason", str(env.get("reason") or "—")),
                 field("Suggested command", str(env.get("suggested_command") or "—"), True),
             ],
@@ -1458,47 +1517,52 @@ def _visualization_for(
         return {"kind": "planner", "data": {"nodes": nodes, "edges": edges[:8]}}
 
     if card == "patch":
+        # The full diff/original/patched source lives at `GET
+        # /runs/{id}/patch` (`PatchBundle`, fetched directly by the
+        # frontend's patch panel) — this payload carries only what that
+        # endpoint cannot: per-file generation provenance, which A7 computes
+        # but only ever emits on its status event, never onto `RunStateModel`.
         bundle = state.patch_bundle or {}
         patches = bundle.get("patches") or []
         if not patches:
             return None
-        diff_lines = str(bundle.get("diff_text") or "").splitlines()
-        original = [
-            {"t": ln[1:][:78], "op": "del" if ln.startswith("-") else "ctx"}
-            for ln in diff_lines
-            if (ln.startswith("-") and not ln.startswith("---")) or ln.startswith(" ")
-        ][:8]
-        generated = "\n".join(
-            ln[1:] for ln in diff_lines if ln.startswith("+") and not ln.startswith("+++")
-        )[:600]
-        contracts = bundle.get("contracts") or []
-        return {
-            "kind": "patch",
-            "data": {
-                "thoughts": [str(c.get("assertion"))[:90] for c in contracts[:3]],
-                "original": original or [{"t": "(no context lines)", "op": "ctx"}],
-                "generated": generated or "(no additions)",
-                # "AST validated" and "Integrity checked" were emitted for every
-                # patch whether or not either check had run, which is exactly the
-                # kind of unearned assurance this product exists to avoid. A7
-                # stamps each candidate with the write method it actually used,
-                # so the badge follows that.
-                "badges": (
-                    ["AST validated"]
-                    if all(p.get("method") == "ast_validated_write" for p in patches)
-                    else []
-                )
-                + [p.get("file", "") for p in patches[:2]],
-            },
-        }
+        metrics_by_file = _a7_patch_metrics_by_file(events_for_agent)
+        files = []
+        for p in patches:
+            file = p.get("file", "")
+            m = metrics_by_file.get(file, {})
+            target_file = m.get("target_file")
+            files.append(
+                {
+                    "file": file,
+                    "method": p.get("method"),
+                    # `target_file` is the same value — `blast.origins[0]` —
+                    # on every plan in a run, so this is real set membership,
+                    # not a per-file resolution A7 actually performed.
+                    "isTarget": bool(target_file) and file == target_file,
+                    "targetFunction": m.get("target_function"),
+                    "generationSource": m.get("generation_source"),
+                    "contextSource": m.get("context_source"),
+                    "runtimePrompt": m.get("runtime_prompt"),
+                    "retryNumber": m.get("retry_number"),
+                    "retryReason": m.get("retry_reason"),
+                    "semanticDiff": m.get("semantic_diff"),
+                }
+            )
+        return {"kind": "patch", "data": {"files": files}}
 
     if card == "mutation":
         mutation = state.mutation_result or {}
         if not mutation:
             return None
-        survived = bool(mutation.get("mutant_survived"))
         score = mutation.get("mutation_score")
         correctness = mutation.get("correctness_score")
+        # `mutant_survived` defaults to `False` whether or not mutation ever
+        # ran, so reading it directly renders "none survived" for a suite that
+        # was never mutated. `mutation_status == "scored"` is the only signal
+        # that a measurement actually happened; anything else is unmeasured.
+        scored = mutation.get("mutation_status") == "scored"
+        survived: bool | None = bool(mutation.get("mutant_survived")) if scored else None
         # A8 records an aggregate, not a per-mutant ledger. This used to emit
         # eight fabricated mutants with a kill count of 6-or-4 picked from a
         # boolean, and the UI computed a percentage from them — a chart of
@@ -1508,6 +1572,7 @@ def _visualization_for(
             "data": {
                 "score": float(score) if score is not None else None,
                 "survived": survived,
+                "survivedMutants": mutation.get("survived_mutants"),
                 "pytestPassed": bool(mutation.get("pytest_passed")),
                 "correctness": float(correctness) if correctness is not None else None,
                 "correctnessThreshold": SCORE_THRESHOLD,
@@ -1565,17 +1630,727 @@ def _visualization_for(
                 ),
             }
         )
+        # The composite gauge used to recompute its own weighted average from
+        # three of the four axes client-side — a second trust formula living
+        # in the frontend, disagreeing with the `trustScore` shown elsewhere
+        # on the same page (which is `_trust_score`'s mean of every *measured*
+        # axis). One authoritative composite, computed once, here.
+        composite = _trust_score(state)
         return {
             "kind": "merge",
             "data": {
                 "metrics": metrics,
-                "weights": [0.4, 0.35, 0.25],
+                "compositeScore": None if composite is None else round(composite * 100),
                 "decisionLabel": label,
                 "reviewNote": str(decision_data.get("review_note") or "All trust gates satisfied."),
             },
         }
 
     return None
+
+
+# A1's six architectural roles (`models.sig.FileRole`). Named here rather than
+# imported from the model so this module states, independently, exactly which
+# roles it will report a count for — a role the model gains later shows up as
+# 0 until this list is updated, rather than silently appearing.
+SEMANTIC_ROLES: tuple[str, ...] = (
+    "auth-boundary",
+    "data-access",
+    "public-api",
+    "config-surface",
+    "test-only",
+    "internal-util",
+)
+
+
+def build_semantic_graph(state: RunStateModel) -> dict | None:
+    """A1's Semantic Intent Graph, projected for the workspace panel.
+
+    Distinct from A0.5's Repository Knowledge Graph (`/api/knowledge/...`):
+    A0.5 answers "what exists and how is it wired" — structural containment,
+    call graph, git ownership. A1 answers "what does this code appear to do"
+    — one of six architectural roles per file (`SEMANTIC_ROLES`), plus the
+    import edges and the criticality/churn signal that role was weighed
+    against. Nothing here is recomputed from A0.5's graph; every field traces
+    to `SemanticIntentGraph` (`models/sig.py`), which A1 alone builds.
+
+    Returns `None` when A1 has not produced a SIG yet — the caller renders
+    that as pending/unavailable, never as an empty graph.
+    """
+    sig = state.sig or {}
+    files = sig.get("files") or {}
+    if not files:
+        return None
+
+    role_counts: dict[str, int] = {role: 0 for role in SEMANTIC_ROLES}
+    out_files: list[dict] = []
+    for path, node in files.items():
+        role = node.get("role") or "internal-util"
+        if role in role_counts:
+            role_counts[role] += 1
+        out_files.append(
+            {
+                "path": path,
+                "role": role,
+                "imports": list(node.get("imports") or []),
+                "importedBy": list(node.get("imported_by") or []),
+                "churnWeight": float(node.get("churn_weight") or 0.0),
+                "criticality": float(node.get("criticality") or 0.0),
+            }
+        )
+    # Highest-criticality first: this is the order the hotspot list and the
+    # architecture view read files in, so it is sorted once, here, rather than
+    # by every consumer.
+    out_files.sort(key=lambda f: (-f["criticality"], f["path"]))
+
+    return {
+        "generatedAt": sig.get("generated_at"),
+        "sourceRoots": list(sig.get("source_roots") or []),
+        "files": out_files,
+        "edges": [list(e) for e in (sig.get("edges") or [])],
+        "roleCounts": role_counts,
+        "totalFiles": len(out_files),
+        "totalEdges": len(sig.get("edges") or []),
+    }
+
+
+# A2's classification is a reachability verdict, not a CVSS severity band —
+# it answers "does this repository's own import graph reach the vulnerable
+# package", which `severity` (a free-form OSV string, sometimes a CVSS score,
+# sometimes the literal word "HIGH") cannot answer on its own. Ordered
+# highest-attention-first: confirmed-reachable, then undetermined, then
+# confirmed-inert.
+_CLASSIFICATION_ORDER = {"Critical": 0, "Unknown": 1, "Informational": 2}
+
+
+def build_dependency_risk(state: RunStateModel) -> dict | None:
+    """A2's dependency/CVE reachability report, projected for the workspace panel.
+
+    Distinct from A1's semantic roles and A0.5's structural graph: A2 answers
+    "what does this repository depend on, and is any of that reachable" — OSV
+    advisories narrowed by the import graph A1 built. Every field traces to
+    `CVEReachabilityReport` (`models/cve.py`), which A2 alone writes.
+
+    Returns `None` before A2 has run. A run that completed and found zero
+    advisories still returns a payload — `manifest` set, `totalDependencies`
+    real, `findings` empty — because "analyzed and clean" and "never ran" are
+    different facts the caller must render differently.
+    """
+    cve = state.cve_report
+    if cve is None:
+        return None
+
+    findings = cve.get("findings") or []
+    out_findings = [
+        {
+            "package": f.get("package"),
+            "cveId": f.get("cve_id"),
+            "severity": f.get("severity"),
+            "installedVersion": f.get("installed_version"),
+            "affectedSymbol": f.get("affected_symbol"),
+            "reachable": f.get("reachable"),
+            "reachPath": f.get("reach_path"),
+            "classification": f.get("classification") or "Unknown",
+        }
+        for f in findings
+    ]
+    out_findings.sort(key=lambda f: _CLASSIFICATION_ORDER.get(f["classification"], 3))
+
+    return {
+        "manifest": cve.get("manifest"),
+        "ecosystem": cve.get("ecosystem"),
+        "totalDependencies": cve.get("total_dependencies") or 0,
+        "advisoryCount": len(findings),
+        "reachableCount": sum(1 for f in out_findings if f["classification"] == "Critical"),
+        "informationalCount": sum(
+            1 for f in out_findings if f["classification"] == "Informational"
+        ),
+        "unknownCount": sum(1 for f in out_findings if f["classification"] == "Unknown"),
+        "findings": out_findings,
+    }
+
+
+def build_static_findings(state: RunStateModel) -> dict | None:
+    """A3's static-analysis findings, projected for the workspace panel.
+
+    Distinct from A0.5's structure, A1's roles, and A2's dependency risk: A3
+    answers "what did the scanners find in this repository's own source, and
+    why does one finding outrank another". Every field traces to
+    `StaticAnalysisReport` (`models/findings.py`), which A3 alone writes.
+
+    Returns `None` before A3 has run. A run that completed and ranked zero
+    findings still returns a payload (`scannerStatus` populated, `rawCount`
+    real, `findings` empty) — "ran clean" and "never ran" are different facts.
+    """
+    static = state.static_report
+    if static is None:
+        return None
+
+    prioritized = static.get("prioritized") or []
+    findings = [
+        {
+            "id": f.get("id"),
+            "rank": idx + 1,
+            "file": f.get("file"),
+            "line": f.get("line"),
+            "message": f.get("message"),
+            "tools": list(f.get("tools") or []),
+            "severity": f.get("severity"),
+            "severityMeasured": bool(f.get("severity_measured", False)),
+            "consensus": bool(f.get("consensus", False)),
+            "blastRadiusScore": f.get("blast_radius_score"),
+            "criticality": f.get("criticality"),
+            "churnWeight": f.get("churn_weight"),
+        }
+        for idx, f in enumerate(prioritized)
+    ]
+
+    return {
+        "scannerStatus": dict(static.get("scanner_status") or {}),
+        "rawCount": static.get("raw_count") or 0,
+        "prioritizedCount": len(findings),
+        "findings": findings,
+    }
+
+
+def build_security_rescan(state: RunStateModel) -> dict | None:
+    """A9's post-patch security re-scan, projected for the workspace panel.
+
+    A9 answers one question — did the patch introduce a finding that was not
+    in A3's pre-patch baseline — and nothing else. It does not compare
+    severity (`_run_bandit`/`_run_semgrep` assign every finding the same
+    constant 0.7, never a real per-issue measurement, so `severity` is
+    deliberately omitted from `newFindings` here rather than displayed as
+    something it is not), and it does not compute resolved/unchanged counts
+    (`new_findings_by_multiplicity` only ever returns the *new* side of the
+    comparison — the symmetric resolved/unchanged tally does not exist in
+    `SecurityRescanResult` and this projection must not invent it).
+
+    `verdict` mirrors the three states the backend can actually produce:
+    `security_score is None` means no scanner executed this rescan (not
+    "clean" — "not measured"); otherwise `rejected` says whether a new
+    finding was found. There is no fourth state.
+
+    Returns `None` before A9 has run. A run that completed and found nothing
+    new still returns a payload (`securityScore` real, `newFindings` empty) —
+    "ran clean" and "never ran" are different facts.
+    """
+    security = state.security_result
+    if security is None:
+        return None
+
+    new_findings_raw = security.get("new_findings") or []
+    new_findings = [
+        {
+            "id": f.get("id"),
+            "file": f.get("file"),
+            "line": f.get("line"),
+            "message": f.get("message"),
+            "tools": list(f.get("tools") or []),
+        }
+        for f in new_findings_raw
+    ]
+
+    security_score = security.get("security_score")
+    rejected = bool(security.get("rejected"))
+    if security_score is None:
+        verdict = "not_measured"
+    elif rejected:
+        verdict = "new_findings"
+    else:
+        verdict = "clean"
+
+    retry_context = None
+    if rejected:
+        failure_brief = security.get("failure_brief") or {}
+        validation_failure = security.get("validation_failure") or {}
+        retry_context = {
+            "assertionMessage": validation_failure.get("assertion_message"),
+            "securityConstraint": failure_brief.get("security_constraint"),
+        }
+
+    return {
+        "verdict": verdict,
+        "rejected": rejected,
+        "securityScore": security_score,
+        "newFindings": new_findings,
+        "scannersRun": list(security.get("scanners_run") or []),
+        "reexecutionCommand": security.get("reexecution_command") or "",
+        "reexecutionTimeoutSeconds": security.get("reexecution_timeout_seconds"),
+        "retryContext": retry_context,
+    }
+
+
+# A3.5's four real outcomes, mapped to the UI-facing vocabulary the panel
+# renders. This is presentation only — `ReproductionStatus` itself is
+# unchanged; nothing here invents a fifth backend state.
+_REPRODUCTION_UI_STATUS = {
+    "CONFIRMED": "reproduced",
+    "UNCONFIRMED": "not_reproduced",
+    "NO_TESTS": "unavailable",
+    "INFRA_ERROR": "error",
+}
+
+
+def _reproduction_stages(repro: dict) -> list[dict]:
+    """Five real stages of A3.5's execution, derived from its final state.
+
+    Not live progress — A3.5 runs as one atomic subprocess call with no
+    intermediate events, so there is nothing to poll mid-run. This is a
+    deterministic, post-hoc decomposition of what the recorded result proves
+    happened: every `status` and `detail` below is computed from fields A3.5
+    actually persisted, never fabricated or animated.
+    """
+    status = repro.get("status")
+    exit_code = repro.get("exit_code")
+    timed_out = bool(repro.get("timed_out"))
+    collected = repro.get("tests_collected")
+    passed = repro.get("tests_passed")
+    failed = repro.get("tests_failed")
+    infra_detail = repro.get("infra_detail")
+    evidence_source = repro.get("evidence_source")
+
+    stages: list[dict] = []
+
+    if exit_code == -1:
+        suite_status = "failed"
+        suite_detail = (
+            "The pytest subprocess exceeded its time limit and was terminated."
+            if timed_out
+            else (infra_detail or "The pytest subprocess could not be started.")
+        )
+    else:
+        suite_status = "done"
+        suite_detail = f"pytest exited with code {exit_code}."
+    stages.append({"id": "suite_executed", "label": "Test suite executed", "status": suite_status, "detail": suite_detail})
+
+    if suite_status != "done":
+        stages.append({"id": "tests_collected", "label": "Tests collected", "status": "skipped", "detail": "Not reached — the suite never executed."})
+    elif status == "NO_TESTS":
+        stages.append({"id": "tests_collected", "label": "Tests collected", "status": "failed", "detail": "pytest collected zero tests."})
+    elif collected is not None:
+        stages.append({"id": "tests_collected", "label": "Tests collected", "status": "done", "detail": f"{collected} test(s) collected."})
+    else:
+        stages.append({"id": "tests_collected", "label": "Tests collected", "status": "failed", "detail": "pytest's JSON report could not be read, so collection is unknown."})
+
+    collect_status = stages[-1]["status"]
+    if collect_status != "done":
+        stages.append({"id": "tests_run", "label": "Tests executed", "status": "skipped", "detail": "Not reached — no tests were collected."})
+    elif status == "INFRA_ERROR":
+        stages.append({"id": "tests_run", "label": "Tests executed", "status": "failed", "detail": infra_detail or "pytest reported an unexpected exit code."})
+    else:
+        detail = f"{passed} passed, {failed} failed." if passed is not None and failed is not None else "Tests ran to completion."
+        stages.append({"id": "tests_run", "label": "Tests executed", "status": "done", "detail": detail})
+
+    run_status = stages[-1]["status"]
+    if run_status != "done":
+        stages.append({"id": "failure_observed", "label": "Failure observed", "status": "skipped", "detail": "Not reached — the tests did not run to completion."})
+    elif status == "CONFIRMED":
+        stages.append({
+            "id": "failure_observed",
+            "label": "Failure observed",
+            "status": "done",
+            "detail": f"{repro.get('failing_test') or 'A test'} failed with {repro.get('exception_type') or 'an error'}.",
+        })
+    else:
+        stages.append({"id": "failure_observed", "label": "Failure observed", "status": "not_triggered", "detail": "No failure — every collected test passed."})
+
+    observe_status = stages[-1]["status"]
+    if observe_status == "done" and repro.get("traceback"):
+        source_label = "structured pytest report" if evidence_source == "pytest_report" else "output text pattern match"
+        stages.append({"id": "evidence_captured", "label": "Evidence captured", "status": "done", "detail": f"Exception and traceback captured from the {source_label}."})
+    elif observe_status == "done":
+        stages.append({"id": "evidence_captured", "label": "Evidence captured", "status": "failed", "detail": "A failure was observed but no traceback could be extracted."})
+    else:
+        stages.append({"id": "evidence_captured", "label": "Evidence captured", "status": "skipped", "detail": "Not reached — no failure was observed."})
+
+    return stages
+
+
+def build_reproduction_evidence(state: RunStateModel) -> dict | None:
+    """A3.5's failure-reproduction evidence, projected for the workspace panel.
+
+    A3.5 is an independent full-suite pytest gate — it does not target a
+    specific A3 finding (`orchestrator/nodes.py::reproduction_gate` never
+    reads `state.static_report`), so this projection never claims a
+    finding-to-reproduction link that does not exist. It answers a narrower,
+    real question: does the reported bug actually reproduce as a failing
+    test, right now, in this repository.
+
+    Returns `None` before A3.5 has run. Every field traces to
+    `ReproductionResult` (`models/reproduction.py`), which A3.5 alone writes.
+    """
+    repro = state.reproduction
+    if repro is None:
+        return None
+
+    exception_type = repro.get("exception_type")
+    exception_message = repro.get("exception_message")
+    error_signature = (
+        f"{exception_type}: {exception_message}" if exception_type and exception_message else exception_type
+    )
+
+    failing_test = repro.get("failing_test")
+    baseline = [t for t in (repro.get("pre_existing_failures") or []) if t != failing_test]
+
+    return {
+        "status": repro.get("status"),
+        "uiStatus": _REPRODUCTION_UI_STATUS.get(repro.get("status"), "unavailable"),
+        "confidence": repro.get("confidence"),
+        "evidenceSource": repro.get("evidence_source"),
+        "failingTest": failing_test,
+        "exceptionType": exception_type,
+        "exceptionMessage": exception_message,
+        "errorSignature": error_signature,
+        "failingFile": repro.get("failing_file"),
+        "failingLine": repro.get("failing_line"),
+        "traceback": repro.get("traceback"),
+        "infraDetail": repro.get("infra_detail"),
+        "command": repro.get("command") or None,
+        "exitCode": repro.get("exit_code"),
+        "timedOut": bool(repro.get("timed_out")),
+        "stdout": repro.get("stdout"),
+        "stderr": repro.get("stderr"),
+        "durationSeconds": repro.get("duration_seconds"),
+        "startedAt": repro.get("started_at"),
+        "finishedAt": repro.get("finished_at"),
+        "testsCollected": repro.get("tests_collected"),
+        "testsPassed": repro.get("tests_passed"),
+        "testsFailed": repro.get("tests_failed"),
+        "reexecutionCommand": repro.get("reexecution_command") or None,
+        "reexecutionIsTargeted": bool(repro.get("reexecution_is_targeted")),
+        "reexecutionTimeoutSeconds": repro.get("reexecution_timeout_seconds"),
+        "baselineFailures": baseline,
+        "stages": _reproduction_stages(repro),
+    }
+
+
+# Presentation copy A5's real ambiguity forces into words rather than a
+# fabricated per-file flag: `risk_score` is `criticality * churn_weight *
+# security_score`, and `churn_weight` defaults to `0.0` both when a file
+# genuinely has no recent bug-fix commits *and* when the repository has no git
+# history to measure from at all (`git_service.get_churn_weights` returns `{}`
+# in both cases). A5 cannot tell those apart — that ambiguity is A1's, not
+# introduced here — so the projection labels the column "priority", not
+# "risk", and states the caveat once rather than guessing per file.
+RISK_MEASUREMENT_CAVEAT = (
+    "Priority combines file criticality, churn and role. Churn is 0 both when "
+    "a file has no recent bug-fix commits and when the repository has no git "
+    "history to measure from — this run cannot tell those apart, so a 0 here "
+    "is a floor, not a measured absence of risk."
+)
+
+
+def _repair_plan_why(issue_id: str, findings_by_id: dict, cve_by_id: dict) -> dict | None:
+    """Join a fix-node's issue_id back to the A3 finding or A2 CVE that produced it.
+
+    `FixNode` carries no message of its own — `build_fix_nodes` only ever
+    stores `issue_id`/`files`/`depends_on` — so "why does this node exist" is
+    only answerable by reversing the identity `build_fix_nodes` assigned:
+    `finding["id"]` verbatim for a static finding, `f"cve-{record.cve_id}"`
+    for a CVE. Returns `None` when neither matches — a legitimate outcome for
+    the synthetic `"fix-0"` catch-all node `build_fix_nodes` emits when there
+    were no findings or CVEs to name at all.
+    """
+    if issue_id in findings_by_id:
+        f = findings_by_id[issue_id]
+        return {
+            "kind": "static_finding",
+            "message": f.get("message"),
+            "severity": f.get("severity"),
+            "severityMeasured": bool(f.get("severity_measured", False)),
+            "tools": list(f.get("tools") or []),
+        }
+    cve_id = issue_id[len("cve-") :] if issue_id.startswith("cve-") else None
+    if cve_id and cve_id in cve_by_id:
+        c = cve_by_id[cve_id]
+        return {
+            "kind": "cve",
+            "package": c.get("package"),
+            "severity": c.get("severity"),
+            "installedVersion": c.get("installed_version"),
+            "reachPath": c.get("reach_path"),
+        }
+    return None
+
+
+def build_repair_plan(state: RunStateModel) -> dict | None:
+    """A6's repair plan, projected for the workspace board.
+
+    Distinct from A5's blast-radius impact: A5 answers what could be affected
+    by a change; A6 answers what ProoFix proposes to change, in what order,
+    and why. Every field traces to `FixDAGPlan` (`models/fix_dag.py`), which
+    A6 alone writes, joined read-only against A3's findings and A2's CVE
+    records to answer "why" — `FixNode` itself carries no message.
+
+    **A6's plan is not what A7 executes.** `a7_code_generation.py` reads
+    exactly one value from this plan — `execution_order[0]`, as a label — and
+    derives its actual patch targets from A5's blast scope and A4's root
+    cause instead. This projection carries that fact through as
+    `executionAuthority` rather than letting the ordered list on screen imply
+    an execution guarantee this run cannot back up.
+
+    Returns `None` before A6 has run. A run with zero fix nodes still returns
+    a payload with an empty `steps` list — A6 ran and found nothing to plan,
+    which is a different fact from A6 never having run.
+    """
+    dag = state.fix_dag
+    if dag is None:
+        return None
+
+    findings_by_id = {
+        f.get("id"): f
+        for f in ((state.static_report or {}).get("prioritized") or [])
+        if f.get("id")
+    }
+    cve_by_id = {
+        c.get("cve_id"): c
+        for c in ((state.cve_report or {}).get("findings") or [])
+        if c.get("cve_id")
+    }
+
+    nodes = dag.get("nodes") or []
+    nodes_by_id = {n.get("issue_id"): n for n in nodes if n.get("issue_id")}
+    execution_order = list(dag.get("execution_order") or [])
+
+    # The LLM ordering path is used unvalidated (`a6_fix_dag_planner.py`), so
+    # `execution_order` is not guaranteed to name every node A6 built. Nodes
+    # it omits are appended rather than dropped — silently shrinking the plan
+    # to whatever the model happened to list would misrepresent what A6 built.
+    unordered = [nid for nid in nodes_by_id if nid not in execution_order]
+    ordered_ids = execution_order + sorted(unordered)
+
+    conflict_batches = [list(b) for b in (dag.get("conflict_batches") or [])]
+    conflicts_by_issue: dict[str, set[str]] = {}
+    for batch in conflict_batches:
+        for issue in batch:
+            conflicts_by_issue.setdefault(issue, set()).update(i for i in batch if i != issue)
+
+    incoming_by_issue: dict[str, list[dict]] = {}
+    for edge in dag.get("dependency_edges") or []:
+        incoming_by_issue.setdefault(edge.get("to_issue"), []).append(
+            {"fromIssue": edge.get("from_issue"), "reason": edge.get("reason")}
+        )
+
+    # The one fact `a7_code_generation.py` actually reads from this whole
+    # plan: `execution_order[0]`. Named here once so the frontend never has
+    # to re-derive it — an empty `execution_order` means there is no handoff
+    # target, not that the first node in `ordered_ids` (which may be an
+    # LLM-omitted node appended after the real order) silently becomes one.
+    handoff_issue_id = execution_order[0] if execution_order else None
+
+    steps = []
+    for position, issue_id in enumerate(ordered_ids, start=1):
+        node = nodes_by_id.get(issue_id, {})
+        steps.append(
+            {
+                "issueId": issue_id,
+                "position": position,
+                # True only for a node the LLM path actually named — the
+                # honest label for what "position" means when the plan came
+                # from an unvalidated model response.
+                "ordered": issue_id in execution_order,
+                "files": list(node.get("files") or []),
+                "dependsOn": list(node.get("depends_on") or []),
+                "incomingEdges": incoming_by_issue.get(issue_id, []),
+                "conflictsWith": sorted(conflicts_by_issue.get(issue_id, set())),
+                "why": _repair_plan_why(issue_id, findings_by_id, cve_by_id),
+                "isHandoffTarget": issue_id == handoff_issue_id,
+            }
+        )
+
+    return {
+        "steps": steps,
+        "conflictBatches": conflict_batches,
+        "orderingSource": dag.get("ordering_source"),
+        "orderingRationale": dag.get("ordering_rationale") or "",
+        "totalDependencyEdges": len(dag.get("dependency_edges") or []),
+        # Real and load-bearing for the UI's honesty banner: A7 reads only
+        # `execution_order[0]` as a label today. See the docstring above.
+        "executionAuthority": {
+            "consumedBy": "A7",
+            "field": "execution_order[0]",
+            "note": (
+                "A7 reads only the first step's identifier as a label for its patch "
+                "bundle. It derives its actual patch targets from A5's blast scope "
+                "and A4's root cause, not from this plan's order or dependencies."
+            ),
+        },
+    }
+
+
+def build_blast_impact(state: RunStateModel) -> dict | None:
+    """A5's blast-radius impact, projected for the workspace board.
+
+    Distinct from A2's dependency-risk projection: A2 answers whether a
+    third-party advisory reaches this repository's code; A5 answers what could
+    be affected if the file A4 is investigating changes. Every field traces to
+    `BlastGraphResult` (`models/blast.py`), which A5 alone writes, joined
+    read-only against A1's SIG (role/criticality/churn — A5 does not own those)
+    and A3's findings (whether an impacted file was independently flagged).
+
+    Returns `None` before A5 has run. A run whose target could not be resolved
+    still returns a payload with an empty `scope` and `origin: null` — A5 ran
+    and had nothing to traverse, which is a different fact from A5 never
+    having run at all.
+    """
+    blast = state.blast_graph
+    if blast is None:
+        return None
+
+    sig_files: dict = (state.sig or {}).get("files") or {}
+    flagged_files = {
+        f.get("file") for f in ((state.static_report or {}).get("prioritized") or [])
+        if f.get("file")
+    }
+    auto_patch = set(blast.get("auto_patch_scope") or [])
+    human_review = set(blast.get("human_review_required") or [])
+
+    scope_out = []
+    for item in blast.get("scope") or []:
+        path = item.get("path")
+        node = sig_files.get(path) or {}
+        scope_out.append(
+            {
+                "path": path,
+                "hopCount": item.get("hop_count"),
+                "directions": list(item.get("directions") or [item.get("direction")]),
+                "reachedVia": item.get("reached_via"),
+                "edgeBasis": item.get("edge_basis"),
+                "propagationConfidence": item.get("propagation_confidence"),
+                "priorityScore": item.get("risk_score"),
+                "origin": item.get("origin"),
+                "role": node.get("role"),
+                "criticality": node.get("criticality"),
+                "churnWeight": node.get("churn_weight"),
+                "autoPatchable": path in auto_patch,
+                "humanReviewRequired": path in human_review,
+                "hasStaticFinding": path in flagged_files,
+            }
+        )
+    scope_out.sort(key=lambda s: (s["hopCount"] if s["hopCount"] is not None else 99, s["path"]))
+
+    edges_out = [
+        {
+            "from": e.get("from_path"),
+            "to": e.get("to_path"),
+            "direction": e.get("direction"),
+            "basis": e.get("basis"),
+            "hopCount": e.get("hop_count"),
+        }
+        for e in (blast.get("edges") or [])
+    ]
+
+    resolution = blast.get("target_resolution")
+    origin = None
+    if resolution:
+        origin = {
+            "originalPath": resolution.get("original_path"),
+            "normalizedPath": resolution.get("normalized_path"),
+            "resolvedPath": resolution.get("resolved_path"),
+            "source": resolution.get("source"),
+            "confidence": resolution.get("confidence"),
+            "runtimeConfirmed": resolution.get("runtime_confirmed"),
+            "pinned": resolution.get("pinned"),
+        }
+    elif blast.get("origins"):
+        # A run predating `target_resolution`, or one where A5 traversed from
+        # a citation rather than a resolved target — the origin path is still
+        # real, only its resolution provenance is unavailable.
+        origin = {
+            "originalPath": blast["origins"][0],
+            "normalizedPath": blast["origins"][0],
+            "resolvedPath": blast["origins"][0],
+            "source": None,
+            "confidence": None,
+            "runtimeConfirmed": None,
+            "pinned": None,
+        }
+
+    overlap = sorted(auto_patch & human_review)
+
+    return {
+        "origin": origin,
+        "origins": list(blast.get("origins") or []),
+        "scope": scope_out,
+        "edges": edges_out,
+        "maxHop": max((s["hopCount"] for s in scope_out if s["hopCount"] is not None), default=0),
+        "autoPatchScope": sorted(auto_patch),
+        "humanReviewRequired": sorted(human_review),
+        # Real and expected, not a bug to hide: `pin_resolved_target` can force
+        # a runtime-confirmed target into `auto_patch_scope` while the
+        # traversal's own confidence threshold independently placed it in
+        # `human_review_required`. Both facts are true at once.
+        "patchAuthorityOverlap": overlap,
+        "riskMeasurementCaveat": RISK_MEASUREMENT_CAVEAT,
+    }
+
+
+def build_investigation(state: RunStateModel) -> dict | None:
+    """A4's evidence investigation, projected for the workspace board.
+
+    A pure rename of `InvestigationReport` (`models/investigation.py`) into the
+    UI's camelCase, and nothing more: no field is recomputed, defaulted or
+    summarised here, because every judgement in the report — what supports the
+    finding, what contradicts it, how the confidence was reached — is A4's to
+    make and must survive to the screen unchanged.
+
+    Returns `None` before A4 has run. A report with `status: "no_finding"` is a
+    different fact: A4 ran and had nothing to investigate.
+    """
+    report = state.investigation
+    if report is None:
+        return None
+
+    completeness = report.get("completeness") or {}
+    return {
+        "status": report.get("status"),
+        "subjectKind": report.get("subject_kind"),
+        "findingId": report.get("finding_id"),
+        "title": report.get("title"),
+        "file": report.get("file"),
+        "line": report.get("line"),
+        "severity": report.get("severity"),
+        "severityMeasured": bool(report.get("severity_measured", False)),
+        "reproductionStatus": report.get("reproduction_status"),
+        "rootCause": report.get("root_cause"),
+        "summary": report.get("summary"),
+        "rootCauseSource": report.get("root_cause_source"),
+        "confidence": report.get("confidence"),
+        "confidenceBreakdown": [
+            {
+                "component": c.get("component"),
+                "points": c.get("points"),
+                "basis": c.get("basis"),
+            }
+            for c in (report.get("confidence_breakdown") or [])
+        ],
+        "evidence": [
+            {
+                "id": e.get("id"),
+                "category": e.get("category"),
+                "source": e.get("source"),
+                "description": e.get("description"),
+                "status": e.get("status"),
+                "stance": e.get("stance"),
+                "strength": e.get("strength"),
+                "strengthBasis": e.get("strength_basis"),
+                "detail": e.get("detail") or {},
+            }
+            for e in (report.get("evidence") or [])
+        ],
+        "completeness": {
+            "measuredCategories": completeness.get("measured_categories"),
+            "totalCategories": completeness.get("total_categories"),
+            "ratio": completeness.get("ratio"),
+            "categoryStatus": completeness.get("category_status") or {},
+        },
+        "unavailableSources": [
+            {"source": u.get("source"), "reason": u.get("reason")}
+            for u in (report.get("unavailable_sources") or [])
+        ],
+        "errors": list(report.get("errors") or []),
+    }
 
 
 def build_agent_entries(
@@ -1810,6 +2585,12 @@ def build_workspace_header(
         # explanation lives here — without it the client knows the run stopped
         # and not why, which is the state this sprint was meant to remove.
         "environment": state.environment,
+        # A0.7 itself can fail to run (a crash in the probe, not a verdict about
+        # the repository) — `environment_precheck` catches that and records it
+        # in `state.errors` rather than blocking, so `environment` stays null.
+        # Without this flag that reads identically to "the precheck never ran",
+        # when it actually means "it ran and could not conclude anything".
+        "environmentProbeError": any(e.get("agent") == "A0.7" for e in state.errors),
         **repository_identity(state, index_pointer),
     }
 
@@ -2001,6 +2782,143 @@ def _agents_run(events: list[AgentStatusEvent]) -> int:
     did not run eleven agents, and saying so overstated the run.
     """
     return len({e.agent_id for e in events if e.agent_id in CARD_BY_BACKEND_ID})
+
+
+def _axis_view(name: str, label: str, value: float | None) -> dict:
+    """One axis row: value plus a tri-state threshold verdict.
+
+    `meetsLowThreshold` is `None`, not `False`, when the axis was never
+    measured — `meets_threshold` itself returns `False` for `None` because
+    that is the right answer for a gate ("absent evidence does not clear a
+    bar"), but a *display* that shows "does not meet threshold" for an axis
+    nobody measured reads as a failure the pipeline never observed.
+    """
+    return {
+        "name": name,
+        "label": label,
+        "value": value,
+        "measured": value is not None,
+        "lowThreshold": SCORE_THRESHOLD,
+        "meetsLowThreshold": None if value is None else value >= SCORE_THRESHOLD,
+    }
+
+
+def build_mergeability_decision(state: RunStateModel) -> dict | None:
+    """A10's routing decision, projected for the workspace panel.
+
+    A10 does not re-verify correctness or security — `axes.correctness` and
+    `axes.security` are A8's and A9's own scores, passed through unchanged.
+    A10 verifies exactly one thing itself (the MCI phantom check) and
+    computes two axes of its own (fidelity, scope risk); everything else
+    here is A10 reading evidence other agents produced.
+
+    `hardGates` is `a10_routing.gate_checks`'s trace of the same ten-gate
+    chain `hard_draft_reason` uses to route the PR — same order, same wording
+    when a gate fires, and it stops changing the moment one does: gates after
+    the firing one are `checked: false`, never drawn as passed.
+
+    `routingModifiers` only carries real values once every hard gate is
+    clear; a run that hard-blocked earlier never reached these facts, so they
+    are `None` rather than a guess about what they would have been.
+
+    Returns `None` before A10 has produced a routing decision.
+    """
+    decision_data = state.pr_decision
+    if decision_data is None:
+        return None
+
+    axis_dict = decision_data.get("axis_scores") or {}
+    axis = AxisScores(
+        correctness=axis_dict.get("correctness"),
+        security=axis_dict.get("security"),
+        fidelity=axis_dict.get("fidelity"),
+        scope_risk=axis_dict.get("scope_risk"),
+    )
+    phantom_detected = bool(decision_data.get("phantom_changes_detected"))
+    # `gate_checks` only tests `bool(phantoms)` — the actual entity names are
+    # not part of the persisted decision, so a non-empty placeholder is the
+    # honest re-derivation of "phantoms were detected", not a fabrication of
+    # what they were.
+    phantoms = {"phantom"} if phantom_detected else set()
+
+    checks = gate_checks(state, axis, phantoms)
+    hard_gates_clear = all(c.passed for c in checks)
+
+    proof = state.proof_bundle or {}
+    steps = [
+        {
+            "name": s.get("name"),
+            "command": s.get("command"),
+            "baseCommit": s.get("base_commit"),
+            "patchCommit": s.get("patch_commit"),
+            "expectedResult": s.get("expected_result"),
+            "timeoutSeconds": s.get("timeout_seconds"),
+            "isTargeted": bool(s.get("is_targeted", True)),
+        }
+        for s in proof.get("steps") or []
+    ]
+
+    _decision, label = run_decision(state)
+
+    return {
+        "prType": decision_data.get("pr_type") or "draft",
+        "decisionLabel": label,
+        "reviewNote": decision_data.get("review_note"),
+        "trust": _trust_score(state),
+        "axes": [
+            _axis_view("correctness", "Correctness", axis.correctness),
+            {
+                **_axis_view("security", "Security", axis.security),
+                # Security alone is held to a stricter bar for auto-merge
+                # eligibility (`technical_validation_passed`'s 90) than the
+                # generic "low axis" gate above uses (80) — a score can clear
+                # 80 and still block auto-merge. Nothing else in the product
+                # shows this asymmetry, so it is its own field rather than
+                # folded into `lowThreshold`.
+                "autoMergeThreshold": SECURITY_TECHNICAL_THRESHOLD,
+                "meetsAutoMergeThreshold": (
+                    None
+                    if axis.security is None
+                    else meets_threshold(axis.security, SECURITY_TECHNICAL_THRESHOLD)
+                ),
+            },
+            _axis_view("fidelity", "Fidelity", axis.fidelity),
+            _axis_view("scope_risk", "Scope Safety", axis.scope_risk),
+        ],
+        "hardGates": [
+            {
+                "code": c.code,
+                "label": c.label,
+                "checked": c.checked,
+                "passed": c.passed,
+                "detail": c.detail,
+            }
+            for c in checks
+        ],
+        "routingModifiers": {
+            "hardGatesClear": hard_gates_clear,
+            "citationReviewNeeded": citation_review_needed(state) if hard_gates_clear else None,
+            "reproductionConfidence": state.reproduction_confidence if hard_gates_clear else None,
+            "securityMeetsAutoMergeThreshold": (
+                meets_threshold(axis.security, SECURITY_TECHNICAL_THRESHOLD)
+                if hard_gates_clear
+                else None
+            ),
+        },
+        "phantomChangesDetected": phantom_detected,
+        "prUrl": decision_data.get("pr_url"),
+        "descriptionWhy": str(decision_data.get("description_why") or ""),
+        "descriptionWhat": str(decision_data.get("description_what") or ""),
+        "proofBundle": (
+            {
+                "bundleHash": proof.get("bundle_hash") or None,
+                "reproductionConfidence": proof.get("reproduction_confidence"),
+                "steps": steps,
+            }
+            if proof
+            else None
+        ),
+    }
 
 
 def build_run_report(state: RunStateModel, events: list[AgentStatusEvent]) -> dict:

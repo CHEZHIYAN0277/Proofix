@@ -93,3 +93,68 @@ async def test_the_failure_is_recorded_not_hidden(monkeypatch, tmp_path):
 
     assert any(e.get("agent") == "A4" for e in result.errors)
     assert any("SecurityRejection" in str(e.get("error")) for e in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_the_degradation_reaches_the_investigation_report(monkeypatch, tmp_path):
+    """The report a client reads must say it was produced by the fallback."""
+    (tmp_path / "app.py").write_text("def go():\n    return 1\n")
+    agent = _agent(monkeypatch, SecurityRejection("host_path", []))
+
+    result = await agent.run(_state(tmp_path))
+
+    assert result.investigation is not None
+    assert result.investigation["status"] == "error"
+    assert result.investigation["root_cause_source"] == "deterministic"
+    assert any("SecurityRejection" in e for e in result.investigation["errors"])
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_carries_no_host_paths(monkeypatch, tmp_path):
+    """The firewall rejection above was A4's own prompt leaking the clone path.
+
+    Every field of the prompt is interpolated raw, and both the traceback and
+    the reproduction dict carry the clone's absolute path — so without
+    scrubbing this branch could never reach a provider on any repository.
+    """
+    from backend.agents import a4_evidence_investigator as module
+
+    settings = Settings(stub_mode=False, mistral_api_key="x", llm_provider="mistral")
+    agent = A4EvidenceInvestigatorAgent(_Store(), settings)
+    captured: dict[str, str] = {}
+
+    class _LLM:
+        def __init__(self, *a, **k):
+            pass
+
+        async def structured(self, prompt, _model):
+            captured["prompt"] = prompt
+            return module.RootCauseLLMOutput(
+                summary="s", root_cause="r", citations=[], affected_modules=[]
+            )
+
+    monkeypatch.setattr(module, "LLMService", _LLM)
+
+    async def noop(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(agent, "emit_status", noop)
+
+    state = RunStateModel(
+        run_id="r",
+        repo_path="/Users/someone/clones/repo",
+        repo_clone_path="/Users/someone/clones/repo",
+        reproduction={
+            "status": "CONFIRMED",
+            "failing_test": "tests/test_x.py::test_y",
+            "traceback": 'File "/Users/someone/clones/repo/app.py", line 3\nAssertionError',
+        },
+        static_report={"prioritized": []},
+    )
+
+    await agent.run(state)
+
+    assert "/Users/someone" not in captured["prompt"]
+    assert "<PATH>" in captured["prompt"]
+    # The file name the model has to cite survives the scrub.
+    assert "app.py" in captured["prompt"]

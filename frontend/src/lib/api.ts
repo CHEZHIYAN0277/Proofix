@@ -30,6 +30,45 @@ export const ENDPOINTS = {
   runContext: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/context`,
   runPlan: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/plan`,
   runPatch: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/patch`,
+  // A1's Semantic Intent Graph — read-only, projected from `state.sig`.
+  // Distinct from the `knowledge*` endpoints below, which are A0.5's.
+  runSemanticGraph: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/semantic-graph`,
+  // A2's dependency/CVE reachability report — read-only, projected from
+  // `state.cve_report`.
+  runDependencyRisk: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/dependency-risk`,
+  // A3's static-analysis findings — read-only, projected from
+  // `state.static_report`.
+  runStaticFindings: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/static-findings`,
+  // A3.5's failure-reproduction evidence — read-only, projected from
+  // `state.reproduction`.
+  runReproduction: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/reproduction`,
+  // A9's post-patch security re-scan — read-only, projected from
+  // `state.security_result`.
+  runSecurity: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/security`,
+  // A10's mergeability routing decision — read-only, projected from
+  // `state.pr_decision` and `state.proof_bundle`.
+  runDecision: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/decision`,
+  // A4's evidence investigation — read-only, projected from
+  // `state.investigation`.
+  runInvestigation: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/investigation`,
+  // A5's blast-radius impact — read-only, projected from `state.blast_graph`,
+  // joined against A1's SIG and A3's findings.
+  runBlast: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/blast`,
+  // A6's repair plan — read-only, projected from `state.fix_dag`, joined
+  // against A3's findings, A2's CVE records and A5.5's context package.
+  // Distinct from `runPlan` below, which returns `state.fix_dag` verbatim.
+  runRepairPlan: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/repair-plan`,
+  // A0.5's Repository Knowledge Graph — read-only, derived on demand from the
+  // cached index (`backend/api/routes/knowledge.py`). Never mutated, safe to
+  // call at any point in a run's life.
+  knowledgeMetrics: (runId: string) => `/api/knowledge/${encodeURIComponent(runId)}/metrics`,
+  knowledgeCapabilities: (runId: string) =>
+    `/api/knowledge/${encodeURIComponent(runId)}/capabilities`,
+  knowledgeHotspots: (runId: string) => `/api/knowledge/${encodeURIComponent(runId)}/hotspots`,
+  knowledgeExport: (runId: string, view: string, maxNodes: number) =>
+    `/api/knowledge/${encodeURIComponent(runId)}/export/${encodeURIComponent(view)}?fmt=json&max_nodes=${maxNodes}`,
+  knowledgeQuery: (runId: string, name: string, params: Record<string, string>) =>
+    `/api/knowledge/${encodeURIComponent(runId)}/query/${encodeURIComponent(name)}?${new URLSearchParams(params).toString()}`,
 } as const;
 
 export interface FetcherOptions extends RequestInit {

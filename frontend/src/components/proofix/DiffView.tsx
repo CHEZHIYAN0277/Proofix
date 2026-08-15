@@ -86,13 +86,67 @@ export function diffStats(lines: DiffLine[]): { added: number; removed: number }
   };
 }
 
+const FILE_START = /^--- a\/(.+)$/;
+
+/**
+ * Split a multi-file unified diff back into its per-file chunks.
+ *
+ * `PatchBundle.diff_text` is several `unified_diff(...)` outputs concatenated
+ * (`generate_diff_from_patches`), one per patched file, each starting with its
+ * own `--- a/<file>` header. This partitions the real backend text along
+ * those boundaries — it does not re-diff anything — so a multi-file patch can
+ * be shown one file at a time without inventing a diff algorithm client-side.
+ */
+export function splitDiffByFile(diff: string): Map<string, string> {
+  const chunks = new Map<string, string>();
+  if (!diff) return chunks;
+
+  let currentFile: string | null = null;
+  let buffer: string[] = [];
+  const flush = () => {
+    if (currentFile !== null) chunks.set(currentFile, buffer.join("\n"));
+  };
+
+  for (const line of diff.split("\n")) {
+    const start = FILE_START.exec(line);
+    if (start) {
+      flush();
+      currentFile = start[1];
+      buffer = [line];
+      continue;
+    }
+    if (currentFile !== null) buffer.push(line);
+  }
+  flush();
+
+  return chunks;
+}
+
+/**
+ * A terminal/code-tool diff palette (GitHub-dark-adjacent: `#3fb950` green,
+ * `#f85149` red, `#0d1117` background) — fixed regardless of the host page's
+ * light/dark theme, the same way a rendered code diff in a coding assistant
+ * or terminal does not repaint itself when the surrounding chrome does.
+ */
+const TERMINAL_BG = "#0d1117";
+const TERMINAL_BORDER = "#30363d";
+
 const ROW_CLASS: Record<DiffLineKind, string> = {
-  add: "bg-status-completed-bg/50 text-ink",
-  del: "bg-status-failed-bg/40 text-ink",
-  hunk: "bg-surface-muted text-ink-soft",
-  file: "text-ink-soft",
-  meta: "text-ink-soft",
-  context: "text-ink-soft",
+  add: "bg-[#238636]/20 text-[#e6edf3]",
+  del: "bg-[#da3633]/20 text-[#e6edf3]",
+  hunk: "text-[#7d8590]",
+  file: "text-[#7d8590]",
+  meta: "text-[#7d8590]",
+  context: "text-[#c9d1d9]",
+};
+
+const MARKER_CLASS: Record<DiffLineKind, string> = {
+  add: "text-[#3fb950]",
+  del: "text-[#f85149]",
+  hunk: "text-[#7d8590]",
+  file: "text-[#7d8590]",
+  meta: "text-[#7d8590]",
+  context: "text-[#7d8590]",
 };
 
 const MARKER: Record<DiffLineKind, string> = {
@@ -112,18 +166,21 @@ export function DiffView({ diff }: { diff: string }) {
 
   return (
     // Wide code scrolls inside its own box; the page never scrolls sideways.
-    <div className="overflow-x-auto rounded-lg border border-border bg-surface-muted/30">
-      <table className="w-full border-collapse font-mono text-[11px] leading-[1.5]">
+    <div
+      className="overflow-x-auto rounded-lg border"
+      style={{ backgroundColor: TERMINAL_BG, borderColor: TERMINAL_BORDER }}
+    >
+      <table className="w-full border-collapse font-mono text-[12px] leading-[1.6]">
         <tbody>
           {lines.map((line, i) => (
             <tr key={i} className={ROW_CLASS[line.kind]}>
-              <td className="w-10 select-none border-r border-border px-1.5 text-right align-top text-ink-soft opacity-60">
+              <td className="w-10 select-none px-1.5 text-right align-top text-[10px] text-[#6e7681]">
                 {line.oldNumber ?? ""}
               </td>
-              <td className="w-10 select-none border-r border-border px-1.5 text-right align-top text-ink-soft opacity-60">
+              <td className="w-10 select-none px-1.5 text-right align-top text-[10px] text-[#6e7681]">
                 {line.newNumber ?? ""}
               </td>
-              <td className="w-4 select-none px-1 text-center align-top text-ink-soft">
+              <td className={`w-4 select-none px-1 text-center align-top font-semibold ${MARKER_CLASS[line.kind]}`}>
                 {MARKER[line.kind]}
               </td>
               <td className="whitespace-pre px-2 align-top">{line.text}</td>

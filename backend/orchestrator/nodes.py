@@ -74,6 +74,8 @@ class GraphNodes:
         """
         if self.settings.stub_mode or not self.settings.environment_precheck_enabled:
             return state
+        state.current_agent = "A0.7"
+        await self.store.save_state(state)
         try:
             return await self.a07.run(state)
         except Exception as exc:  # noqa: BLE001
@@ -93,6 +95,10 @@ class GraphNodes:
         lifecycle event.
         """
         state.status = "blocked"
+        # B-B20: the pointer must name the agent that actually stopped the run,
+        # not whatever ran last in `parallel_intel`/`layer1_fan_in` before the
+        # gate was checked.
+        state.current_agent = "A0.7"
         # No PR decision is written. A run that generated no patch has nothing
         # to route, and an axis-scored decision here would be scoring absence.
         await self.store.save_state(state)
@@ -102,6 +108,8 @@ class GraphNodes:
         """Repository Intelligence is advisory: a failure here must not fail the run."""
         if not self.settings.repository_intelligence_enabled:
             return state
+        state.current_agent = "A0.5"
+        await self.store.save_state(state)
         try:
             state = await self.repository_intelligence.run(state)
         except Exception as exc:  # noqa: BLE001 — degrade to pre-Phase-3 behaviour
@@ -153,18 +161,26 @@ class GraphNodes:
         return state
 
     async def reproduction_gate(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = "A3.5"
+        await self.store.save_state(state)
         return await self.a35.run(state)
 
     async def investigate(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = "A4"
+        await self.store.save_state(state)
         return await self.a4.run(state)
 
     async def blast_scope(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = "A5"
+        await self.store.save_state(state)
         return await self.a5.run(state)
 
     async def engineer_context(self, state: RunStateModel) -> RunStateModel:
         """A5.5 is advisory: a failure here must not fail the run."""
         if not self.settings.context_engineering_enabled:
             return state
+        state.current_agent = "A5.5"
+        await self.store.save_state(state)
         try:
             return await self.a55.run(state)
         except Exception as exc:  # noqa: BLE001 — degrade to pre-A5.5 behaviour
@@ -172,19 +188,33 @@ class GraphNodes:
             return state
 
     async def plan_fixes(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = "A6"
+        await self.store.save_state(state)
         return await self.a6.run(state)
 
     async def generate_code(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = "A7"
+        await self.store.save_state(state)
         return await self.a7.run(state)
 
     async def validate_mutation(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = "A8"
+        await self.store.save_state(state)
         return await self.a8.run(state)
 
     async def validate_security(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = "A9"
+        await self.store.save_state(state)
         return await self.a9.run(state)
 
     async def route_pr(self, state: RunStateModel) -> RunStateModel:
+        state.current_agent = "A10"
+        await self.store.save_state(state)
         state = await self.a10.run(state)
+        # B-B20: the pointer must name the agent that actually finished the
+        # run, not "fan-in" from `layer1_fan_in` several nodes back.
+        state.current_agent = "A10"
+        await self.store.save_state(state)
         await self._remember_repairs(state)
         self._learn_from_run(state)
         return state

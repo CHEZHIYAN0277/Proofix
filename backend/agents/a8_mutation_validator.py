@@ -5,7 +5,7 @@ from backend.models.validation import MutationValidationResult, ValidationFailur
 from backend.services.mutation_parser import MutationOutcome, parse_mutation_output
 from backend.services.retry_brief_builder import build_retry_brief
 from backend.services.scoped_validation import run_scoped_validation
-from backend.services.subprocess_runner import run_command
+from backend.services.subprocess_runner import PYTHON, run_command
 from backend.state.schema import RunStateModel
 
 # Correctness rubric. Named so the merge threshold in `a10_routing` can be read
@@ -306,7 +306,7 @@ class A8MutationValidatorAgent(AgentBase):
         )
 
         run_code, run_stdout, run_stderr = await run_command(
-            ["python", "-m", "mutmut", "run"],
+            [PYTHON, "-m", "mutmut", "run"],
             cwd=repo,
             timeout=self.settings.mutmut_timeout_seconds,
         )
@@ -318,7 +318,7 @@ class A8MutationValidatorAgent(AgentBase):
             # `--all true` includes killed mutants, which the default listing
             # omits — without them there is no denominator to score against.
             results_code, results_stdout, results_stderr = await run_command(
-                ["python", "-m", "mutmut", "results", "--all", "true"],
+                [PYTHON, "-m", "mutmut", "results", "--all", "true"],
                 cwd=repo,
                 timeout=30,
             )

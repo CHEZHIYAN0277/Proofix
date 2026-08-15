@@ -41,6 +41,7 @@ from backend.services.ownership_graph import ownership_signal
 from backend.services.path_resolution import match_key
 from backend.services.python_ast_parser import parse_source
 from backend.services.repair_memory import repair_signal
+from backend.services.repo_layout import is_vendor_path
 from backend.services.sig_cache import compute_repo_hash
 from backend.state.schema import RunStateModel
 
@@ -337,7 +338,12 @@ class A55ContextEngineeringAgent(AgentBase):
         return 1.0
 
     def _resolve_target_file(self, inputs: RankingInputs, ranked: list) -> str:
-        if inputs.resolved_target:
+        # `resolved_target` comes from A5's blast origins, which already
+        # exclude vendor paths (`blast_traversal.resolve_origins`) — this is
+        # a second check at the point A5.5 actually trusts the value, so a
+        # vendor path can never become the repair target even if some future
+        # caller of `RankingInputs` skips that upstream filter.
+        if inputs.resolved_target and not is_vendor_path(inputs.resolved_target):
             return inputs.resolved_target
         return ranked[0].file if ranked else ""
 

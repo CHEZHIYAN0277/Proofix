@@ -28,6 +28,22 @@ import {
 } from "@/mocks";
 import type { SidebarRepo } from "@/components/proofix/Sidebar";
 import type { AgentEntry } from "@/components/proofix/data";
+import type {
+  KnowledgeGraphExport,
+  KnowledgeMetrics,
+  KnowledgeCapability,
+  KnowledgeHotspot,
+  KnowledgeQueryResult,
+} from "@/components/proofix/knowledgeGraphTypes";
+import type { SemanticGraphExport } from "@/components/proofix/semanticGraphTypes";
+import type { DependencyRiskReport } from "@/components/proofix/dependencyRiskTypes";
+import type { StaticFindingsReport } from "@/components/proofix/staticFindingsTypes";
+import type { SecurityRescanReport } from "@/components/proofix/securityRescanTypes";
+import type { MergeabilityDecision } from "@/components/proofix/mergeabilityTypes";
+import type { ReproductionEvidence } from "@/components/proofix/reproductionTypes";
+import type { InvestigationReport } from "@/components/proofix/investigationTypes";
+import type { BlastImpact } from "@/components/proofix/blastTypes";
+import type { RepairPlan } from "@/components/proofix/repairPlanTypes";
 
 /** True when the UI is talking to a real backend rather than fixtures. */
 export const isLive = DATA_SOURCE === "api";
@@ -180,6 +196,226 @@ export async function validateRepository(url: string): Promise<RepoMetadata | nu
     visibility: "Public",
     htmlUrl: `https://github.com/${parsed.owner}/${parsed.name}`,
   };
+}
+
+/**
+ * A1's Semantic Intent Graph — architectural role per file. 404s the same way
+ * `getRunContext` does: A1 has not published a SIG for this run yet, which is
+ * an answer, not a failure. Mock mode has no fixture — this is real role
+ * classification over the actual repository, and there is nothing honest to
+ * invent for a demo run.
+ */
+export async function getSemanticGraph(runId: string): Promise<SemanticGraphExport | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<SemanticGraphExport>(ENDPOINTS.runSemanticGraph(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/**
+ * A2's dependency/CVE reachability report. 404s the same way `getRunContext`
+ * does: A2 has not completed for this run yet, which is an answer, not a
+ * failure. Mock mode has no fixture — this is real OSV advisory data narrowed
+ * by real import-graph reachability, and there is nothing honest to invent
+ * for a demo run.
+ */
+export async function getDependencyRisk(runId: string): Promise<DependencyRiskReport | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<DependencyRiskReport>(ENDPOINTS.runDependencyRisk(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/**
+ * A3's static-analysis findings. 404s the same way `getRunContext` does: A3
+ * has not completed for this run yet, which is an answer, not a failure.
+ * Mock mode has no fixture — this is real scanner output and real ranking,
+ * and there is nothing honest to invent for a demo run.
+ */
+export async function getStaticFindings(runId: string): Promise<StaticFindingsReport | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<StaticFindingsReport>(ENDPOINTS.runStaticFindings(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/**
+ * A9's post-patch security re-scan. 404s the same way `getStaticFindings`
+ * does: A9 has not completed for this run yet, which is an answer, not a
+ * failure. Mock mode has no fixture — this is a real differential scan
+ * against a real patched repository, and there is nothing honest to invent
+ * for a demo run.
+ */
+export async function getSecurityRescan(runId: string): Promise<SecurityRescanReport | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<SecurityRescanReport>(ENDPOINTS.runSecurity(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/**
+ * A10's mergeability routing decision. 404s the same way `getSecurityRescan`
+ * does: A10 has not completed for this run yet, which is an answer, not a
+ * failure. Mock mode has no fixture — this is the real router's own gate
+ * trace and PR outcome, and there is nothing honest to invent for a demo run.
+ */
+export async function getMergeabilityDecision(runId: string): Promise<MergeabilityDecision | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<MergeabilityDecision>(ENDPOINTS.runDecision(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/**
+ * A3.5's failure-reproduction evidence. 404s the same way `getRunContext`
+ * does: A3.5 has not completed for this run yet, which is an answer, not a
+ * failure. Mock mode has no fixture — this is real pytest execution evidence,
+ * and there is nothing honest to invent for a demo run.
+ */
+export async function getReproductionEvidence(runId: string): Promise<ReproductionEvidence | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<ReproductionEvidence>(ENDPOINTS.runReproduction(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/**
+ * A4's evidence investigation. 404s the same way `getRunContext` does: A4 has
+ * not completed for this run yet, which is an answer, not a failure. Mock mode
+ * has no fixture — this is a correlation over real scanner, runtime and
+ * citation evidence, and there is nothing honest to invent for a demo run.
+ *
+ * A 200 carrying `status: "no_finding"` is a different fact from a 404: A4 ran,
+ * consulted its sources and had no subject to investigate.
+ */
+export async function getInvestigation(runId: string): Promise<InvestigationReport | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<InvestigationReport>(ENDPOINTS.runInvestigation(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/**
+ * A5's blast-radius impact. 404s the same way `getInvestigation` does: A5 has
+ * not completed for this run yet, which is an answer, not a failure. Mock mode
+ * has no fixture — this is a real traversal over the repository's own import
+ * graph, and there is nothing honest to invent for a demo run.
+ *
+ * A 200 with `origin: null` is a different fact from a 404: A5 ran and
+ * resolved no origin to traverse from.
+ */
+export async function getBlastImpact(runId: string): Promise<BlastImpact | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<BlastImpact>(ENDPOINTS.runBlast(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/**
+ * A6's repair plan. 404s the same way `getBlastImpact` does: A6 has not
+ * completed for this run yet, which is an answer, not a failure. Mock mode has
+ * no fixture — this is a real join over A3/A2/A5.5's own evidence, and there
+ * is nothing honest to invent for a demo run.
+ */
+export async function getRepairPlan(runId: string): Promise<RepairPlan | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<RepairPlan>(ENDPOINTS.runRepairPlan(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/**
+ * A0.5's Repository Knowledge Graph. All four 404 the same way `getRunContext`
+ * does — the layer is disabled or has not published for this run yet, which is
+ * an answer, not a failure — and mock mode has no fixture: this graph is real
+ * indexed structure, and there is nothing honest to invent for a demo run.
+ */
+export async function getKnowledgeMetrics(runId: string): Promise<KnowledgeMetrics | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<KnowledgeMetrics>(ENDPOINTS.knowledgeMetrics(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+export async function getKnowledgeGraph(
+  runId: string,
+  view: string,
+  maxNodes: number,
+): Promise<KnowledgeGraphExport | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<KnowledgeGraphExport>(ENDPOINTS.knowledgeExport(runId, view, maxNodes));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+export async function getKnowledgeCapabilities(
+  runId: string,
+): Promise<KnowledgeCapability[] | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<KnowledgeCapability[]>(ENDPOINTS.knowledgeCapabilities(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+export async function getKnowledgeHotspots(runId: string): Promise<KnowledgeHotspot[] | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<KnowledgeHotspot[]>(ENDPOINTS.knowledgeHotspots(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/** One named, deterministic traversal (`functions_in_file`, `owners_of`, …). */
+export async function getKnowledgeQuery(
+  runId: string,
+  name: string,
+  params: Record<string, string>,
+): Promise<KnowledgeQueryResult | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<KnowledgeQueryResult>(ENDPOINTS.knowledgeQuery(runId, name, params));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
 }
 
 export async function askChat(runId: string, question: string): Promise<string> {

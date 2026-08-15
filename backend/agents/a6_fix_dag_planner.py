@@ -1,9 +1,9 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.agents.a5_5_context_engineering import load_context_package
 from backend.agents.base import AgentBase
 from backend.models.cve import CVEReachabilityReport
-from backend.models.fix_dag import FixDAGPlan
+from backend.models.fix_dag import FixDAGPlan, OrderingSource
 from backend.models.sig import SemanticIntentGraph
 from backend.services.fix_dag_builder import (
     apply_dependencies,
@@ -19,6 +19,11 @@ from backend.state.schema import RunStateModel
 class FixOrderLLM(BaseModel):
     nodes: list[dict]
     execution_order: list[str]
+    #: Optional: the model's own account of why it chose this order. Absent
+    #: when the model doesn't answer with one — never backfilled with
+    #: generic text, since that would misattribute deterministic prose to the
+    #: model.
+    rationale: str = Field(default="")
 
 
 class A6FixDAGPlannerAgent(AgentBase):
@@ -40,11 +45,19 @@ class A6FixDAGPlannerAgent(AgentBase):
         dependency_edges = build_dependency_edges(nodes, sig, cve_report.findings)
         nodes = apply_dependencies(nodes, dependency_edges)
 
+        ordering_source: OrderingSource = "deterministic"
+        ordering_rationale = ""
+
         if self.settings.stub_mode or not self.settings.llm_configured():
             execution_order = topological_execution_order(nodes, dependency_edges)
         else:
-            llm_order = await self._llm_order(nodes, state)
-            execution_order = llm_order or topological_execution_order(nodes, dependency_edges)
+            llm_order, llm_rationale = await self._llm_order(nodes, state)
+            if llm_order:
+                execution_order = llm_order
+                ordering_source = "llm"
+                ordering_rationale = llm_rationale
+            else:
+                execution_order = topological_execution_order(nodes, dependency_edges)
 
         conflict_batches = detect_conflict_batches(nodes)
 
@@ -53,6 +66,8 @@ class A6FixDAGPlannerAgent(AgentBase):
             execution_order=execution_order,
             conflict_batches=conflict_batches,
             dependency_edges=dependency_edges,
+            ordering_source=ordering_source,
+            ordering_rationale=ordering_rationale,
         )
         plan_dict = plan.model_dump(mode="json")
         state.fix_dag = plan_dict
@@ -86,7 +101,7 @@ class A6FixDAGPlannerAgent(AgentBase):
         ordered += [f for f in auto_scope if f not in ordered]
         return ordered
 
-    async def _llm_order(self, nodes, state: RunStateModel) -> list[str]:
+    async def _llm_order(self, nodes, state: RunStateModel) -> tuple[list[str], str]:
         llm = LLMService(
             self.settings,
             run_id=state.run_id,
@@ -94,11 +109,12 @@ class A6FixDAGPlannerAgent(AgentBase):
             retry_count=state.retry_count,
         )
         prompt = (
-            "Order these fixes respecting dependencies (dependency upgrades before dependent app code):\n"
+            "Order these fixes respecting dependencies (dependency upgrades before dependent app code). "
+            "Include a brief \"rationale\" string explaining the ordering choice.\n"
             f"{[n.model_dump() for n in nodes]}"
         )
         try:
             result = await llm.structured(prompt, FixOrderLLM)
-            return result.execution_order or []
+            return result.execution_order or [], result.rationale
         except Exception:
-            return []
+            return [], ""

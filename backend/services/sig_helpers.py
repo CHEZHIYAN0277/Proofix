@@ -18,16 +18,22 @@ def get_file_criticality(sig: SemanticIntentGraph | None, file_path: str, defaul
     return default
 
 
-def is_module_reachable(
+def reachable_modules(
     sig: SemanticIntentGraph | None,
     package_name: str,
-) -> bool | None:
-    """Return True/False if SIG available, None if unknown."""
+) -> list[str]:
+    """Production files that import `package_name`, or `[]` if none/unknown.
+
+    The same traversal `is_module_reachable` uses to answer yes/no — this
+    additionally keeps *which* files, so a reachable finding can point at real
+    code rather than only asserting reachability happened somewhere.
+    """
     if sig is None:
-        return None
+        return []
     pkg = package_name.lower().replace("-", "_")
     source_roots = sig.source_roots or []
 
+    modules: list[str] = []
     for path, node in sig.files.items():
         if node.role == "test-only":
             continue
@@ -37,8 +43,19 @@ def is_module_reachable(
             continue
         for imp in node.imports:
             if imp.lower().replace("-", "_") == pkg:
-                return True
-    return False
+                modules.append(path)
+                break
+    return modules
+
+
+def is_module_reachable(
+    sig: SemanticIntentGraph | None,
+    package_name: str,
+) -> bool | None:
+    """Return True/False if SIG available, None if unknown."""
+    if sig is None:
+        return None
+    return len(reachable_modules(sig, package_name)) > 0
 
 
 def reclassify_cve_report(sig_data: dict | None, cve_report_data: dict) -> dict:
@@ -58,12 +75,14 @@ def reclassify_cve_report(sig_data: dict | None, cve_report_data: dict) -> dict:
                 critical_queue.append(record.cve_id)
             continue
 
-        reachable = is_module_reachable(sig, record.package)
+        modules = reachable_modules(sig, record.package)
+        reachable = None if sig is None else len(modules) > 0
         if reachable is None:
             record.reachable = None
             record.classification = "Unknown"
         elif reachable:
             record.reachable = True
+            record.reach_path = modules
             record.classification = "Critical"
             critical_queue.append(record.cve_id)
         else:

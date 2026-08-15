@@ -132,11 +132,18 @@ def pin_resolved_target(
     result,
     target: TargetResolution,
     runtime_confirmed: bool,
-) -> None:
-    """Ensure resolved application path is auto-patchable for A7."""
+) -> bool:
+    """Ensure resolved application path is auto-patchable for A7.
+
+    Returns whether pinning actually happened, so the caller can record it on
+    `TargetResolutionSummary.pinned` — the reason a file can legitimately
+    appear in both `auto_patch_scope` and `human_review_required` at once: the
+    traversal's own confidence threshold put it in one list, and this pin
+    forces it into the other regardless.
+    """
     path = target.resolved_application_path
     if not path or not runtime_confirmed:
-        return
+        return False
 
     result.auto_patch_scope = sorted(set(result.auto_patch_scope) | {path})
 
@@ -151,12 +158,14 @@ def pin_resolved_target(
             ScopedFile(
                 path=path,
                 direction="forward",
+                directions=["forward"],
                 propagation_confidence=1.0,
                 risk_score=0.0,
                 hop_count=0,
                 origin=path,
             )
         ]
+    return True
 
 
 def _pick_original_path(reproduction: dict, root_cause: dict) -> str:

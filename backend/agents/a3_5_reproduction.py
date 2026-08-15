@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 from backend.agents.base import AgentBase
@@ -9,7 +10,7 @@ from backend.services.reproduction_parser import (
     parse_pytest_report,
     pytest_report_path,
 )
-from backend.services.subprocess_runner import run_command
+from backend.services.subprocess_runner import PYTHON, run_command
 from backend.state.schema import RunStateModel
 
 _STATUS_MESSAGES = {
@@ -31,23 +32,29 @@ class A35ReproductionAgent(AgentBase):
         if report_path.exists():
             report_path.unlink()
 
-        code, stdout, stderr = await run_command(
-            [
-                "python",
-                "-m",
-                "pytest",
-                "--tb=long",
-                "--json-report",
-                f"--json-report-file={report_path}",
-                "-v",
-            ],
-            cwd=repo,
-            timeout=120,
-        )
+        cmd = [
+            PYTHON,
+            "-m",
+            "pytest",
+            "--tb=long",
+            "--json-report",
+            f"--json-report-file={report_path}",
+            "-v",
+        ]
+        started_at = datetime.utcnow()
+        code, stdout, stderr = await run_command(cmd, cwd=repo, timeout=120)
+        finished_at = datetime.utcnow()
 
         report = load_pytest_report(report_path)
         result = parse_pytest_report(report, code, stdout, stderr, report_path, repo_root=repo)
         result.pre_existing_failures = extract_failed_nodeids(report)
+        # The command that actually produced this evidence — every element
+        # literal, no shell interpolation, safe to show and copy verbatim.
+        result.command = "python -m pytest --tb=long --json-report -v"
+        result.started_at = started_at.isoformat()
+        result.finished_at = finished_at.isoformat()
+        if result.duration_seconds is None:
+            result.duration_seconds = (finished_at - started_at).total_seconds()
 
         reexec_cmd, is_targeted, reexec_timeout = build_reproduction_command(result.failing_test)
         result.reexecution_command = reexec_cmd

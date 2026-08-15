@@ -59,6 +59,7 @@ class A07EnvironmentAgent(AgentBase):
                 "testRunner": report.test_runner,
                 "testRunnerAvailable": report.test_runner_available,
                 "missingImports": report.missing_imports,
+                "testsCollected": report.tests_collected,
                 "manifests": [m.model_dump(mode="json") for m in report.manifests],
                 "suggestedCommand": report.suggested_command,
                 "reason": report.reason,

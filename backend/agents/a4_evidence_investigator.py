@@ -3,17 +3,20 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from backend.agents.base import AgentBase
+from backend.models.investigation import RootCauseSource
 from backend.models.root_cause import Citation, RootCauseBrief
 from backend.orchestrator.trust_gating import MAX_REINVESTIGATIONS
+from backend.security.repository_isolation import HOST_PATH_RE, scrub_environment
 from backend.services.citation_verifier import (
     coerce_llm_citations,
     verify_all_citations_with_metrics,
 )
+from backend.services.evidence_investigation import build_investigation_report
 from backend.services.llm import LLMService
 from backend.services.root_cause_builder import (
     build_runtime_snapshot,
     collect_evidence_refs,
-    compute_confidence,
+    compute_confidence_breakdown,
     synthesize_root_cause_summary,
 )
 from backend.state.schema import RunStateModel
@@ -46,6 +49,12 @@ class A4EvidenceInvestigatorAgent(AgentBase):
         prior = state.root_cause or {}
         prior_count = int(prior.get("reinvestigation_count", 0))
 
+        # Which path produced the brief is real provenance the investigation
+        # report publishes — a deterministic brief and an LLM brief are
+        # different evidence, and the UI is entitled to say which one it read.
+        source: RootCauseSource = "deterministic"
+        investigation_errors: list[str] = []
+
         if self.settings.stub_mode or not self.settings.llm_configured():
             brief = self._stub_brief(
                 stack, findings, repo, reproduction, evidence_refs, cve_context, draft_citations
@@ -56,6 +65,7 @@ class A4EvidenceInvestigatorAgent(AgentBase):
                     stack, findings, cve_report, reproduction, evidence_refs, cve_context, repo,
                     run_id=state.run_id, retry_count=state.retry_count,
                 )
+                source = "llm"
             except Exception as exc:  # noqa: BLE001 — degrade, never fail the run
                 # A4 was the only LLM agent without this guard, and it cost a
                 # whole run: Django's prompt tripped the firewall
@@ -65,6 +75,10 @@ class A4EvidenceInvestigatorAgent(AgentBase):
                 # the deterministic brief is right here and produces real
                 # evidence refs and citations.
                 state.errors.append({"agent": "A4", "error": f"{type(exc).__name__}: {exc}"})
+                investigation_errors.append(
+                    f"LLM investigation unavailable ({type(exc).__name__}: {exc}); "
+                    "the root cause below is the deterministic analysis."
+                )
                 await self.emit_status(
                     state,
                     "retry",
@@ -88,7 +102,9 @@ class A4EvidenceInvestigatorAgent(AgentBase):
         )
         brief.citations = [Citation(**c) for c in validated]
         verified_count = sum(1 for c in brief.citations if c.verified)
-        brief.confidence = compute_confidence(evidence_refs, verified_count, reproduction)
+        brief.confidence, confidence_components = compute_confidence_breakdown(
+            evidence_refs, verified_count, reproduction
+        )
 
         unverified = [c for c in brief.citations if not c.verified]
         if unverified:
@@ -107,6 +123,22 @@ class A4EvidenceInvestigatorAgent(AgentBase):
 
         brief_dict = brief.model_dump(mode="json")
         state.root_cause = brief_dict
+
+        # The audit of the brief: which sources answered, what they said, and
+        # how the confidence above was arrived at. Deterministic and derived
+        # entirely from artifacts A2/A3/A3.5 already persisted — no second
+        # analysis, no LLM call, nothing invented to fill a field.
+        report = build_investigation_report(
+            brief=brief,
+            static_report=state.static_report,
+            reproduction=state.reproduction,
+            cve_report=state.cve_report,
+            confidence_components=confidence_components,
+            root_cause_source=source,
+            errors=investigation_errors,
+        )
+        state.investigation = report.model_dump(mode="json")
+
         await self.emit_status(
             state,
             "completed",
@@ -117,6 +149,13 @@ class A4EvidenceInvestigatorAgent(AgentBase):
                 "confidence": brief.confidence,
                 "evidence_refs": len(brief.evidence_refs),
                 "citation_metrics": citation_metrics,
+                # Counts only — the report itself is served by
+                # `GET /api/runs/{id}/investigation` rather than copied onto
+                # every event, where it would roll off with the event stream.
+                "investigation_status": report.status,
+                "evidence_items": len(report.evidence),
+                "supporting_evidence": len(report.supporting),
+                "contradicting_evidence": len(report.contradicting),
             },
         )
         return state
@@ -195,6 +234,16 @@ CVE context IDs: {cve_context}
 Return citations as JSON objects with non-null string "file", integer "line" (>=1), and string "claim".
 Omit citations you cannot anchor to a concrete file and line.
 """
+        # Every field above is interpolated raw, and the traceback and the
+        # reproduction dict both carry the clone's absolute path — which is a
+        # host path, which the prompt firewall rejects outright. Left unscrubbed
+        # this branch could never reach a provider on *any* repository: a real
+        # run against the vulnapi fixture failed with
+        # `SecurityRejection: prompt exposes repository or host internals:
+        # host_path` and fell through to the deterministic brief every time.
+        # `<PATH>` keeps the file *names* the model must cite while removing the
+        # deployment layout it must not see.
+        prompt = HOST_PATH_RE.sub("<PATH>", scrub_environment(prompt))
         output = await llm.structured(prompt, RootCauseLLMOutput)
         raw_citations = coerce_llm_citations(output.citations, evidence_refs)
         return RootCauseBrief(
