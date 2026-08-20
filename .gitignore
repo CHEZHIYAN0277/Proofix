@@ -24,4 +24,4 @@ build/
 .mutmut-cache/
 
 # macOS
-.DS_Store
+.DS_Storenode_modules/
