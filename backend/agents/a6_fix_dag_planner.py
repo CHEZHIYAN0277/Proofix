@@ -48,8 +48,13 @@ class A6FixDAGPlannerAgent(AgentBase):
         ordering_source: OrderingSource = "deterministic"
         ordering_rationale = ""
 
+        # Computed unconditionally: cheap (pure graph sort, no I/O), and the
+        # UI's LLM-vs-graph comparison needs the real deterministic answer
+        # even on a run where the LLM path was the one that ran.
+        deterministic_order = topological_execution_order(nodes, dependency_edges)
+
         if self.settings.stub_mode or not self.settings.llm_configured():
-            execution_order = topological_execution_order(nodes, dependency_edges)
+            execution_order = deterministic_order
         else:
             llm_order, llm_rationale = await self._llm_order(nodes, state)
             if llm_order:
@@ -57,7 +62,7 @@ class A6FixDAGPlannerAgent(AgentBase):
                 ordering_source = "llm"
                 ordering_rationale = llm_rationale
             else:
-                execution_order = topological_execution_order(nodes, dependency_edges)
+                execution_order = deterministic_order
 
         conflict_batches = detect_conflict_batches(nodes)
 
@@ -68,6 +73,7 @@ class A6FixDAGPlannerAgent(AgentBase):
             dependency_edges=dependency_edges,
             ordering_source=ordering_source,
             ordering_rationale=ordering_rationale,
+            deterministic_order=deterministic_order,
         )
         plan_dict = plan.model_dump(mode="json")
         state.fix_dag = plan_dict

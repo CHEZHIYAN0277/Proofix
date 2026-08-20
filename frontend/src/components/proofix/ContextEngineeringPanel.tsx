@@ -1,32 +1,35 @@
 /**
- * A5.5 — Context Reduction Funnel.
+ * A5.5 — Context Flow.
  *
  * Everything here comes from `GET /api/runs/{runId}/context`
  * (`ContextPackage`, A5.5's own artifact — stored under the run's `context`
- * key, never on `RunStateModel` itself). No count, bar width, glyph or status
- * is invented: every number below is a direct field read, and the two
- * derived facts (which files are "in context", and the relative bar widths)
- * are deterministic set-membership and ratio computations over fields the
- * backend already sent — the same kind of client-side aggregation A1 already
- * does when it groups files by role.
+ * key, never on `RunStateModel` itself). No count, ribbon width, glyph or
+ * status is invented: every number below is a direct field read, and the
+ * derived facts (which files are "in context", ribbon thickness, the relative
+ * bar widths) are deterministic set-membership and ratio computations over
+ * fields the backend already sent — the same kind of client-side aggregation
+ * A1 already does when it groups files by role.
  *
  * Distinct from A5 (blast radius: what changing a file could affect) and A6
  * (the repair plan: what will be changed and in what order). A5.5 answers
  * neither — it answers "what code did ProoFix decide the repair actually
- * needs to see, and did it pass the privacy check before A6/A7 got it."
+ * needs to see, and did it pass the privacy check before A7 got it."
  *
- * Design: a five-stage funnel is the entire above-the-fold view — no
- * paragraphs, no evidence text, no acceptance criteria. Everything else
- * (why a file ranked, the redaction ledger, extracted source, constraints,
- * timing) is behind a click. There is no "Scanning → Extracting → Redacting"
- * animation: A5.5 emits exactly one started/completed event pair, and
- * animating intermediate stages that do not exist would fake agent activity.
+ * Design: one picture, not several. The hero is a left-to-right flow of the
+ * real files — repository → relevance → privacy gate → A7 — with each stage's
+ * own count folded into that stage's header rather than restated in a second
+ * funnel below it. Under it sit what survived, then two diagnostic rows
+ * (privacy total, adoption) that open the ledger and the reason. Everything
+ * else — why a file ranked, extracted source, constraints, timing — is behind
+ * a click. There is no "Scanning → Extracting → Redacting" animation: A5.5
+ * emits exactly one started/completed event pair, and animating intermediate
+ * stages that do not exist would fake agent activity.
  */
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
-  ArrowRight,
+  ArrowUpRight,
   BookOpen,
   Braces,
   ChevronDown,
@@ -38,8 +41,6 @@ import {
   Flame,
   FolderCode,
   Link2,
-  Lock,
-  Search,
   ShieldAlert,
   ShieldCheck,
   ShieldX,
@@ -371,12 +372,17 @@ function SelectedContext({
   const categoryOrder: SymbolCategory[] = ["function", "class", "other"];
 
   return (
-    <div className="mx-auto w-full max-w-md rounded-xl border border-primary/30 bg-primary/5 p-3">
-      <div className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wider text-ink-soft">
-        <span>
-          {fileNames.length} selected file{fileNames.length === 1 ? "" : "s"}
+    <div className="rounded border border-border px-2.5 py-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="font-mono text-[9px] font-semibold uppercase tracking-wider text-ink-soft">
+          Context payload
         </span>
-        {lines > 0 && <span>{lines} lines</span>}
+        <span className="font-mono text-[9px] uppercase tracking-wider text-ink-soft">
+          <span className="text-ink">
+            {fileNames.length} selected file{fileNames.length === 1 ? "" : "s"}
+          </span>
+          {lines > 0 && <span> · {lines} lines</span>}
+        </span>
       </div>
       <ChipRow items={fileNames} max={8} />
 
@@ -401,14 +407,15 @@ function SelectedContext({
 }
 
 /**
- * A short flow connector between pipeline stages — a drawn line with an
- * arrowhead, not a bare glyph. Purely decorative (`aria-hidden`): the stages
- * it joins are the real content.
+ * The divider between the panel's three blocks — flow, then what survived,
+ * then the diagnostic rows. A drawn caret rather than a bare glyph, kept
+ * small: it marks sequence, it is not itself a stage. Purely decorative
+ * (`aria-hidden`): the blocks it joins are the real content.
  */
 function FlowConnector() {
   return (
-    <div className="flex justify-center" aria-hidden>
-      <svg width="16" height="18" viewBox="0 0 16 18" className="flow-connector text-ink-soft/40">
+    <div className="flex justify-center py-0.5" aria-hidden>
+      <svg width="10" height="8" viewBox="0 0 16 18" className="flow-connector text-ink-soft/25">
         <line x1="8" y1="0" x2="8" y2="11" stroke="currentColor" strokeWidth="1.5" />
         <path
           d="M3 10 L8 16 L13 10"
@@ -423,17 +430,17 @@ function FlowConnector() {
   );
 }
 
-// -------------------------------------------------------------- reduction funnel
+// ------------------------------------------------------------- stage summary
 
 /**
- * A real, narrowing funnel — three full-width rows whose *fill* is the
- * ratio, stacked so the shrinking fill reads as one continuous reduction.
- * Every fill is `count / candidates`. Deliberately plain rectangles: an
- * earlier version clipped each row into a trapezoid to taper the edges, and
- * the clip-path seams did not render cleanly against the row borders in a
- * real browser — visible notches and misaligned joins, exactly the "doesn't
- * look right" this replaces. A rectangle whose fill shrinks says the same
- * thing and cannot render incorrectly.
+ * The per-stage counts, as one compact horizontal strip:
+ * `14 candidates → 3 extracted → 6 functions`. This used to be the panel's
+ * hero — three stacked full-width bars — but it and the Context Flow above it
+ * were two competing pictures of the same reduction, and the flow is the one
+ * that carries file identity, privacy outcome and destination. So the bars
+ * stay (each fill is still the real `count / candidates` ratio, and the shape
+ * still narrows left to right) but at strip scale, as supporting numbers
+ * under the flow rather than beside it.
  *
  * The label/value text sits on its own layer above the fill (not inside it),
  * so a heavily reduced row — fill near the clamped minimum — never clips or
@@ -474,92 +481,34 @@ function FunnelBarRow({
       type={onClick ? "button" : undefined}
       onClick={onClick}
       aria-expanded={onClick ? expanded : undefined}
-      className={`funnel-row relative block h-11 w-full overflow-hidden rounded-lg border text-left ${trackClass} ${
+      className={`funnel-row relative block h-6 min-w-0 flex-1 overflow-hidden rounded border text-left ${trackClass} ${
         onClick ? "cursor-pointer" : ""
       }`}
     >
       <div
         aria-hidden
-        className={`funnel-fill absolute inset-y-0 left-0 rounded-l-lg transition-[width] duration-500 ${fillClass}`}
+        className={`funnel-fill absolute inset-y-0 left-0 transition-[width] duration-500 ${fillClass}`}
         style={{ width: `${widthPct}%` }}
       />
-      <div className="relative flex h-full items-center gap-1.5 px-3">
-        <Icon className="h-3.5 w-3.5 shrink-0 text-ink-soft" aria-hidden />
-        <span className="truncate text-[10px] font-medium uppercase tracking-wider text-ink-soft">
+      <div className="relative flex h-full items-center gap-1 px-1.5">
+        <Icon className="h-3 w-3 shrink-0 text-ink-soft/70" aria-hidden />
+        <span className="shrink-0 font-mono text-[10px] font-semibold text-ink">{value}</span>
+        <span className="truncate text-[8px] uppercase tracking-wider text-ink-soft/60">
           {label}
         </span>
-        {onClick &&
-          (expanded ? (
-            <ChevronDown className="h-3 w-3 shrink-0 text-ink-soft" aria-hidden />
-          ) : (
-            <ChevronRight className="h-3 w-3 shrink-0 text-ink-soft" aria-hidden />
-          ))}
         {sublabel && (
-          <span className="ml-auto shrink-0 truncate pl-2 text-[9px] text-ink-soft">
+          <span className="ml-auto shrink-0 truncate pl-1 text-[8px] text-ink-soft/60">
             {sublabel}
           </span>
         )}
-        <span
-          className={`shrink-0 pl-2 font-mono text-base font-semibold text-ink ${sublabel ? "" : "ml-auto"}`}
-        >
-          {value}
-        </span>
+        {onClick &&
+          (expanded ? (
+            <ChevronDown className="ml-auto h-2.5 w-2.5 shrink-0 text-ink-soft" aria-hidden />
+          ) : (
+            <ChevronRight className="ml-auto h-2.5 w-2.5 shrink-0 text-ink-soft" aria-hidden />
+          ))}
       </div>
     </Wrapper>
-  );
-}
-
-function ReductionFunnel({
-  candidates,
-  extracted,
-  contextFiles,
-  contextFunctions,
-  contextLines,
-  extractedExpanded,
-  onToggleExtracted,
-}: {
-  candidates: number;
-  extracted: number;
-  contextFiles: number;
-  contextFunctions: number;
-  contextLines: number;
-  extractedExpanded: boolean;
-  onToggleExtracted: () => void;
-}) {
-  const wCandidates = 100;
-  const wExtracted = fillPct(extracted, candidates);
-  const wContext = fillPct(contextFiles, candidates);
-
-  return (
-    <div className="mx-auto flex w-full max-w-md flex-col gap-2">
-      <FunnelBarRow
-        widthPct={wCandidates}
-        trackClass="border-border"
-        fillClass="bg-ink-soft/12"
-        icon={Files}
-        label="Candidates considered"
-        value={String(candidates)}
-      />
-      <FunnelBarRow
-        widthPct={wExtracted}
-        trackClass="border-primary/25 hover:border-primary/40"
-        fillClass="bg-primary/20"
-        icon={Filter}
-        label="Files extracted"
-        value={String(extracted)}
-        onClick={onToggleExtracted}
-        expanded={extractedExpanded}
-      />
-      <FunnelBarRow
-        widthPct={wContext}
-        trackClass="border-primary/40"
-        fillClass="bg-primary/35"
-        icon={Braces}
-        label="Minimal repair context"
-        value={`${contextFunctions} function${contextFunctions === 1 ? "" : "s"}`}
-        sublabel={`${contextLines} lines · ${contextFiles} file${contextFiles === 1 ? "" : "s"}`}
-      />
-    </div>
   );
 }
 
@@ -577,6 +526,22 @@ const PRIVACY_COLOR: Record<ContextPackageModel["privacy_guard_status"], string>
   failed: "#dc2626",
 };
 
+/** Per-file privacy outcome for the Context Flow ribbons. The backend gives
+ * an aggregate `privacy_guard_status` plus a `redactions` list keyed by
+ * file — there is no per-file guard verdict, so a file is only ever "masked"
+ * because it has a real entry in `redactions`, and every file reads
+ * "failed" together when the guard itself failed (no per-file recovery is
+ * invented). Reuses `PRIVACY_ICON`/`PRIVACY_COLOR` exactly. */
+function filePrivacy(
+  file: string,
+  pkg: ContextPackageModel,
+  redactedFiles: Set<string>,
+): ContextPackageModel["privacy_guard_status"] {
+  if (pkg.privacy_guard_status === "failed") return "failed";
+  if (redactedFiles.has(file)) return "masked";
+  return "clean";
+}
+
 function PrivacyStage({
   pkg,
   onClick,
@@ -591,39 +556,38 @@ function PrivacyStage({
   const color = PRIVACY_COLOR[status];
   const count = pkg.metrics.privacy_redactions;
 
+  // Verdict, count, and the way into the ledger — the per-file outcome is
+  // already on the ribbons above, so this row adds no prose.
   return (
     <button
       type="button"
       onClick={onClick}
       aria-expanded={expanded}
-      className="w-full rounded-xl border p-3 text-left transition-colors"
-      style={{
-        borderColor: `color-mix(in srgb, ${color} 35%, transparent)`,
-        background: `color-mix(in srgb, ${color} 8%, transparent)`,
-      }}
+      className="flex w-full items-center gap-2 rounded border border-border px-2.5 py-1.5 text-left transition-colors hover:bg-surface-muted/30"
     >
-      <div className="flex items-center gap-2">
-        <Search className="h-4 w-4 text-ink-soft" aria-hidden />
-        <ArrowRight className="h-3 w-3 text-ink-soft/50" aria-hidden />
-        <Lock className="h-4 w-4 text-ink-soft" aria-hidden />
-        <ArrowRight className="h-3 w-3 text-ink-soft/50" aria-hidden />
-        <StatusIcon className="h-5 w-5" style={{ color }} aria-hidden />
-        <span className="text-sm font-bold uppercase tracking-wide" style={{ color }}>
-          {status}
-        </span>
-        {expanded ? (
-          <ChevronDown className="ml-auto h-3 w-3 text-ink-soft" aria-hidden />
-        ) : (
-          <ChevronRight className="ml-auto h-3 w-3 text-ink-soft" aria-hidden />
-        )}
-      </div>
-      <p className="mt-1.5 text-[11px] text-ink-soft">
+      <span className="w-24 shrink-0 font-mono text-[9px] font-semibold uppercase tracking-wider text-ink-soft">
+        Privacy gate
+      </span>
+      <StatusIcon className="h-3.5 w-3.5 shrink-0" style={{ color }} aria-hidden />
+      <span
+        className="shrink-0 font-mono text-[10px] font-semibold uppercase tracking-wider"
+        style={{ color }}
+      >
+        {status}
+      </span>
+      {/* A failed guard is the one case that still spends a sentence — the
+          flow can show that nothing reached the agent, but not why no claim
+          is available. */}
+      <span className="min-w-0 flex-1 truncate text-[10px] text-ink-soft">
         {status === "failed"
           ? "The guard errored. No safety claim can be made about this context."
-          : count > 0
-            ? `${count} redaction${count === 1 ? "" : "s"}`
-            : "No secrets detected."}
-      </p>
+          : `${count} redaction${count === 1 ? "" : "s"}`}
+      </span>
+      {expanded ? (
+        <ChevronDown className="h-3 w-3 shrink-0 text-ink-soft" aria-hidden />
+      ) : (
+        <ChevronRight className="h-3 w-3 shrink-0 text-ink-soft" aria-hidden />
+      )}
     </button>
   );
 }
@@ -668,54 +632,58 @@ function AdoptionStage({ pkg }: { pkg: ContextPackageModel }) {
   const adopted = pkg.prefer_focused;
   const hasReason = pkg.metrics.adoption_reason.trim().length > 0;
 
+  // A7 throughout: A7 is the agent that consumes this package (`prefer_focused`
+  // decides whether it replaces A7's own extraction), so the terminus, this
+  // row and its explanation all name the same agent.
   return (
-    <div
-      role="group"
-      aria-label="Adoption by A6/A7"
-      className={`rounded-xl border p-3 ${
-        adopted
-          ? "border-status-completed/30 bg-status-completed-bg/20"
-          : "border-status-retry/30 bg-status-retry-bg/20"
-      }`}
-    >
-      <div className="flex items-center gap-2">
-        <ArrowRight className="h-4 w-4 text-ink-soft" aria-hidden />
-        <span className="text-[10px] font-medium uppercase tracking-wider text-ink-soft">
-          A6 Repair Planner
+    <div role="group" aria-label="Adoption by A7" className="rounded border border-border">
+      <div className="flex items-center gap-2 px-2.5 py-1.5">
+        <span className="w-24 shrink-0 font-mono text-[9px] font-semibold uppercase tracking-wider text-ink-soft">
+          A7 repair agent
         </span>
-      </div>
-      <div className="mt-1 flex items-center gap-2">
         <span
-          className={`text-sm font-semibold uppercase tracking-wide ${adopted ? "text-status-completed" : "text-status-retry"}`}
+          className={`shrink-0 font-mono text-[10px] font-semibold uppercase tracking-wider ${
+            adopted ? "text-status-completed" : "text-status-retry"
+          }`}
         >
           {adopted ? "✓ ADOPTED" : "✕ NOT ADOPTED"}
         </span>
+        {/* Adopted: "✓ ADOPTED" is the whole message for a sighted reader, so
+            the sentence spelling it out is available to assistive tech rather
+            than spending a line of the row.
+            Not adopted: stays visible. A package that was fully built and
+            privacy-checked can still be discarded by A7, and that is
+            consequential enough to state on screen rather than imply from a
+            glyph. */}
+        {adopted ? (
+          <span className="sr-only">
+            Focused context accepted — A7 uses this package instead of its own extraction.
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-[10px] text-ink-soft">
+            A7 keeps its own extraction; this package was not used.
+          </span>
+        )}
+        {adopted && <span className="flex-1" aria-hidden />}
+        {adopted && hasReason && (
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            className="flex shrink-0 items-center gap-0.5 text-[10px] font-medium text-ink-soft transition-colors hover:text-ink"
+          >
+            {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            Why
+          </button>
+        )}
       </div>
-      {/* Always visible, not behind a click: a package that was fully built
-          and privacy-checked can still be unused by A7, and that fact must
-          be the first thing on screen, not something the user has to know to
-          go looking for. */}
-      <p className="mt-1 text-[11px] text-ink-soft">
-        {adopted
-          ? "Focused context accepted — A7 uses this package instead of its own extraction."
-          : "A7 keeps its own extraction; this package was not used."}
-      </p>
       {!adopted && hasReason && (
-        <p className="mt-1 text-[11px] text-ink-soft">Reason: {pkg.metrics.adoption_reason}.</p>
-      )}
-      {adopted && hasReason && (
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          aria-expanded={open}
-          className="mt-1 flex items-center gap-1 text-[10px] font-medium text-ink-soft transition-colors hover:text-ink"
-        >
-          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          Why
-        </button>
+        <p className="px-2.5 pb-1.5 text-[10px] text-ink-soft">
+          Reason: {pkg.metrics.adoption_reason}.
+        </p>
       )}
       {adopted && hasReason && open && (
-        <p className="mt-1 text-[11px] text-ink-soft">{pkg.metrics.adoption_reason}.</p>
+        <p className="px-2.5 pb-1.5 text-[10px] text-ink-soft">{pkg.metrics.adoption_reason}.</p>
       )}
     </div>
   );
@@ -980,6 +948,579 @@ function RelevanceMap({
   );
 }
 
+// -------------------------------------------------------------- context flow
+
+/** Ribbon color by dominant signal category — the same three groups
+ * `REASON_BADGES` already derives from real nonzero signals. A file with no
+ * matched group (or no ranked-file entry at all, e.g. it only appears via
+ * `related_utilities`) gets the neutral default rather than a guessed one. */
+const CATEGORY_RIBBON_COLOR: Record<string, string> = {
+  Target: "var(--color-primary)",
+  "Runtime evidence": "var(--color-status-retry)",
+  Dependency: "var(--color-ink-soft)",
+};
+const DEFAULT_RIBBON_COLOR = "var(--color-ink-soft)";
+
+function dominantRibbonColor(signals: Record<string, number> | undefined): string {
+  if (!signals) return DEFAULT_RIBBON_COLOR;
+  const badges = reasonBadges(signals);
+  return badges.length > 0
+    ? (CATEGORY_RIBBON_COLOR[badges[0].label] ?? DEFAULT_RIBBON_COLOR)
+    : DEFAULT_RIBBON_COLOR;
+}
+
+/** Bounded presentational stroke thickness from a real line count — never a
+ * new metric, just a rendering choice so one large file cannot dominate the
+ * row. Files with no extracted body (signature-only, or no ranked entry)
+ * still draw a thin, visible line rather than vanishing. */
+function ribbonThickness(lines: number): number {
+  if (lines <= 0) return 2;
+  return Math.max(2, Math.min(8, 2 + Math.round(lines / 10)));
+}
+
+/* Flow geometry. Fixed so the ribbon rows, the stage headers above them and
+ * the convergence curves on the right all resolve to the same coordinates —
+ * the markers and their labels cannot drift apart. */
+const ROW_H = 40; // one file row — tall enough to track a ribbon across
+const REL_X = 30; // % along the track: relevance marker
+const GATE_X = 64; // % along the track: privacy checkpoint
+const GATE_GAP = 11; // px the ribbon is cut either side of a masked checkpoint
+const NAME_COL = "34%"; // repository / filename column
+const CONV_W = 26; // convergence curve column, px
+const STAGE_HEAD_H = 50; // label (2 lines) + chip; all four stages share this top
+const MIN_FLOW_H = 84; // floor only, so a 1–2 file package is not squashed
+
+/* Widths are proportional first and capped second, so the flow reflows with
+ * the panel instead of overflowing it. The cap keeps them from ballooning on
+ * a wide screen; the percentage is what makes them shrink on a narrow one.
+ *
+ * The chip width matters most: ② and ③ are centred on 30% and 64% of the
+ * track, so a box of at most 26% of the track spans 17–43% and 51–77%. Those
+ * ranges cannot meet at any width, which is what stops the two stage labels
+ * from colliding as the panel narrows — the failure mode a fixed 124px box
+ * had below roughly 470px of track. */
+const NODE_W = "min(140px, 22%)"; // repair-agent terminus
+const NODE_COL = `calc(${NODE_W} + 4px)`; // terminus + its 4px gutter
+/* ② and ③ are absolutely positioned inside the track, so their 26% is 26% of
+ * the track — the figure the no-collision reasoning above depends on. ① and ④
+ * sit inside their own columns, where a percentage would resolve against that
+ * column instead and collapse the chip, so they cap against their column. */
+const CHIP_W = "min(124px, 26%)"; // ② / ③ — measured against the track
+const CHIP_MAX = "min(124px, 100%)"; // ① / ④ — measured against their column
+
+/**
+ * One real file, flowing repository → relevance → privacy gate → repair
+ * context. Non-clickable by design: the existing expand/inspect behavior for
+ * a file already lives in `RelevanceMapRow`/`FileDetail` behind the Context
+ * Map toggle, so this row reuses that data but not that state.
+ *
+ * Tooltips are deliberately per-element and short — the full path on the
+ * name, the guard verdict on the checkpoint. A row-level `title` carrying
+ * path + lines + signals used to render as one wide native tooltip that
+ * covered the stage headers, and a native tooltip's position cannot be
+ * controlled from CSS; the fix is to not produce a large one. Everything it
+ * carried is on screen already (line count) or one click away in the Context
+ * Map (why the file ranked).
+ *
+ * A `failed` guard truncates the ribbon at the checkpoint: nothing can be
+ * claimed to have safely reached the agent, so nothing is drawn as if it had.
+ */
+function FlowRibbonRow({
+  file,
+  rankedFile,
+  lines,
+  privacy,
+  redactionCount,
+}: {
+  file: string;
+  rankedFile: RankedContextFile | undefined;
+  lines: number;
+  privacy: ContextPackageModel["privacy_guard_status"];
+  redactionCount: number;
+}) {
+  const color = dominantRibbonColor(rankedFile?.signals);
+  const thickness = ribbonThickness(lines);
+  const privacyColor = PRIVACY_COLOR[privacy];
+  const failed = privacy === "failed";
+  const masked = privacy === "masked";
+  // Masked ribbons narrow after the gate — a real redaction removed content.
+  const afterThickness = masked ? Math.max(2, thickness - 2) : thickness;
+  const privacyTitle = failed
+    ? "Privacy gate: failed — no safety claim can be made about this context"
+    : masked
+      ? `Privacy gate: masked — ${redactionCount} redaction${redactionCount === 1 ? "" : "s"} in this file`
+      : "Privacy gate: clean";
+
+  return (
+    <div className="flex items-center" style={{ height: ROW_H }}>
+      <span
+        className="shrink-0 truncate pr-2 font-mono text-[11px] text-ink"
+        style={{ width: NAME_COL }}
+        title={file}
+      >
+        {file}
+      </span>
+
+      <span className="relative min-w-0 flex-1" style={{ height: ROW_H }} aria-hidden>
+        {/* Track before the gate. A masked ribbon stops short of the
+            checkpoint and resumes past it, thinner — so the gate reads as a
+            place where the ribbon was cut and something was taken out of it,
+            not merely a badge sitting on an unbroken line. */}
+        <span
+          className="absolute rounded-full"
+          style={{
+            left: 0,
+            width: `calc(${GATE_X}% - ${masked ? GATE_GAP : 0}px)`,
+            top: `calc(50% - ${thickness / 2}px)`,
+            height: thickness,
+            background: color,
+            opacity: 0.7,
+          }}
+        />
+        {/* track after the gate — omitted entirely when the guard failed */}
+        {!failed && (
+          <span
+            className="absolute rounded-full"
+            style={{
+              left: `calc(${GATE_X}% + ${masked ? GATE_GAP : 0}px)`,
+              right: 0,
+              top: `calc(50% - ${afterThickness / 2}px)`,
+              height: afterThickness,
+              background: color,
+              opacity: 0.7,
+            }}
+          />
+        )}
+        {/* relevance marker */}
+        <span
+          className="absolute h-1.5 w-1.5 rounded-full"
+          style={{
+            left: `${REL_X}%`,
+            top: "calc(50% - 3px)",
+            background: color,
+            boxShadow: "0 0 0 3px var(--color-surface)",
+          }}
+        />
+        {/* privacy checkpoint */}
+        <span
+          className="absolute flex items-center gap-1"
+          style={{ left: `${GATE_X}%`, top: "50%", transform: "translate(-50%, -50%)" }}
+        >
+          <span
+            className="flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold leading-none"
+            style={{
+              background: "var(--color-surface)",
+              border: `1px solid ${privacyColor}`,
+              color: privacyColor,
+            }}
+            title={privacyTitle}
+          >
+            {failed ? "✕" : masked ? "⚠" : "✓"}
+          </span>
+        </span>
+        {(masked || failed) && (
+          <span
+            /* Below ~32rem of panel the track is too short to seat this
+               beside the checkpoint without running into the line count; the
+               coloured badge still carries the verdict, and the privacy row
+               below states it in words. */
+            className="absolute hidden whitespace-nowrap font-mono text-[8px] font-semibold uppercase tracking-wider @lg:inline"
+            style={{
+              left: `calc(${GATE_X}% + 12px)`,
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: privacyColor,
+              background: "var(--color-surface)",
+              paddingLeft: 2,
+              paddingRight: 2,
+            }}
+          >
+            {/* The badge beside this already carries the ⚠ / ✕ glyph, so the
+                label is words only. The masked form carries this file's own
+                real redaction count. */}
+            {failed ? "Guard failed" : `Masked · ${redactionCount}`}
+          </span>
+        )}
+        {/* How much of this file arrived, annotated at the end of its own
+            track rather than in a separate column: the gutter it used to sit
+            in lined up with no stage header and broke the ribbon between the
+            gate and the convergence. */}
+        {lines > 0 && (
+          <span
+            className="absolute right-0 hidden font-mono text-[9px] text-ink-soft/70 @lg:inline"
+            style={{
+              top: "50%",
+              transform: "translateY(-50%)",
+              background: "var(--color-surface)",
+              paddingLeft: 4,
+            }}
+          >
+            {lines} lines
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Candidates that were considered but did not reach the repair context,
+ * drawn as one subordinate branch that diverges from the flow and stops at
+ * the relevance stage. The count is always derived from real
+ * `files_ranked` / real selected files — never estimated — and no reason is
+ * implied beyond "not selected", because the package does not carry one.
+ */
+function ExcludedBranch({ text }: { text: string }) {
+  return (
+    <div className="flex items-center" style={{ height: ROW_H }}>
+      <span className="shrink-0" style={{ width: NAME_COL }} aria-hidden />
+      <span className="relative min-w-0 flex-1" style={{ height: ROW_H }}>
+        <svg className="absolute inset-0 h-full w-full text-ink-soft/30" aria-hidden={true}>
+          {/* diverges away from the flow and stops — these never reach the gate */}
+          <path
+            d="M 0 0 C 14 0, 10 17, 26 17"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1"
+            strokeDasharray="2 3"
+          />
+        </svg>
+        <span
+          className="absolute truncate whitespace-nowrap text-[9px] italic text-ink-soft/50"
+          style={{ left: 32, top: "50%", transform: "translateY(-50%)" }}
+        >
+          {text}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The terminus the ribbons converge into. Carries only what the ④ stage
+ * header above it does not already say: the adoption state
+ * (`prefer_focused`, unchanged logic) and the resolved target function. The
+ * agent's name lives in that header; the full adoption reason lives in
+ * `AdoptionStage` below.
+ */
+function RepairAgentNode({ pkg, height }: { pkg: ContextPackageModel; height: number }) {
+  const adopted = pkg.prefer_focused;
+  const accent = adopted ? "var(--color-status-completed)" : "var(--color-status-retry)";
+  return (
+    <div
+      className="flex w-full min-w-0 flex-col justify-center rounded border px-2 py-2"
+      style={{
+        minHeight: Math.min(height, 56),
+        borderColor: `color-mix(in srgb, ${accent} 35%, transparent)`,
+        background: `color-mix(in srgb, ${accent} 7%, transparent)`,
+      }}
+    >
+      <div className="flex min-w-0 items-center gap-1">
+        <ArrowUpRight className="h-3.5 w-3.5 shrink-0" style={{ color: accent }} aria-hidden />
+        <span
+          className="truncate font-mono text-[10px] font-semibold uppercase tracking-wider"
+          style={{ color: accent }}
+          title={adopted ? "Context adopted" : "Context not adopted"}
+        >
+          {adopted ? "Context adopted" : "Context not adopted"}
+        </span>
+      </div>
+      {pkg.target_function && (
+        <div
+          className="mt-1 truncate font-mono text-[10px] text-ink-soft"
+          title={pkg.target_function}
+        >
+          {pkg.target_function}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The privacy stage's own count, so all four stage headers carry one and the
+ * band reads as a row rather than three chips and a gap. Deliberately not a
+ * `FunnelBarRow`: this is a verdict, not a share of the candidate pool, so it
+ * has no ratio to fill. The status word itself stays out of the chip — it is
+ * on every ribbon below and in the ledger row — leaving the count, which
+ * appears only here.
+ */
+function PrivacyStageChip({ pkg }: { pkg: ContextPackageModel }) {
+  const status = pkg.privacy_guard_status;
+  const Icon = PRIVACY_ICON[status];
+  const color = PRIVACY_COLOR[status];
+  const n = pkg.metrics.privacy_redactions;
+  return (
+    <div
+      className="flex h-6 min-w-0 flex-1 items-center gap-1 rounded border px-1.5"
+      style={{
+        borderColor: `color-mix(in srgb, ${color} 30%, transparent)`,
+        background: `color-mix(in srgb, ${color} 8%, transparent)`,
+      }}
+    >
+      <Icon className="h-3 w-3 shrink-0" style={{ color }} aria-hidden />
+      {status === "failed" ? (
+        <span className="truncate font-mono text-[9px] font-semibold" style={{ color }}>
+          Guard failed
+        </span>
+      ) : (
+        <>
+          <span className="shrink-0 font-mono text-[10px] font-semibold text-ink">{n}</span>
+          <span className="truncate text-[8px] uppercase tracking-wider text-ink-soft/60">
+            redaction{n === 1 ? "" : "s"}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** A numbered stage label. The numbering is the flow's own left-to-right
+ * order, and appears nowhere else in the panel. */
+function StageLabel({
+  index,
+  label,
+  sublabel,
+}: {
+  index: string;
+  label: string;
+  sublabel: string;
+}) {
+  return (
+    <>
+      <div
+        className="truncate font-mono text-[9px] font-semibold uppercase tracking-wider text-ink-soft"
+        title={label}
+      >
+        {index} {label}
+      </div>
+      {/* The sublabel is the first thing to go on a narrow panel: it restates
+          the stage rather than adding a fact, so dropping it buys width for
+          the labels and counts that do. */}
+      <div className="hidden truncate text-[8px] uppercase tracking-wider text-ink-soft/50 @md:block">
+        {sublabel}
+      </div>
+    </>
+  );
+}
+
+/**
+ * The hero: real files flowing repository → relevance → privacy gate →
+ * repair agent, converging into a single bundle at the terminus.
+ *
+ * Every row is a file already present in `selectedFileNames` (the same set
+ * `SelectedContext`'s chips draw from), so nothing here can show a filename
+ * the rest of the panel would call "excluded" — unselected candidates are
+ * represented only as a real aggregate count on a subordinate branch, never
+ * individually, until the user opens the existing Context Map for the full
+ * per-file breakdown.
+ */
+function ContextFlowDiagram({
+  pkg,
+  symbolsByFile,
+  candidates,
+  extracted,
+  selectedFileNames,
+  relevanceOpen,
+  onToggleRelevance,
+}: {
+  pkg: ContextPackageModel;
+  symbolsByFile: Map<string, ExtractedSymbol[]>;
+  candidates: number;
+  extracted: number;
+  selectedFileNames: string[];
+  relevanceOpen: boolean;
+  onToggleRelevance: () => void;
+}) {
+  const redactionsByFile = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of pkg.redactions) m.set(r.file, (m.get(r.file) ?? 0) + 1);
+    return m;
+  }, [pkg.redactions]);
+  const rankedByFile = useMemo(() => {
+    const m = new Map<string, RankedContextFile>();
+    for (const f of pkg.ranked_files) m.set(f.file, f);
+    return m;
+  }, [pkg.ranked_files]);
+
+  // No early return on an empty selection: "14 considered, none survived" is
+  // the case where the stage counts matter most, so the flow still renders —
+  // with no ribbons, and the excluded branch carrying the whole candidate set.
+  const ROW_CAP = 5;
+  const shown = selectedFileNames.slice(0, ROW_CAP);
+  const overflowSelected = selectedFileNames.length - shown.length;
+  const notSelected = Math.max(0, candidates - selectedFileNames.length);
+  const excludedText =
+    notSelected > 0
+      ? `${notSelected} other candidate${notSelected === 1 ? "" : "s"} excluded`
+      : overflowSelected > 0
+        ? `+${overflowSelected} more selected file${overflowSelected === 1 ? "" : "s"}`
+        : null;
+
+  const contextFiles = pkg.metrics.context_files;
+  const contextFunctions = pkg.metrics.context_functions;
+  const wCandidates = 100;
+  const wExtracted = fillPct(extracted, candidates);
+  const wContext = fillPct(contextFiles, candidates);
+
+  const rowCount = shown.length + (excludedText ? 1 : 0);
+  const flowH = Math.max(rowCount * ROW_H, MIN_FLOW_H);
+  const stackTop = (flowH - rowCount * ROW_H) / 2;
+  const centerY = flowH / 2;
+  // One curve per ribbon that actually reaches the agent; a failed guard
+  // truncates its ribbon at the gate, so it gets no curve either.
+  const curves = shown
+    .map((file, i) => ({
+      file,
+      y: stackTop + i * ROW_H + ROW_H / 2,
+      color: dominantRibbonColor(rankedByFile.get(file)?.signals),
+      reaches: pkg.privacy_guard_status !== "failed",
+    }))
+    .filter((c) => c.reaches);
+
+  return (
+    // `@container`: the flow reflows against the panel's own width, not the
+    // viewport's — this panel sits in a column beside a fixed sidebar, so a
+    // viewport breakpoint would fire at the wrong moment.
+    <div className="@container rounded-lg border border-border bg-surface-muted/10 p-3">
+      {/* The target the whole flow is about, on the flow's own header line —
+          the card's title and description come from the timeline entry that
+          renders this panel, so neither is repeated here. */}
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+        <span className="shrink-0 font-mono text-[10px] font-semibold uppercase tracking-widest text-ink">
+          Context flow
+        </span>
+        <span className="min-w-0 truncate font-mono text-[11px] text-ink" title={pkg.target_file}>
+          {pkg.target_file}
+          {pkg.target_function && <span className="text-ink-soft"> :: {pkg.target_function}</span>}
+        </span>
+      </div>
+
+      {/* Stage headers, each carrying that stage's own count. This row mirrors
+          a ribbon row's column structure exactly — name column, track,
+          line-count gutter, then the curve column and the terminus — so ② and
+          ③ land on the same percentage coordinates as the markers they label,
+          at every width. The counts live here rather than in a separate strip
+          below: one picture of the reduction, not two. */}
+      <div className="flex items-start border-b border-border/60 pb-1.5">
+        <div className="flex min-w-0 flex-1">
+          <div className="shrink-0 pr-2" style={{ width: NAME_COL }}>
+            <StageLabel index="①" label="Repository" sublabel="Candidates" />
+            <div className="mt-1 flex" style={{ maxWidth: CHIP_MAX }}>
+              <FunnelBarRow
+                widthPct={wCandidates}
+                trackClass="border-border"
+                fillClass="bg-ink-soft/10"
+                icon={Files}
+                label="candidates"
+                value={String(candidates)}
+              />
+            </div>
+          </div>
+          <div className="relative min-w-0 flex-1" style={{ height: STAGE_HEAD_H }}>
+            {/* ② and ③ label point markers, not columns, so they centre on
+                the marker's own x rather than left-aligning beside it. */}
+            <div
+              className="absolute top-0 text-center"
+              style={{ left: `${REL_X}%`, transform: "translateX(-50%)", width: CHIP_W }}
+            >
+              <StageLabel index="②" label="Relevance" sublabel="Filtered" />
+              <div className="mt-1 flex">
+                <FunnelBarRow
+                  widthPct={wExtracted}
+                  trackClass="border-primary/25 hover:border-primary/45"
+                  fillClass="bg-primary/15"
+                  icon={Filter}
+                  label="extracted"
+                  value={String(extracted)}
+                  onClick={onToggleRelevance}
+                  expanded={relevanceOpen}
+                />
+              </div>
+            </div>
+            {/* Identical container shape to ② — same fixed width, same
+                centring transform — so both resolve to exactly their marker's
+                x. A shrink-to-fit box centres differently once its content
+                overflows, which is what drifted this label off its badge. */}
+            <div
+              className="absolute top-0 text-center"
+              style={{ left: `${GATE_X}%`, transform: "translateX(-50%)", width: CHIP_W }}
+            >
+              <StageLabel index="③" label="Privacy gate" sublabel="Sanitized" />
+              <div className="mt-1 flex">
+                <PrivacyStageChip pkg={pkg} />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="shrink-0" style={{ width: CONV_W }} aria-hidden />
+        <div className="shrink-0 pl-1" style={{ width: NODE_COL }}>
+          <StageLabel index="④" label="A7 repair agent" sublabel="Context received" />
+          <div className="mt-1 flex" style={{ maxWidth: CHIP_MAX }}>
+            {/* Value only — "in N files" would truncate at this column width,
+                and `SelectedContext` below already states the file count. */}
+            <FunnelBarRow
+              widthPct={wContext}
+              trackClass="border-primary/30"
+              fillClass="bg-primary/25"
+              icon={Braces}
+              label=""
+              value={`${contextFunctions} function${contextFunctions === 1 ? "" : "s"}`}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* The flow itself. */}
+      <div className="flex items-stretch pt-1">
+        <div className="flex min-w-0 flex-1 flex-col justify-center" style={{ height: flowH }}>
+          {shown.map((file) => (
+            <FlowRibbonRow
+              key={file}
+              file={file}
+              rankedFile={rankedByFile.get(file)}
+              lines={linesSelected(symbolsByFile.get(file) ?? [])}
+              privacy={filePrivacy(file, pkg, new Set(redactionsByFile.keys()))}
+              redactionCount={redactionsByFile.get(file) ?? 0}
+            />
+          ))}
+          {excludedText && <ExcludedBranch text={excludedText} />}
+          {rowCount === 0 && (
+            <div className="text-[10px] italic text-ink-soft/50">No candidates ranked.</div>
+          )}
+        </div>
+
+        {/* Convergence into the terminus — the ribbons bundling into one hand-off. */}
+        <svg
+          width={CONV_W}
+          height={flowH}
+          className="shrink-0"
+          aria-hidden
+          style={{ overflow: "visible" }}
+        >
+          {curves.map((c) => (
+            <path
+              key={c.file}
+              d={`M 0 ${c.y} C ${CONV_W * 0.6} ${c.y}, ${CONV_W * 0.4} ${centerY}, ${CONV_W} ${centerY}`}
+              fill="none"
+              stroke={c.color}
+              strokeWidth="1.5"
+              opacity="0.55"
+            />
+          ))}
+        </svg>
+
+        {/* Same width expression as the ④ header column above, resolved
+            against the same parent, so the two stay locked together as the
+            panel resizes. */}
+        <div className="flex shrink-0 items-center pl-1" style={{ width: NODE_COL }}>
+          <RepairAgentNode pkg={pkg} height={flowH} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // -------------------------------------------------------------- collapsibles
 
 function CollapsibleSection({
@@ -1135,35 +1676,17 @@ export function ContextEngineeringPanel({
   const selectedSymbols = selectedContextSymbols(pkg);
 
   return (
-    <section className="space-y-3 rounded-2xl border border-border bg-surface p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
-          Context Engineering
-        </h3>
-        <span className="font-mono text-[11px] text-ink">
-          {pkg.target_file}
-          {pkg.target_function && <span className="text-ink-soft"> :: {pkg.target_function}</span>}
-        </span>
-      </div>
-
-      {/* The funnel — a real, narrowing shape, not stat rows with a bar
-          underneath. Each band's *width* is `count / candidates`; "Context"
-          narrows against the same denominator as "Extracted" rather than
-          having no ratio at all, since both are file counts against the
-          same starting pool. */}
-      <ReductionFunnel
+    <section className="space-y-2 rounded-2xl border border-border bg-surface p-4">
+      {/* The hero: real files flowing repository → relevance → privacy gate →
+          A7, carrying each stage's own count in its header. */}
+      <ContextFlowDiagram
+        pkg={pkg}
+        symbolsByFile={symbolsByFile}
         candidates={candidates}
         extracted={extracted}
-        contextFiles={pkg.metrics.context_files}
-        contextFunctions={pkg.metrics.context_functions}
-        contextLines={pkg.metrics.context_lines}
-        extractedExpanded={relevanceOpen}
-        onToggleExtracted={() => setRelevanceOpen((o) => !o)}
-      />
-      <SelectedContext
-        fileNames={selectedFileNames}
-        symbols={selectedSymbols}
-        lines={pkg.metrics.context_lines}
+        selectedFileNames={selectedFileNames}
+        relevanceOpen={relevanceOpen}
+        onToggleRelevance={() => setRelevanceOpen((o) => !o)}
       />
 
       {relevanceOpen && (
@@ -1176,18 +1699,26 @@ export function ContextEngineeringPanel({
         </div>
       )}
 
+      {/* What survived. */}
       <FlowConnector />
+      <SelectedContext
+        fileNames={selectedFileNames}
+        symbols={selectedSymbols}
+        lines={pkg.metrics.context_lines}
+      />
 
-      <PrivacyStage pkg={pkg} onClick={() => setPrivacyOpen((o) => !o)} expanded={privacyOpen} />
-      {privacyOpen && (
-        <div className="rounded-lg border border-border bg-surface-muted/20 p-2.5">
-          <RedactionLedger pkg={pkg} />
-        </div>
-      )}
-
+      {/* Diagnostics: the totals behind the flow's per-file markers, and the
+          way into the redaction ledger and the adoption reason. */}
       <FlowConnector />
-
-      <AdoptionStage pkg={pkg} />
+      <div className="space-y-1">
+        <PrivacyStage pkg={pkg} onClick={() => setPrivacyOpen((o) => !o)} expanded={privacyOpen} />
+        {privacyOpen && (
+          <div className="rounded border border-border bg-surface-muted/20 p-2.5">
+            <RedactionLedger pkg={pkg} />
+          </div>
+        )}
+        <AdoptionStage pkg={pkg} />
+      </div>
 
       <CollapsibleSection
         label="Constraints carried forward"
@@ -1239,12 +1770,6 @@ export function ContextEngineeringPanel({
       <CollapsibleSection label="Token & performance details">
         <PerformanceDetails pkg={pkg} />
       </CollapsibleSection>
-
-      <p className="text-[10px] text-ink-soft">
-        Explain: the funnel narrows from every candidate file A5.5 scored to the minimal,
-        privacy-checked context A6/A7 actually receive. Source:{" "}
-        <code className="font-mono">GET /api/runs/{"{run_id}"}/context</code>
-      </p>
     </section>
   );
 }

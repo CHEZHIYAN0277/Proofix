@@ -3,6 +3,24 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class MutantRecord(BaseModel):
+    """One mutant, individually. Only what mutmut actually told us.
+
+    `line`/`before`/`after` are populated only for mutants A8 chose to fetch
+    a diff for (survivors, bounded — see `a8_mutation_validator`); every
+    other mutant carries `function` alone. There is no line-level attribution
+    to invent for the rest — mutmut's per-mutant listing does not carry one.
+    """
+
+    mutant_id: str
+    status: str
+    function: str | None = None
+    file: str | None = None
+    line: int | None = None
+    before: str | None = None
+    after: str | None = None
+
+
 class ValidationFailure(BaseModel):
     failing_test: str | None = None
     assertion_message: str | None = None
@@ -58,6 +76,12 @@ class MutationValidationResult(BaseModel):
     total_mutants: int | None = None
     inconclusive_mutants: int | None = None
     mutants_by_status: dict[str, int] = Field(default_factory=dict)
+    #: Individual mutants when mutmut's per-mutant listing was available —
+    #: `[]` otherwise (the progress-summary and legacy-section formats carry
+    #: only aggregate counts). Only survivors get a `line`/`before`/`after`
+    #: diff (see `a8_mutation_validator._enrich_survivor_diffs`) — the rest
+    #: carry `function` alone.
+    mutants: list[MutantRecord] = Field(default_factory=list)
     failure_brief: RetryBrief | None = None
     validation_failure: ValidationFailure | None = None
     pytest_reexecution_command: str = ""
@@ -85,3 +109,14 @@ class SecurityRescanResult(BaseModel):
     #: live event stream, can tell "clean" from "not measured". Defaults empty
     #: so state persisted before this field existed still deserializes.
     scanners_run: list[str] = Field(default_factory=list)
+    #: The full baseline-vs-post reconciliation, one lane per known scanner
+    #: (`a9_security_rescan.reconciliation_lanes`): which post-patch findings
+    #: paired with a baseline occurrence and by how many lines each moved, which
+    #: had no counterpart, and which baseline occurrences are gone. `new_findings`
+    #: is the introduced side of exactly this comparison — kept here so a reader
+    #: can *see* that a shifted finding was absorbed rather than take it on
+    #: trust, which is not recoverable downstream once discarded. Defaults empty
+    #: so state persisted before this field existed still deserializes; an empty
+    #: list means "not recorded", never "nothing carried" (the same precedent
+    #: `scanners_run` set above).
+    reconciliation: list = Field(default_factory=list)

@@ -11,8 +11,11 @@ import {
   Wrench,
   Dna,
   GitPullRequest,
+  ChevronDown,
+  ChevronRight,
   type LucideIcon,
 } from "lucide-react";
+import { useState } from "react";
 
 const AGENT_ICONS: Record<string, LucideIcon> = {
   "Repository Intelligence": Brain,
@@ -47,6 +50,19 @@ interface Props {
    * `AgentVisualization` needing to know those boards exist.
    */
   liveView?: React.ReactNode;
+  /**
+   * Collapses the generic Activity feed / Supporting metrics sections below
+   * the Live view box to a closed disclosure, instead of showing them open by
+   * default. `Workspace` passes both as `true` for every agent, so every
+   * card lands closed on first render — the values are real backend data,
+   * not invented, so they stay one click away rather than being hidden
+   * outright. `false`/unset falls back to the old always-open rendering with
+   * no toggle chrome, which no current caller uses but which components
+   * embedding `AgentCard` outside `Workspace` (e.g. a future standalone
+   * agent view) may still want.
+   */
+  collapseActivity?: boolean;
+  collapseMetrics?: boolean;
 }
 
 export function AgentCard({
@@ -58,10 +74,17 @@ export function AgentCard({
   disabled,
   outputLabel,
   liveView,
+  collapseActivity,
+  collapseMetrics,
 }: Props) {
   const isRunning = entry.liveStatus === "running";
   const isFailed = entry.liveStatus === "failed";
   const isCompleted = entry.liveStatus === "completed" || entry.liveStatus === "draft";
+
+  // Closed by default only when the caller opted the card into collapsing;
+  // every other agent gets `true` here and the toggle button never renders.
+  const [activityOpen, setActivityOpen] = useState(!collapseActivity);
+  const [metricsOpen, setMetricsOpen] = useState(!collapseMetrics);
 
   // timeline dot color
   const dotClass = isRunning
@@ -177,59 +200,80 @@ export function AgentCard({
 
               {/* Live activity feed */}
               <div className="mt-5">
-                <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-ink-soft">
-                  Activity
-                </div>
-                <ul className="space-y-2">
-                  {entry.lines.slice(0, entry.visibleLines).map((line, i) => {
-                    const isLastVisible = i === entry.visibleLines - 1;
-                    const isLastLine = i === entry.lines.length - 1;
-                    if (isRunning) {
-                      if (isLastVisible) {
+                {collapseActivity ? (
+                  <button
+                    type="button"
+                    onClick={() => setActivityOpen((o) => !o)}
+                    aria-expanded={activityOpen}
+                    className="mb-2 flex w-full items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-ink-soft transition-colors hover:text-ink"
+                  >
+                    {activityOpen ? (
+                      <ChevronDown className="h-3 w-3 flex-none" aria-hidden />
+                    ) : (
+                      <ChevronRight className="h-3 w-3 flex-none" aria-hidden />
+                    )}
+                    Activity
+                    <span className="ml-auto font-mono text-[10px] font-normal normal-case tracking-normal text-ink-soft/50">
+                      {entry.lines.length} {entry.lines.length === 1 ? "line" : "lines"}
+                    </span>
+                  </button>
+                ) : (
+                  <div className="mb-2 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+                    Activity
+                  </div>
+                )}
+                {activityOpen && (
+                  <ul className="space-y-2">
+                    {entry.lines.slice(0, entry.visibleLines).map((line, i) => {
+                      const isLastVisible = i === entry.visibleLines - 1;
+                      const isLastLine = i === entry.lines.length - 1;
+                      if (isRunning) {
+                        if (isLastVisible) {
+                          return (
+                            <li
+                              key={i}
+                              className="animate-line-in flex items-start gap-2.5 text-sm text-ink"
+                            >
+                              <span
+                                className="mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 border-status-running animate-soft-pulse"
+                                aria-hidden
+                              />
+                              <span className="leading-relaxed">
+                                {line}
+                                <span
+                                  className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[2px] bg-status-running align-middle animate-caret-blink"
+                                  aria-hidden
+                                />
+                              </span>
+                            </li>
+                          );
+                        }
                         return (
                           <li
                             key={i}
-                            className="animate-line-in flex items-start gap-2.5 text-sm text-ink"
+                            className="animate-line-in flex items-start gap-2.5 text-sm text-ink-soft"
                           >
                             <span
-                              className="mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 border-status-running animate-soft-pulse"
+                              className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-ink-soft/50"
                               aria-hidden
                             />
-                            <span className="leading-relaxed">
-                              {line}
-                              <span
-                                className="ml-0.5 inline-block h-[1em] w-[2px] translate-y-[2px] bg-status-running align-middle animate-caret-blink"
-                                aria-hidden
-                              />
-                            </span>
+                            <span className="leading-relaxed">{line}</span>
                           </li>
                         );
                       }
+                      const failMark = isFailed && isLastLine;
                       return (
                         <li
                           key={i}
-                          className="animate-line-in flex items-start gap-2.5 text-sm text-ink-soft"
+                          className="animate-line-in flex items-start gap-2.5 text-sm text-ink"
                         >
-                          <span
-                            className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-ink-soft/50"
-                            aria-hidden
-                          />
+                          <StatusIcon ok={!failMark} className="mt-0.5" />
                           <span className="leading-relaxed">{line}</span>
                         </li>
                       );
-                    }
-                    const failMark = isFailed && isLastLine;
-                    return (
-                      <li
-                        key={i}
-                        className="animate-line-in flex items-start gap-2.5 text-sm text-ink"
-                      >
-                        <StatusIcon ok={!failMark} className="mt-0.5" />
-                        <span className="leading-relaxed">{line}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
+                    })}
+                  </ul>
+                )}
               </div>
 
               {entry.modifiedFiles && (
@@ -268,21 +312,42 @@ export function AgentCard({
               {/* Supporting metrics — reduced dominance, at the bottom */}
               {entry.metrics && (
                 <div className="mt-5 border-t border-border/60 pt-3">
-                  <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-ink-soft/80">
-                    Supporting metrics
-                  </div>
-                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3">
-                    {entry.metrics.map((m) => (
-                      <div key={m.label} className="flex items-baseline justify-between gap-3">
-                        <dt className="text-[10px] uppercase tracking-wider text-ink-soft/70">
-                          {m.label}
-                        </dt>
-                        <dd className="font-mono text-xs font-medium text-ink/90 tabular-nums">
-                          <AnimatedNumber value={m.value} />
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
+                  {collapseMetrics ? (
+                    <button
+                      type="button"
+                      onClick={() => setMetricsOpen((o) => !o)}
+                      aria-expanded={metricsOpen}
+                      className="mb-2 flex w-full items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft/80 transition-colors hover:text-ink"
+                    >
+                      {metricsOpen ? (
+                        <ChevronDown className="h-3 w-3 flex-none" aria-hidden />
+                      ) : (
+                        <ChevronRight className="h-3 w-3 flex-none" aria-hidden />
+                      )}
+                      Supporting metrics
+                      <span className="ml-auto font-mono text-[10px] font-normal normal-case tracking-normal text-ink-soft/50">
+                        {entry.metrics.length} {entry.metrics.length === 1 ? "metric" : "metrics"}
+                      </span>
+                    </button>
+                  ) : (
+                    <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-ink-soft/80">
+                      Supporting metrics
+                    </div>
+                  )}
+                  {metricsOpen && (
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3">
+                      {entry.metrics.map((m) => (
+                        <div key={m.label} className="flex items-baseline justify-between gap-3">
+                          <dt className="text-[10px] uppercase tracking-wider text-ink-soft/70">
+                            {m.label}
+                          </dt>
+                          <dd className="font-mono text-xs font-medium text-ink/90 tabular-nums">
+                            <AnimatedNumber value={m.value} />
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
                 </div>
               )}
             </div>

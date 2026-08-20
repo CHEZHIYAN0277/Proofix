@@ -313,11 +313,15 @@ describe("RepositoryIntelligencePanel", () => {
     expect(screen.queryByText("Indexing pipeline")).toBeNull();
   });
 
-  it("opens on the Structure view by default — a labelled tree, not abstract dots", async () => {
+  it("opens on the Structure view by default once expanded — a labelled tree, not abstract dots", async () => {
     backendReturns();
+    const user = userEvent.setup();
     render(<RepositoryIntelligencePanel runId="r1" />);
 
     await screen.findByText("Repository Knowledge Graph");
+    // The explorer sits behind a closed disclosure — the hero already tells
+    // the at-a-glance story, this is the drill-down view.
+    await user.click(screen.getByText("Repository structure"));
     // The structure tree renders every node's label unconditionally.
     expect(screen.getByText("a.py")).toBeTruthy();
     expect(screen.getByText("test_a.py")).toBeTruthy();
@@ -349,6 +353,7 @@ describe("RepositoryIntelligencePanel", () => {
     render(<RepositoryIntelligencePanel runId="r1" />);
 
     await screen.findByText("Repository Knowledge Graph");
+    await user.click(screen.getByText("Repository structure"));
     await user.click(screen.getByRole("button", { name: "Table" }));
 
     expect(screen.getByText("a.py")).toBeTruthy();
@@ -362,6 +367,7 @@ describe("RepositoryIntelligencePanel", () => {
     render(<RepositoryIntelligencePanel runId="r1" />);
 
     await screen.findByText("Repository Knowledge Graph");
+    await user.click(screen.getByText("Repository structure"));
     await user.click(screen.getByRole("button", { name: "Table" }));
     await user.click(screen.getByText("a.py"));
 
@@ -376,6 +382,7 @@ describe("RepositoryIntelligencePanel", () => {
     render(<RepositoryIntelligencePanel runId="r1" />);
 
     await screen.findByText("Repository Knowledge Graph");
+    await user.click(screen.getByText("Repository structure"));
     await user.click(screen.getByRole("button", { name: "Table" }));
     await user.click(screen.getByText("a.py"));
 
@@ -389,6 +396,7 @@ describe("RepositoryIntelligencePanel", () => {
     render(<RepositoryIntelligencePanel runId="r1" />);
 
     await screen.findByText("Repository Knowledge Graph");
+    await user.click(screen.getByText("Repository structure"));
     await user.click(screen.getByRole("button", { name: "Table" }));
     await user.click(screen.getByText("a.py"));
 
@@ -402,6 +410,7 @@ describe("RepositoryIntelligencePanel", () => {
     render(<RepositoryIntelligencePanel runId="r1" />);
 
     await screen.findByText("Repository Knowledge Graph");
+    await user.click(screen.getByText("Repository structure"));
     const input = screen.getByPlaceholderText(/Search files, functions, classes/);
     await user.type(input, "a.py");
 
@@ -413,9 +422,11 @@ describe("RepositoryIntelligencePanel", () => {
 
   it("only offers filters for node types the backend actually returned", async () => {
     backendReturns();
+    const user = userEvent.setup();
     render(<RepositoryIntelligencePanel runId="r1" />);
 
     await screen.findByText("Repository Knowledge Graph");
+    await user.click(screen.getByText("Repository structure"));
     expect(screen.getByRole("group", { name: "Filter by node type" })).toBeTruthy();
     // Every present type has a chip; nothing invented (no "class"/"api" chip
     // when the fixture graph carries neither).
@@ -429,6 +440,7 @@ describe("RepositoryIntelligencePanel", () => {
     render(<RepositoryIntelligencePanel runId="r1" />);
 
     await screen.findByText("Repository Knowledge Graph");
+    await user.click(screen.getByText("Repository structure"));
     await user.click(screen.getByRole("button", { name: "Table" }));
     await user.click(screen.getAllByText("pkg")[0]);
 

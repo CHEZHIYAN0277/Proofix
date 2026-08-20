@@ -240,6 +240,17 @@
     opacity: 1;
   }
 }
+/* A4 convergence node — a slow ring pulse, only while a diversity bonus is
+   paid. Global prefers-reduced-motion block above neutralises this already. */
+@keyframes convergence-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-status-completed) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in oklab, var(--color-status-completed) 0%, transparent);
+  }
+}
 
 @utility animate-line-in {
   animation: line-in 350ms ease-out both;
@@ -269,12 +280,102 @@
   animation: graph-in 250ms ease-out both;
   transform-origin: center;
 }
+@utility animate-convergence-pulse {
+  animation: convergence-pulse 2.2s ease-in-out infinite;
+}
 .animate-graph-in line,
 .animate-graph-in path {
   animation: graph-edge-in 250ms ease-out 150ms both;
 }
 .animate-graph-in text {
   animation: graph-label-in 250ms ease-out 350ms both;
+}
+
+/* A9 reconciliation ledger — one arrival beat, then still.
+   Baseline column in, post-patch column in, rails draw left-to-right, and the
+   chips no rail reaches settle last. The introduced finding earns attention by
+   being structurally isolated once everything has landed, never by pulsing:
+   a looping alarm on a security panel trains the reader to stop looking. */
+/* A10 merge circuit — the current draws left-to-right and stops where it
+   stopped. One beat, no loop: the break is a fact to read, not an alarm.
+   The global prefers-reduced-motion block above neutralises it. */
+@keyframes circuit-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@utility animate-circuit-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: circuit-draw 620ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@keyframes ledger-chip-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ledger-chip-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ledger-rail-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes ledger-settle {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@utility animate-ledger-baseline-in {
+  animation: ledger-chip-in-left 220ms ease-out both;
+}
+@utility animate-ledger-post-in {
+  animation: ledger-chip-in-right 220ms ease-out 120ms both;
+}
+@utility animate-ledger-rail-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: ledger-rail-draw 400ms ease-out 220ms both;
+}
+@utility animate-ledger-settle {
+  animation: ledger-settle 260ms ease-out 620ms both;
+}
+/* "Not compared" is not a result. Hatching reads as an absence of data in a
+   way an empty box never does, and the stripe carries no status colour so it
+   cannot be mistaken for a pass or a failure. */
+@utility ledger-hatch {
+  background-image: repeating-linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--color-ink-soft) 14%, transparent) 0px,
+    color-mix(in oklab, var(--color-ink-soft) 14%, transparent) 1px,
+    transparent 1px,
+    transparent 7px
+  );
 }
 
 @utility hover-card-lift {

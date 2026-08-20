@@ -39,6 +39,7 @@ import type { SemanticGraphExport } from "@/components/proofix/semanticGraphType
 import type { DependencyRiskReport } from "@/components/proofix/dependencyRiskTypes";
 import type { StaticFindingsReport } from "@/components/proofix/staticFindingsTypes";
 import type { SecurityRescanReport } from "@/components/proofix/securityRescanTypes";
+import type { MutationValidationReport } from "@/components/proofix/mutationValidationTypes";
 import type { MergeabilityDecision } from "@/components/proofix/mergeabilityTypes";
 import type { ReproductionEvidence } from "@/components/proofix/reproductionTypes";
 import type { InvestigationReport } from "@/components/proofix/investigationTypes";
@@ -259,6 +260,25 @@ export async function getSecurityRescan(runId: string): Promise<SecurityRescanRe
   if (DATA_SOURCE !== "api") return null;
   try {
     return await apiFetch<SecurityRescanReport>(ENDPOINTS.runSecurity(runId));
+  } catch (reason) {
+    if (isStatus(reason, 404)) return null;
+    throw reason;
+  }
+}
+
+/**
+ * A8's scoped-validation + mutation gauntlet. 404s the same way
+ * `getStaticFindings` does: A8 has not completed for this run yet, which is
+ * an answer, not a failure. Mock mode has no fixture — this is a real
+ * mutmut/pytest run against a real patched repository, and there is nothing
+ * honest to invent for a demo run.
+ */
+export async function getMutationValidation(
+  runId: string,
+): Promise<MutationValidationReport | null> {
+  if (DATA_SOURCE !== "api") return null;
+  try {
+    return await apiFetch<MutationValidationReport>(ENDPOINTS.runMutation(runId));
   } catch (reason) {
     if (isStatus(reason, 404)) return null;
     throw reason;

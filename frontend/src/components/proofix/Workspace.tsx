@@ -17,6 +17,7 @@ import { DependencyRiskPanel } from "@/components/proofix/DependencyRiskPanel";
 import { StaticFindingsPanel } from "@/components/proofix/StaticFindingsPanel";
 import { SecurityRescanPanel } from "@/components/proofix/SecurityRescanPanel";
 import { MergeabilityDecisionPanel } from "@/components/proofix/MergeabilityDecisionPanel";
+import { MutationValidationPanel } from "@/components/proofix/MutationValidationPanel";
 import { ReproductionEvidencePanel } from "@/components/proofix/ReproductionEvidencePanel";
 import { EvidenceInvestigationBoard } from "@/components/proofix/EvidenceInvestigationBoard";
 import { BlastRadiusPanel } from "@/components/proofix/BlastRadiusPanel";
@@ -585,6 +586,8 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
                             active={isActive}
                             expanded={expanded}
                             outputLabel={entry.handoff}
+                            collapseActivity
+                            collapseMetrics
                             liveView={
                               entry.id === "environment" ? (
                                 <EnvironmentPreflightBoard
@@ -627,6 +630,8 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
                                 <RepairPlanPanel runId={runId} status={entry.liveStatus} />
                               ) : entry.id === "security" ? (
                                 <SecurityRescanPanel runId={runId} status={entry.liveStatus} />
+                              ) : entry.id === "mutation" ? (
+                                <MutationValidationPanel runId={runId} status={entry.liveStatus} />
                               ) : entry.id === "patch" ? (
                                 <PatchPanel
                                   bundle={runData.patch}
@@ -805,29 +810,29 @@ function ClaudeStyleEditHeader({
 }) {
   return (
     <div
-      className="rounded-lg border px-3 py-2 font-mono text-[12px]"
-      style={{ borderColor: "#30363d", backgroundColor: "#0d1117" }}
+      className="rounded-lg px-3 py-2 font-mono text-[12px]"
+      style={{ backgroundColor: "#000000" }}
     >
       <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="text-[#e6edf3]">●</span>
-        <span className="font-semibold text-[#e6edf3]">
+        <span className="text-[#d4d4d4]">●</span>
+        <span className="font-semibold text-[#d4d4d4]">
           Update(
           <span className="font-normal">{patch.file}</span>
           {provenance?.targetFunction && (
-            <span className="text-[#7d8590]"> :: {provenance.targetFunction}()</span>
+            <span className="text-[#6e7681]"> :: {provenance.targetFunction}()</span>
           )}
           )
         </span>
       </div>
-      <div className="mt-0.5 flex items-baseline gap-1.5 pl-3 text-[11px] text-[#7d8590]">
+      <div className="mt-0.5 flex items-baseline gap-1.5 pl-3 text-[11px] text-[#6e7681]">
         <span aria-hidden>⎿</span>
         <span>
           Updated {patch.file} with{" "}
-          <span className="text-[#3fb950]">
+          <span className="text-[#4ec97c]">
             {stats.added} addition{stats.added === 1 ? "" : "s"}
           </span>{" "}
           and{" "}
-          <span className="text-[#f85149]">
+          <span className="text-[#f16d6d]">
             {stats.removed} removal{stats.removed === 1 ? "" : "s"}
           </span>
         </span>
@@ -908,6 +913,48 @@ function A7ToA8Handoff() {
 }
 
 /**
+ * The reject pile: plans A7 attempted but never wrote to disk, because every
+ * retry the integrity guard saw came back a no-op, an abbreviated patch, or
+ * invalid Python (`retryReason`, from the same `failed` emit the guard makes
+ * for that plan). Rendered in the same terminal transcript idiom as a
+ * successful `Update(...)`, just in the failed-status colour and with no
+ * diff to show — the point is that the guard's rejection is not silently
+ * dropped from the run the way it is when only written files reach the UI.
+ */
+function RejectedAttempts({ provenance }: { provenance: PatchFileProvenance[] }) {
+  const rejected = provenance.filter((p) => p.written === false);
+  if (rejected.length === 0) return null;
+
+  return (
+    <div className="space-y-1.5">
+      {rejected.map((p) => (
+        <div
+          key={p.file}
+          className="rounded-lg px-3 py-2 font-mono text-[12px]"
+          style={{ backgroundColor: "#000000" }}
+        >
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-[#f16d6d]">●</span>
+            <span className="font-semibold text-[#d4d4d4]">
+              Update(<span className="font-normal">{p.file}</span>)
+            </span>
+          </div>
+          <div className="mt-0.5 flex items-baseline gap-1.5 pl-3 text-[11px] text-[#6e7681]">
+            <span aria-hidden>⎿</span>
+            <span>
+              Rejected — {p.retryReason ?? "no candidate cleared the integrity check"}
+              {typeof p.retryNumber === "number" && p.retryNumber > 0
+                ? ` after ${p.retryNumber} ${p.retryNumber === 1 ? "retry" : "retries"}`
+                : ""}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * The diff A7 produced, which is the product.
  *
  * The patch card lists filenames; `/runs/{id}/patch` has served both sides of
@@ -978,11 +1025,15 @@ function PatchPanel({
         )}
       </div>
 
+      <RejectedAttempts provenance={provenance} />
+
       {bundle.patches.length === 0 ? (
-        <p className="text-[11px] text-ink-soft">
-          Patch generation completed and produced no change. This is not the same as generation
-          having failed — no candidate cleared the integrity check.
-        </p>
+        provenance.length === 0 && (
+          <p className="text-[11px] text-ink-soft">
+            Patch generation completed and produced no change. This is not the same as generation
+            having failed — no candidate cleared the integrity check.
+          </p>
+        )
       ) : (
         <>
           {/* File selector — only when there is a real choice to make. A
@@ -1030,7 +1081,10 @@ function PatchPanel({
             />
           )}
 
-          <DiffView diff={activeDiff} />
+          {/* Keyed by file so switching the selector remounts a fresh,
+              collapsed `DiffView` rather than carrying one file's "expanded"
+              choice onto the next file's unrelated diff. */}
+          <DiffView key={activeFile ?? "diff"} diff={activeDiff} />
 
           <PatchProvenanceRow
             method={activePatch?.method ?? null}

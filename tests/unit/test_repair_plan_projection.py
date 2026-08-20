@@ -30,6 +30,7 @@ def _dag(**overrides) -> dict:
         ],
         "ordering_source": "deterministic",
         "ordering_rationale": "",
+        "deterministic_order": ["cve-CVE-1", "finding-0"],
     }
     base.update(overrides)
     return base
@@ -37,6 +38,23 @@ def _dag(**overrides) -> dict:
 
 def test_returns_none_before_a6_has_run():
     assert build_repair_plan(_state()) is None
+
+
+def test_deterministic_order_is_carried_through_even_on_the_llm_path():
+    dag = _dag(
+        execution_order=["finding-0", "cve-CVE-1"],
+        ordering_source="llm",
+        deterministic_order=["cve-CVE-1", "finding-0"],
+    )
+    result = build_repair_plan(_state(fix_dag=dag))
+    assert result["deterministicOrder"] == ["cve-CVE-1", "finding-0"]
+
+
+def test_deterministic_order_defaults_to_empty_on_a_run_predating_the_field():
+    dag = _dag()
+    del dag["deterministic_order"]
+    result = build_repair_plan(_state(fix_dag=dag))
+    assert result["deterministicOrder"] == []
 
 
 def test_empty_plan_is_a_real_answer_not_a_missing_one():

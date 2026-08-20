@@ -25,6 +25,7 @@ from backend.models.pr import AxisScores
 from backend.orchestrator.trust_gating import draft_reasons
 from backend.state.events import AgentStatusEvent
 from backend.services.measurement import measured_mean, meets_threshold
+from backend.services.python_ast_parser import parse_source
 from backend.state.schema import RunStateModel
 
 # ---------------------------------------------------------------- registry --
@@ -1524,9 +1525,10 @@ def _visualization_for(
         # but only ever emits on its status event, never onto `RunStateModel`.
         bundle = state.patch_bundle or {}
         patches = bundle.get("patches") or []
-        if not patches:
-            return None
         metrics_by_file = _a7_patch_metrics_by_file(events_for_agent)
+        if not patches and not metrics_by_file:
+            return None
+        written_files = {p.get("file", "") for p in patches}
         files = []
         for p in patches:
             file = p.get("file", "")
@@ -1547,6 +1549,32 @@ def _visualization_for(
                     "retryNumber": m.get("retry_number"),
                     "retryReason": m.get("retry_reason"),
                     "semanticDiff": m.get("semantic_diff"),
+                    "written": True,
+                }
+            )
+        # A plan A7 attempted but never wrote — every retry rejected by the
+        # integrity guard, or `llm_output` came back `None` — has an entry in
+        # `metrics_by_file` (recorded before the write, see
+        # `a7_code_generation.py`) but none in `patches`. Surfacing it here is
+        # the only way the reject pile the guard produced becomes visible
+        # instead of silently vanishing from the run.
+        for file, m in metrics_by_file.items():
+            if file in written_files:
+                continue
+            target_file = m.get("target_file")
+            files.append(
+                {
+                    "file": file,
+                    "method": None,
+                    "isTarget": bool(target_file) and file == target_file,
+                    "targetFunction": m.get("target_function"),
+                    "generationSource": m.get("generation_source"),
+                    "contextSource": m.get("context_source"),
+                    "runtimePrompt": m.get("runtime_prompt"),
+                    "retryNumber": m.get("retry_number"),
+                    "retryReason": m.get("retry_reason"),
+                    "semanticDiff": m.get("semantic_diff"),
+                    "written": False,
                 }
             )
         return {"kind": "patch", "data": {"files": files}}
@@ -1813,18 +1841,83 @@ def build_static_findings(state: RunStateModel) -> dict | None:
     }
 
 
+def _project_reconciliation_lane(lane: dict) -> dict:
+    """One scanner's lane of the baseline-vs-post ledger, chip-addressable.
+
+    The stored form indexes into per-key occurrence lists; the panel needs
+    stable ids it can hang a rail off, so every occurrence is given one here
+    (`b-<lane>-<key>-<n>` / `p-…`). `rails` is the pairing — a carried finding
+    and how far the patch moved it — and a post chip appearing in no rail is
+    introduced. That relationship is the contract: the panel derives its
+    counts from these arrays and never from a parallel tally, so the ledger
+    and the verdict bar cannot disagree.
+    """
+    tool = str(lane.get("tool") or "")
+    keys = []
+    for key_index, entry in enumerate(lane.get("keys") or []):
+        group_id = f"{tool}-{key_index}"
+        baseline = [
+            {"id": f"b-{group_id}-{n}", "line": occ.get("line")}
+            for n, occ in enumerate(entry.get("baseline") or [])
+        ]
+        post = [
+            {"id": f"p-{group_id}-{n}", "line": occ.get("line")}
+            for n, occ in enumerate(entry.get("post") or [])
+        ]
+        rails = [
+            {
+                "baselineId": baseline[m["baseline_index"]]["id"],
+                "postId": post[m["post_index"]]["id"],
+                "lineDelta": m.get("line_delta", 0),
+            }
+            for m in entry.get("matched") or []
+            if 0 <= m.get("baseline_index", -1) < len(baseline)
+            and 0 <= m.get("post_index", -1) < len(post)
+        ]
+        keys.append(
+            {
+                "id": group_id,
+                "tool": tool,
+                "file": entry.get("file") or "",
+                "message": entry.get("message") or "",
+                "baseline": baseline,
+                "post": post,
+                "rails": rails,
+                "introducedIds": [
+                    post[j]["id"] for j in entry.get("introduced_indexes") or [] if 0 <= j < len(post)
+                ],
+                "resolvedIds": [
+                    baseline[i]["id"]
+                    for i in entry.get("resolved_indexes") or []
+                    if 0 <= i < len(baseline)
+                ],
+            }
+        )
+    return {"tool": tool, "compared": bool(lane.get("compared")), "keys": keys}
+
+
 def build_security_rescan(state: RunStateModel) -> dict | None:
     """A9's post-patch security re-scan, projected for the workspace panel.
 
     A9 answers one question — did the patch introduce a finding that was not
-    in A3's pre-patch baseline — and nothing else. It does not compare
-    severity (`_run_bandit`/`_run_semgrep` assign every finding the same
-    constant 0.7, never a real per-issue measurement, so `severity` is
-    deliberately omitted from `newFindings` here rather than displayed as
-    something it is not), and it does not compute resolved/unchanged counts
-    (`new_findings_by_multiplicity` only ever returns the *new* side of the
-    comparison — the symmetric resolved/unchanged tally does not exist in
-    `SecurityRescanResult` and this projection must not invent it).
+    in A3's pre-patch baseline — and this projection carries the *comparison*
+    that produced the answer, not just its result. `reconciliation` is one
+    lane per known scanner; within a lane, each `(tool, file, message)` key
+    lists its baseline and post occurrences and the `rails` pairing them, with
+    the line delta each carried finding moved by. A post occurrence in no rail
+    is introduced. That is the whole algorithm, addressable.
+
+    It still does not compare severity: `_run_bandit`/`_run_semgrep` assign
+    every finding the same constant 0.7, never a real per-issue measurement,
+    so `severity` is omitted from `newFindings` and from every occurrence
+    rather than displayed as something it is not.
+
+    `reconciliationAvailable` is false for a run completed before A9 recorded
+    the reconciliation (`SecurityRescanResult.reconciliation` defaults empty).
+    An empty ledger for such a run would read as "nothing carried", which is a
+    claim about the comparison rather than an absence of one — so the flag
+    exists and the panel must say the detail was not recorded instead of
+    rendering zeroes.
 
     `verdict` mirrors the three states the backend can actually produce:
     `security_score is None` means no scanner executed this rescan (not
@@ -1869,15 +1962,274 @@ def build_security_rescan(state: RunStateModel) -> dict | None:
             "securityConstraint": failure_brief.get("security_constraint"),
         }
 
+    scanners_run = list(security.get("scanners_run") or [])
+    stored_lanes = security.get("reconciliation") or []
+    reconciliation_available = bool(stored_lanes)
+    if reconciliation_available:
+        reconciliation = [_project_reconciliation_lane(lane) for lane in stored_lanes]
+    else:
+        # No stored comparison. Lanes still carry the one fact that survives —
+        # which scanners ran — so "not compared" stays visible; the keys are
+        # empty because there is no pairing to show, not because none carried.
+        reconciliation = [
+            {"tool": tool, "compared": tool in scanners_run, "keys": []}
+            for tool in ("bandit", "semgrep")
+        ]
+
     return {
         "verdict": verdict,
         "rejected": rejected,
         "securityScore": security_score,
         "newFindings": new_findings,
-        "scannersRun": list(security.get("scanners_run") or []),
+        "reconciliation": reconciliation,
+        "reconciliationAvailable": reconciliation_available,
+        "scannersRun": scanners_run,
         "reexecutionCommand": security.get("reexecution_command") or "",
         "reexecutionTimeoutSeconds": security.get("reexecution_timeout_seconds"),
         "retryContext": retry_context,
+    }
+
+
+# A mutant carries no status the codebase can compress to "detected" without
+# reading `mutation_parser.DETECTED_STATUSES` — kept in sync manually because
+# importing the agents module from here would invert the dependency.
+_KILLED_STATUSES = {"killed", "timeout", "caught by type check"}
+_SURVIVED_STATUSES = {"survived"}
+
+
+def _mutant_bucket(status: str) -> str:
+    if status in _KILLED_STATUSES:
+        return "killed"
+    if status in _SURVIVED_STATUSES:
+        return "survived"
+    return "inconclusive"
+
+
+def _patched_source(state: RunStateModel) -> tuple[str | None, str | None, str | None]:
+    """The one file A8 actually mutates — `patches[0]`, per `_run_mutmut`."""
+    patches = (state.patch_bundle or {}).get("patches") or []
+    if not patches:
+        return None, None, None
+    first = patches[0]
+    return first.get("file"), first.get("patched"), first.get("original")
+
+
+def _patched_line_numbers(original: str | None, patched: str | None) -> set[int]:
+    """1-indexed lines in `patched` that A7's patch actually changed.
+
+    Real diff (`difflib`), not a guess — this is what earns a line the
+    left-edge "patched" indicator, as distinct from a line a mutant merely
+    attacked. `[]` when there is no original to diff against (e.g. a new
+    file), which the caller reads as "cannot tell, so don't mark anything".
+    """
+    if original is None or patched is None:
+        return set()
+    import difflib
+
+    matcher = difflib.SequenceMatcher(a=original.splitlines(), b=patched.splitlines())
+    changed: set[int] = set()
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            changed.update(range(j1 + 1, j2 + 1))
+    return changed
+
+
+def _function_spans(source: str) -> dict[str, tuple[int, int]]:
+    """Real line spans per function name, from parsing the actual patched file.
+
+    Keyed by simple name (mutmut's own attribution is simple-name, not
+    qualname) — a repo with two functions sharing a name collides here the
+    same way mutmut's own naming does; the last one parsed wins.
+    """
+    parsed = parse_source(source)
+    if parsed is None:
+        return {}
+    return {fn.name: (fn.lineno, fn.end_lineno) for fn in parsed.function_spans}
+
+
+def _code_window(source_lines: list[str], start: int, end: int, cap: int = 40) -> list[dict]:
+    """1-indexed `{line, text}` rows for `[start, end]`, capped so a huge
+    function still renders a legible window rather than a scroll of code."""
+    end = min(end, start + cap - 1)
+    return [
+        {"line": n, "text": source_lines[n - 1]}
+        for n in range(start, end + 1)
+        if 0 < n <= len(source_lines)
+    ]
+
+
+def build_mutation_validation(state: RunStateModel) -> dict | None:
+    """A8's scoped-validation + mutation gauntlet, projected as a sabotage board.
+
+    A8 runs three gates in a fixed order and stops at the first one that
+    fails: the target test, the full regression suite, then mutmut against
+    the one file it patched (`patch_bundle.patches[0]` — `_run_mutmut` never
+    mutates more than that). `stage` tells the panel which gate the run
+    actually reached — a gate the run never got to is `"not_reached"`, never
+    rendered as if it passed.
+
+    Every mutant carries the function mutmut's own naming convention
+    attributes it to (`x_<function>__mutmut_<n>` — real, not inferred).
+    A bounded subset (survivors first, `a8_mutation_validator.MAX_MUTANT_DIFFS`)
+    also carries a real line number and before/after snippet, fetched from
+    `mutmut show <id>` and parsed as an actual unified diff. Mutants outside
+    that budget carry `function` only — `functions[].markers` holds just the
+    line-resolved ones; `functions[].unattributed` counts the rest so the UI
+    can show "N more mutants attacked this function" without inventing where.
+
+    `mutationStatus` is the only trustworthy signal that mutation testing
+    produced a real measurement (`"scored"`) versus could not
+    (`"unavailable"`) versus never got to run (`"not_run"`) — reading
+    `mutant_survived` directly would render "no mutants survived" for a suite
+    that was never mutated.
+
+    Returns `None` before A8 has produced a durable result for this run.
+    """
+    mutation = state.mutation_result
+    if not mutation:
+        return None
+
+    pytest_available = mutation.get("pytest_available", True)
+    target_test_passed = mutation.get("target_test_passed")
+    regression_tests_passed = mutation.get("regression_tests_passed")
+    mutation_status = mutation.get("mutation_status", "not_run")
+
+    if not pytest_available:
+        stage = "not_reached"
+    elif target_test_passed is False:
+        stage = "target_test"
+    elif regression_tests_passed is False:
+        stage = "regression"
+    elif mutation_status == "scored":
+        stage = "mutation"
+    else:
+        stage = "not_reached"
+
+    score = mutation.get("mutation_score")
+    correctness = mutation.get("correctness_score")
+    scored = mutation_status == "scored"
+    survived = bool(mutation.get("mutant_survived")) if scored else None
+
+    failure_brief = mutation.get("failure_brief") or {}
+    validation_failure = mutation.get("validation_failure") or {}
+    retry_context = None
+    if mutation.get("patch_retry_required"):
+        retry_context = {
+            "assertionMessage": validation_failure.get("assertion_message"),
+            "expectedValue": validation_failure.get("expected_value"),
+            "actualValue": validation_failure.get("actual_value"),
+            "violatedContract": failure_brief.get("violated_contract"),
+            "retryInstruction": failure_brief.get("retry_instruction"),
+        }
+
+    reproduction = state.reproduction or {}
+
+    # -------------------------------------------------------- per-function attack map
+    patch_file, patched_source, original_source = _patched_source(state)
+    spans = _function_spans(patched_source) if patched_source else {}
+    source_lines = patched_source.splitlines() if patched_source else []
+    patched_lines = _patched_line_numbers(original_source, patched_source)
+
+    raw_mutants = mutation.get("mutants") or []
+    by_function: dict[str, list[dict]] = {}
+    unattributed_counts = {"killed": 0, "survived": 0, "inconclusive": 0}
+    for m in raw_mutants:
+        fn = m.get("function")
+        if fn is None:
+            unattributed_counts[_mutant_bucket(m.get("status", ""))] += 1
+            continue
+        by_function.setdefault(fn, []).append(m)
+
+    functions: list[dict] = []
+    survivors: list[dict] = []
+    for fn_name, records in sorted(by_function.items(), key=lambda kv: -len(kv[1])):
+        counts = {"killed": 0, "survived": 0, "inconclusive": 0}
+        markers: list[dict] = []
+        unattributed = 0
+        for m in records:
+            bucket = _mutant_bucket(m.get("status", ""))
+            counts[bucket] += 1
+            line = m.get("line")
+            before, after = m.get("before"), m.get("after")
+            if line is not None:
+                markers.append(
+                    {
+                        "mutantId": m.get("mutant_id"),
+                        "status": bucket,
+                        "line": line,
+                        # Real only when `a8_mutation_validator` fetched this
+                        # mutant's diff (survivors first, then killed, up to
+                        # `MAX_MUTANT_DIFFS`) — `null` otherwise, never guessed.
+                        "before": before,
+                        "after": after,
+                    }
+                )
+            else:
+                unattributed += 1
+            if bucket == "survived":
+                survivors.append(
+                    {
+                        "mutantId": m.get("mutant_id"),
+                        "function": fn_name,
+                        "file": m.get("file") or patch_file,
+                        "line": line,
+                        "before": before,
+                        "after": after,
+                    }
+                )
+
+        span = spans.get(fn_name)
+        span_lines = (
+            sorted(n for n in patched_lines if span[0] <= n <= span[1]) if span else []
+        )
+        entry = {
+            "name": fn_name,
+            "killed": counts["killed"],
+            "survived": counts["survived"],
+            "inconclusive": counts["inconclusive"],
+            "total": len(records),
+            "markers": markers,
+            "unattributed": unattributed,
+            "codeAvailable": span is not None,
+            "spanStart": span[0] if span else None,
+            "spanEnd": span[1] if span else None,
+            "lines": _code_window(source_lines, span[0], span[1]) if span else [],
+            # Lines this patch actually changed (real diff against A7's
+            # `original`), not merely lines a mutant attacked — drives the
+            # left-edge "patched" indicator distinct from the mutation gutter.
+            "patchedLines": span_lines,
+        }
+        functions.append(entry)
+
+    return {
+        "stage": stage,
+        "pytestAvailable": pytest_available,
+        "pytestPassed": bool(mutation.get("pytest_passed")),
+        "targetTestId": reproduction.get("failing_test"),
+        "targetTestPassed": target_test_passed,
+        "regressionTestsPassed": regression_tests_passed,
+        "newFailures": list(mutation.get("new_failures") or []),
+        "preExistingFailures": list(mutation.get("pre_existing_failures") or []),
+        "mutationStatus": mutation_status,
+        "unavailableReason": mutation.get("mutation_unavailable_reason"),
+        "mutationScore": float(score) if score is not None else None,
+        "mutantSurvived": survived,
+        "killedMutants": mutation.get("killed_mutants"),
+        "survivedMutants": mutation.get("survived_mutants"),
+        "totalMutants": mutation.get("total_mutants"),
+        "inconclusiveMutants": mutation.get("inconclusive_mutants"),
+        "mutantsByStatus": dict(mutation.get("mutants_by_status") or {}),
+        "correctnessScore": float(correctness) if correctness is not None else None,
+        "correctnessThreshold": SCORE_THRESHOLD,
+        "patchRetryRequired": bool(mutation.get("patch_retry_required")),
+        "pytestReexecutionCommand": mutation.get("pytest_reexecution_command") or "",
+        "reexecutionCommand": mutation.get("reexecution_command") or "",
+        "reexecutionTimeoutSeconds": mutation.get("reexecution_timeout_seconds"),
+        "retryContext": retry_context,
+        "patchFile": patch_file,
+        "functions": functions,
+        "survivors": survivors,
+        "unattributedCounts": unattributed_counts,
     }
 
 
@@ -2164,6 +2516,12 @@ def build_repair_plan(state: RunStateModel) -> dict | None:
         "conflictBatches": conflict_batches,
         "orderingSource": dag.get("ordering_source"),
         "orderingRationale": dag.get("ordering_rationale") or "",
+        # The real topological order, computed unconditionally by A6 — present
+        # even when `orderingSource == "llm"`, so a client can compare the
+        # model's chosen order against the order the dependency graph itself
+        # supports rather than taking the LLM's order on faith. Empty on a run
+        # predating this field, same convention as every other list here.
+        "deterministicOrder": list(dag.get("deterministic_order") or []),
         "totalDependencyEdges": len(dag.get("dependency_edges") or []),
         # Real and load-bearing for the UI's honesty banner: A7 reads only
         # `execution_order[0]` as a label today. See the docstring above.
@@ -2844,6 +3202,8 @@ def build_mergeability_decision(state: RunStateModel) -> dict | None:
     checks = gate_checks(state, axis, phantoms)
     hard_gates_clear = all(c.passed for c in checks)
 
+    repository_evidence = _repository_evidence(state)
+
     proof = state.proof_bundle or {}
     steps = [
         {
@@ -2918,6 +3278,56 @@ def build_mergeability_decision(state: RunStateModel) -> dict | None:
             if proof
             else None
         ),
+        "repositoryEvidence": repository_evidence,
+    }
+
+
+def _module_of(path: str) -> str:
+    """Directory grouping used only for the mergeability panel's compact
+    "affected modules" chip — not a first-class concept anywhere else in the
+    pipeline. Real path prefixes only, no inference about package structure.
+    """
+    head, _, _ = path.rpartition("/")
+    return head or "."
+
+
+def _repository_evidence(state: RunStateModel) -> dict | None:
+    """A compact scale-invariant summary for the mergeability panel's
+    "Repository Evidence" strip. Every count here is a real, already-computed
+    fact re-read from other agents' own state — A1's SIG size, the files A7
+    actually patched, A5's blast-radius scope and traversal edges. Nothing is
+    sampled, estimated, or recomputed with different logic than the panel
+    that owns each fact (`build_semantic_graph`, `build_blast_impact`).
+
+    A count is `None` only when the agent that would have produced it never
+    ran — never a fabricated 0 standing in for "not measured", the same
+    discipline `services/measurement.py` established for the axis scores.
+    Returns `None` only when every one of A1/A5/A7 is silent, i.e. before the
+    run has produced anything this strip could summarize.
+    """
+    sig_files: dict = (state.sig or {}).get("files") or {}
+    files_analyzed = len(sig_files) if state.sig is not None else None
+
+    patches = (state.patch_bundle or {}).get("patches") or []
+    changed_files = sorted({p.get("file") for p in patches if p.get("file")})
+
+    blast = state.blast_graph
+    blast_scope_files = sorted(
+        {s.get("path") for s in ((blast or {}).get("scope") or []) if s.get("path")}
+    )
+    dependency_edge_count = len((blast or {}).get("edges") or []) if blast is not None else None
+
+    if state.sig is None and blast is None and not patches:
+        return None
+
+    affected_modules = sorted({_module_of(p) for p in {*changed_files, *blast_scope_files}})
+
+    return {
+        "filesAnalyzed": files_analyzed,
+        "changedFiles": changed_files,
+        "affectedModules": affected_modules,
+        "blastScopeFiles": blast_scope_files,
+        "dependencyEdgeCount": dependency_edge_count,
     }
 
 

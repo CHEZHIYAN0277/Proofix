@@ -37,3 +37,10 @@ class FixDAGPlan(BaseModel):
     #: it answered. Empty when the deterministic path ran (there is no LLM to
     #: explain itself) or when the LLM returned an order without one.
     ordering_rationale: str = ""
+    #: `topological_execution_order(nodes, dependency_edges)`, computed
+    #: unconditionally — never gated on `ordering_source`. When the LLM path
+    #: produced `execution_order`, this is the independent, dependency-respecting
+    #: order the graph itself supports, so a client can show where the two agree
+    #: or diverge instead of asking the reader to trust the LLM's order on faith.
+    #: Equal to `execution_order` whenever `ordering_source == "deterministic"`.
+    deterministic_order: list[str] = Field(default_factory=list)

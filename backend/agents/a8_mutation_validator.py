@@ -1,8 +1,12 @@
 from pathlib import Path
 
 from backend.agents.base import AgentBase
-from backend.models.validation import MutationValidationResult, ValidationFailure
-from backend.services.mutation_parser import MutationOutcome, parse_mutation_output
+from backend.models.validation import MutantRecord, MutationValidationResult, ValidationFailure
+from backend.services.mutation_parser import (
+    MutationOutcome,
+    parse_mutation_output,
+    parse_mutmut_show_diff,
+)
 from backend.services.retry_brief_builder import build_retry_brief
 from backend.services.scoped_validation import run_scoped_validation
 from backend.services.subprocess_runner import PYTHON, run_command
@@ -19,6 +23,15 @@ CORRECTNESS_MUTATION_RANGE = 40.0
 MUTANT_SURVIVED_ASSERTION = (
     "Mutant survived — test passes coincidentally without validating fix"
 )
+
+# `mutmut show <id>` is one extra subprocess call per mutant — real work, not
+# free. Every survivor is worth the call (it is the finding A8 exists to
+# produce); killed/inconclusive mutants are worth it only to give the gutter
+# real per-line density instead of a function-level bar, so they fill
+# whatever budget survivors did not use. A run with more mutants than the cap
+# degrades honestly (see `mutation_parser.MutantRecord` — the un-enriched
+# remainder keeps its `function` attribution, never a guessed line).
+MAX_MUTANT_DIFFS = 40
 
 
 class A8MutationValidatorAgent(AgentBase):
@@ -134,6 +147,7 @@ class A8MutationValidatorAgent(AgentBase):
             total_mutants=outcome.total_mutants,
             inconclusive_mutants=outcome.inconclusive_mutants,
             mutants_by_status=outcome.by_status,
+            mutants=outcome.mutants,
             correctness_score=correctness_score,
             failure_brief=failure_brief,
             validation_failure=validation_failure,
@@ -331,4 +345,38 @@ class A8MutationValidatorAgent(AgentBase):
             results_stdout=results_stdout,
             results_stderr=results_stderr,
         )
+        if outcome.mutants:
+            outcome = outcome.model_copy(
+                update={"mutants": await self._enrich_mutant_diffs(repo, outcome.mutants)}
+            )
         return outcome, mutmut_cmd
+
+    @staticmethod
+    async def _enrich_mutant_diffs(repo: Path, mutants: list[MutantRecord]) -> list[MutantRecord]:
+        """Fetch the real changed line for as many mutants as the budget allows.
+
+        Survivors go first — every one of them is worth the call, since a
+        survivor is the finding A8 exists to produce. Killed, then
+        inconclusive, mutants fill whatever budget survivors did not use, so
+        the gutter gets real per-line density rather than only lighting up on
+        survivor lines. `mutmut show` failing or emitting an unparseable diff
+        leaves that mutant's `line`/`before`/`after` at `None` — attribution
+        degrades to `function` rather than guessing a line.
+        """
+        priority = {"survived": 0, "killed": 1}
+        order = sorted(range(len(mutants)), key=lambda i: priority.get(mutants[i].status, 2))
+
+        enriched = list(mutants)
+        for idx in order[:MAX_MUTANT_DIFFS]:
+            record = mutants[idx]
+            show_code, show_stdout, _show_stderr = await run_command(
+                [PYTHON, "-m", "mutmut", "show", record.mutant_id],
+                cwd=repo,
+                timeout=15,
+            )
+            if show_code == -1:
+                continue
+            parsed = parse_mutmut_show_diff(show_stdout)
+            if parsed:
+                enriched[idx] = record.model_copy(update=parsed)
+        return enriched

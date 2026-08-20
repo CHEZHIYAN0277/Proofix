@@ -77,6 +77,26 @@ export interface ProofBundle {
   steps: VerificationStep[];
 }
 
+/**
+ * A scale-invariant summary of the evidence A10's decision rests on — real
+ * counts re-read from A1's SIG, A5's blast radius, and A7's patch bundle, not
+ * a fabricated repository-size metric. The panel renders these as aggregate
+ * chips regardless of whether the repository has 5 files or 100,000; the
+ * file/module lists behind `changedFiles` and `blastScopeFiles` only render
+ * once a reviewer explicitly expands them.
+ *
+ * A count is `null` only when the agent that would have produced it never
+ * ran (`filesAnalyzed` before A1, `dependencyEdgeCount` before A5) — never a
+ * substituted `0` standing in for "not measured".
+ */
+export interface RepositoryEvidence {
+  filesAnalyzed: number | null;
+  changedFiles: string[];
+  affectedModules: string[];
+  blastScopeFiles: string[];
+  dependencyEdgeCount: number | null;
+}
+
 /** `GET /api/runs/{runId}/decision`. */
 export interface MergeabilityDecision {
   prType: PRType;
@@ -97,4 +117,6 @@ export interface MergeabilityDecision {
   descriptionWhy: string;
   descriptionWhat: string;
   proofBundle: ProofBundle | null;
+  /** `null` before any of A1/A5/A7 has produced anything to summarize. */
+  repositoryEvidence: RepositoryEvidence | null;
 }

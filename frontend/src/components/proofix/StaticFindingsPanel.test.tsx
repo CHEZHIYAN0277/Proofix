@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 /**
- * A3's Findings Funnel + Prioritization Ledger panel. Every assertion here
- * traces back to a specific field on `GET /api/runs/{runId}/static-findings`
- * — the point of this suite is to catch the panel inventing a severity band,
- * a scanner status, or a cluster count the backend never sent.
+ * A3's Priority Lens panel. Every assertion here traces back to a specific
+ * field on `GET /api/runs/{runId}/static-findings` — the point of this
+ * suite is to catch the panel inventing a severity band, a scanner status,
+ * a cluster count, or a reasoning claim the backend never supported.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const getStaticFindings = vi.fn();
@@ -91,11 +91,10 @@ describe("StaticFindingsPanel", () => {
     render(<StaticFindingsPanel runId="r1" />);
     expect(await screen.findByText("API 500: Internal Server Error")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-    // The error state must never say "no findings" — that reads as a clean scan.
-    expect(screen.queryByText(/No prioritized findings were reported/)).toBeNull();
+    expect(screen.queryByText(/No findings require prioritization/)).toBeNull();
   });
 
-  it("renders '200 + empty' as a completed scan with no findings — never confused with 404", async () => {
+  it("shows a calm empty state when scanners ran and genuinely found nothing", async () => {
     getStaticFindings.mockResolvedValue({
       scannerStatus: {
         bandit: "ok_no_findings",
@@ -108,46 +107,77 @@ describe("StaticFindingsPanel", () => {
     });
     render(<StaticFindingsPanel runId="r1" />);
 
-    expect(await screen.findByText("Static analysis completed")).toBeTruthy();
-    expect(screen.getByText("No prioritized findings were reported.")).toBeTruthy();
+    expect(await screen.findByText("No findings require prioritization.")).toBeTruthy();
+    expect(await screen.findByText("No findings reported by the available scanners.")).toBeTruthy();
     expect(screen.queryByText(/Pending/)).toBeNull();
+    // Never a safety claim.
+    expect(screen.queryByText(/no security issues/i)).toBeNull();
+    expect(screen.queryByText(/clean/i)).toBeNull();
   });
 
-  it("renders each scanner's real status independently, including unavailable ones", async () => {
-    getStaticFindings.mockResolvedValue(REPORT);
+  it("shows a diagnostic warning — not a clean result — when no scanner ran at all", async () => {
+    getStaticFindings.mockResolvedValue({
+      scannerStatus: {
+        bandit: "unavailable",
+        semgrep: "unavailable",
+        ruff: "unavailable",
+      },
+      rawCount: 0,
+      prioritizedCount: 0,
+      findings: [],
+    });
     render(<StaticFindingsPanel runId="r1" />);
 
-    await screen.findByText("Scanner analysis");
-    // bandit and semgrep are unavailable — they must still be listed, not hidden.
-    const unavailable = screen.getAllByText("unavailable");
-    expect(unavailable.length).toBe(2);
-    expect(screen.getByText("completed")).toBeTruthy(); // ruff, ok
+    expect(await screen.findByText("No findings require prioritization.")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Priority ranking could not be established because no scanner produced findings.",
+      ),
+    ).toBeTruthy();
+    // Distinct from the "scanners ran, found nothing" wording.
+    expect(screen.queryByText("No findings reported by the available scanners.")).toBeNull();
+    expect(screen.getAllByText("unavailable").length).toBe(3);
   });
 
-  it("never derives scanner status from which tools appear on findings", async () => {
-    // bandit contributes to a finding's tools, yet its own scanner status is
-    // "unavailable" — the funnel must show the backend's real status, not
-    // infer "ran" from the presence of the tool name in a finding.
-    getStaticFindings.mockResolvedValue(REPORT);
-    render(<StaticFindingsPanel runId="r1" />);
-
-    await screen.findByText("Scanner analysis");
-    // The scanner list is the <ul> immediately following the "Scanner
-    // analysis" heading — scope to it so "bandit" resolves to the funnel row,
-    // not the (also present) filter chip of the same name.
-    const scannerList = screen.getByText("Scanner analysis").nextElementSibling as HTMLElement;
-    const banditRow = within(scannerList).getByText("bandit").closest("li")!;
-    expect(within(banditRow).getByText("unavailable")).toBeTruthy();
-  });
-
-  it("renders the raw and prioritized counts from the backend", async () => {
+  it("renders every scanner's real status, including unavailable ones — never hidden", async () => {
     getStaticFindings.mockResolvedValue(REPORT);
     render(<StaticFindingsPanel runId="r1" />);
 
     await screen.findByText("Static Analysis");
-    // "Raw findings" labels both the stat chip and the funnel row — take the chip.
-    const rawChip = screen.getAllByText("Raw findings")[0].closest("div");
-    expect(within(rawChip!.parentElement!).getByText("2")).toBeTruthy();
+    expect(screen.getAllByText("unavailable").length).toBe(2);
+    expect(screen.getByText("ready")).toBeTruthy(); // ruff, ok
+  });
+
+  it("never derives scanner status from which tools appear on findings", async () => {
+    // bandit contributes to a finding's tools, yet its own scanner status is
+    // "unavailable" — the strip must show the backend's real status, not
+    // infer "ran" from the tool name appearing on a finding.
+    getStaticFindings.mockResolvedValue(REPORT);
+    render(<StaticFindingsPanel runId="r1" />);
+
+    await screen.findByText("Static Analysis");
+    const scannerStrip = screen.getByText("Scanners").parentElement as HTMLElement;
+    expect(within(scannerStrip).getByText("bandit")).toBeTruthy();
+    expect(within(scannerStrip).getAllByText("unavailable").length).toBe(2);
+  });
+
+  it("renders the raw and prioritized counts from the backend, and the dynamic summary sentence", async () => {
+    getStaticFindings.mockResolvedValue(REPORT);
+    render(<StaticFindingsPanel runId="r1" />);
+
+    await screen.findByText("Static Analysis");
+    expect(screen.getAllByText("2", { selector: "div" }).length).toBe(2); // raw + prioritized
+    expect(
+      screen.getByText(/2 findings distilled into 2 priorities — ranked by blast radius\./),
+    ).toBeTruthy();
+  });
+
+  it("never fabricates a cluster count the backend does not emit", async () => {
+    getStaticFindings.mockResolvedValue(REPORT);
+    render(<StaticFindingsPanel runId="r1" />);
+
+    await screen.findByText("Static Analysis");
+    expect(screen.queryByText(/clustered/i)).toBeNull();
   });
 
   it("renders findings in the backend's own ranked order, never re-sorted", async () => {
@@ -160,7 +190,7 @@ describe("StaticFindingsPanel", () => {
     expect(rows[1].textContent).toContain("routes.py");
   });
 
-  it("shows severity as a real number when measured", async () => {
+  it("shows severity as a real measured number for finding #1", async () => {
     getStaticFindings.mockResolvedValue(REPORT);
     render(<StaticFindingsPanel runId="r1" />);
 
@@ -168,42 +198,86 @@ describe("StaticFindingsPanel", () => {
     expect(screen.getAllByText("0.90").length).toBeGreaterThan(0);
   });
 
-  it("shows 'Not measured' rather than a fabricated severity for an unmeasured finding", async () => {
+  it("shows 'Not measured' rather than a fabricated severity — and never a HIGH/MEDIUM/LOW band", async () => {
     getStaticFindings.mockResolvedValue(REPORT);
     render(<StaticFindingsPanel runId="r1" />);
 
     await screen.findByText("Static Analysis");
     expect(screen.getAllByText("Not measured").length).toBeGreaterThan(0);
-    // Never converted to a severity band.
     expect(screen.queryByText("LOW")).toBeNull();
     expect(screen.queryByText("MEDIUM")).toBeNull();
     expect(screen.queryByText("HIGH")).toBeNull();
   });
 
-  it("shows Consensus for a multi-tool finding and 'Single-tool finding' for the other — never implying single-tool is bad", async () => {
+  it("agreement is one dot per real tool, never a percentage or a fabricated scanner", async () => {
     getStaticFindings.mockResolvedValue(REPORT);
     render(<StaticFindingsPanel runId="r1" />);
 
     await screen.findByText("Static Analysis");
-    expect(screen.getAllByText("Consensus").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Single-tool finding").length).toBeGreaterThan(0);
+    // #1 has tools ["bandit", "ruff"] — 2 scanners.
+    expect(screen.getByText("2 scanners")).toBeTruthy();
+    // #2 has tools ["ruff"] — 1 scanner (singular).
+    expect(screen.getByText("1 scanner")).toBeTruthy();
+    expect(screen.queryByText(/%/)).toBeNull();
   });
 
-  it("selecting a finding opens the detail panel with the score decomposition and 'Not measured' for what A3 never computes", async () => {
+  it("clicking the #1 finding expands it in place and dims the other rows", async () => {
     getStaticFindings.mockResolvedValue(REPORT);
     const user = userEvent.setup();
     render(<StaticFindingsPanel runId="r1" />);
 
     await screen.findByText("Static Analysis");
-    await user.click(screen.getByRole("button", { name: /auth\.py/ }));
+    const row1 = screen.getByRole("button", { name: /auth\.py/ });
+    await user.click(row1);
 
-    const detail = await screen.findByRole("complementary", { name: "Finding detail" });
-    // Criticality and churn weight each appear twice: once in the field list,
-    // once in the "Why #N?" decomposition.
-    expect(within(detail).getAllByText("0.81").length).toBeGreaterThan(0); // criticality
-    expect(within(detail).getAllByText("0.37").length).toBeGreaterThan(0); // churn weight
-    expect(within(detail).getByText("0.6200")).toBeTruthy(); // blast radius (4 decimals)
-    expect(within(detail).getAllByText("Not measured").length).toBeGreaterThanOrEqual(4); // column/confidence/category/remediation/rule
+    expect(row1.getAttribute("aria-expanded")).toBe("true");
+    expect(await screen.findByText("Why this ranked #1")).toBeTruthy();
+    // FILE / LINE / FINDING fields from the expansion.
+    expect(screen.getByText("vulnapi/auth.py")).toBeTruthy();
+    expect(screen.getByText("12")).toBeTruthy();
+
+    // The other row is still present but dimmed via opacity, not removed.
+    const row2 = screen.getByRole("button", { name: /routes\.py/ });
+    expect(row2).toBeTruthy();
+  });
+
+  it("clicking an expanded finding again collapses it", async () => {
+    getStaticFindings.mockResolvedValue(REPORT);
+    const user = userEvent.setup();
+    render(<StaticFindingsPanel runId="r1" />);
+
+    await screen.findByText("Static Analysis");
+    const row1 = screen.getByRole("button", { name: /auth\.py/ });
+    await user.click(row1);
+    await screen.findByText("Why this ranked #1");
+    await user.click(row1);
+
+    expect(screen.queryByText("Why this ranked #1")).toBeNull();
+  });
+
+  it("only the #1 finding's expansion offers the A4 handoff", async () => {
+    getStaticFindings.mockResolvedValue(REPORT);
+    const user = userEvent.setup();
+    render(<StaticFindingsPanel runId="r1" />);
+
+    await screen.findByText("Static Analysis");
+    await user.click(screen.getByRole("button", { name: /routes\.py/ }));
+    await screen.findByText("Why this ranked #2");
+    expect(screen.queryByText(/Investigate with A4/)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /routes\.py/ }));
+    await user.click(screen.getByRole("button", { name: /auth\.py/ }));
+    await screen.findByText("Why this ranked #1");
+    expect(screen.getByText(/Investigate with A4/)).toBeTruthy();
+  });
+
+  it("the panel-level handoff line always points at the real #1 finding", async () => {
+    getStaticFindings.mockResolvedValue(REPORT);
+    render(<StaticFindingsPanel runId="r1" />);
+
+    await screen.findByText("Static Analysis");
+    const handoff = screen.getByText(/Evidence Investigation examines/).closest("div")!;
+    expect(within(handoff).getByText("vulnapi/auth.py:12")).toBeTruthy();
   });
 
   it("the score decomposition never recomputes blast_radius_score — it renders the backend's own value", async () => {
@@ -214,106 +288,39 @@ describe("StaticFindingsPanel", () => {
     await screen.findByText("Static Analysis");
     await user.click(screen.getByRole("button", { name: /auth\.py/ }));
 
-    const detail = await screen.findByRole("complementary", { name: "Finding detail" });
-    expect(within(detail).getByText(/Blast-radius score 0\.6200/)).toBeTruthy();
+    expect(await screen.findByText("0.6200")).toBeTruthy();
   });
 
-  it("filters by scanner", async () => {
+  it("the generated reasoning only cites factors that actually cross the high threshold", async () => {
     getStaticFindings.mockResolvedValue(REPORT);
     const user = userEvent.setup();
     render(<StaticFindingsPanel runId="r1" />);
 
     await screen.findByText("Static Analysis");
-    await user.click(screen.getByRole("button", { name: "Table" }));
-    const table = await screen.findByRole("table");
-    within(table).getByText("vulnapi/auth.py");
-    within(table).getByText("vulnapi/routes.py");
+    await user.click(screen.getByRole("button", { name: /auth\.py/ }));
+    await screen.findByText("Why this ranked #1");
 
-    // Filtering is inclusive per-tool: a finding shows if any of its tools is
-    // active. routes.py's only tool is ruff, so deselecting ruff removes it
-    // while auth.py (bandit + ruff) still matches on bandit.
-    await user.click(screen.getByRole("button", { name: "ruff" }));
-    await waitFor(() => {
-      expect(within(table).queryByText("vulnapi/routes.py")).toBeNull();
-      expect(within(table).getByText("vulnapi/auth.py")).toBeTruthy();
-    });
+    // #1: severity 0.90 (measured, high), criticality 0.81 (high), churn
+    // 0.37 (not high) — churn must not be cited.
+    expect(screen.getByText("High measured severity")).toBeTruthy();
+    expect(screen.getByText("High structural criticality")).toBeTruthy();
+    expect(screen.queryByText("Active code churn")).toBeNull();
   });
 
-  it("filters by severity-measured", async () => {
+  it("cites the honest 'not independently measured' reason instead of a fabricated severity claim", async () => {
     getStaticFindings.mockResolvedValue(REPORT);
     const user = userEvent.setup();
     render(<StaticFindingsPanel runId="r1" />);
 
     await screen.findByText("Static Analysis");
-    await user.click(screen.getByRole("button", { name: "Table" }));
-    const table = await screen.findByRole("table");
+    await user.click(screen.getByRole("button", { name: /routes\.py/ }));
 
-    await user.click(screen.getByRole("button", { name: "Severity not measured" }));
-    await waitFor(() => {
-      expect(within(table).queryByText("vulnapi/routes.py")).toBeNull();
-      expect(within(table).getByText("vulnapi/auth.py")).toBeTruthy();
-    });
-  });
-
-  it("filters by consensus", async () => {
-    getStaticFindings.mockResolvedValue(REPORT);
-    const user = userEvent.setup();
-    render(<StaticFindingsPanel runId="r1" />);
-
-    await screen.findByText("Static Analysis");
-    await user.click(screen.getByRole("button", { name: "Table" }));
-    const table = await screen.findByRole("table");
-
-    // Deselecting "Single-tool" leaves only the consensus bucket active,
-    // which excludes routes.py (single-tool) and keeps auth.py (consensus).
-    await user.click(screen.getByRole("button", { name: "Single-tool" }));
-    await waitFor(() => {
-      expect(within(table).queryByText("vulnapi/routes.py")).toBeNull();
-      expect(within(table).getByText("vulnapi/auth.py")).toBeTruthy();
-    });
-  });
-
-  it("searches by file and by message", async () => {
-    getStaticFindings.mockResolvedValue(REPORT);
-    const user = userEvent.setup();
-    render(<StaticFindingsPanel runId="r1" />);
-
-    await screen.findByText("Static Analysis");
-    await user.click(screen.getByRole("button", { name: "Table" }));
-    const table = await screen.findByRole("table");
-
-    await user.type(screen.getByPlaceholderText("Search file or message…"), "unused");
-    await waitFor(() => {
-      expect(within(table).queryByText("vulnapi/auth.py")).toBeNull();
-      expect(within(table).getByText("vulnapi/routes.py")).toBeTruthy();
-    });
-  });
-
-  it("the table view is a complete, accessible fallback with real headers", async () => {
-    getStaticFindings.mockResolvedValue(REPORT);
-    const user = userEvent.setup();
-    render(<StaticFindingsPanel runId="r1" />);
-
-    await screen.findByText("Static Analysis");
-    await user.click(screen.getByRole("button", { name: "Table" }));
-
-    const table = await screen.findByRole("table");
-    const headerRow = within(table).getAllByRole("columnheader");
-    const headerText = headerRow.map((h) => h.textContent);
-    for (const header of [
-      "Rank",
-      "File",
-      "Line",
-      "Message",
-      "Tools",
-      "Severity",
-      "Consensus",
-      "Blast radius",
-    ]) {
-      expect(headerText).toContain(header);
-    }
-    expect(within(table).getByText("vulnapi/auth.py")).toBeTruthy();
-    expect(within(table).getByText("vulnapi/routes.py")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Severity not independently measured — ranked on agreement, criticality and churn",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("High measured severity")).toBeNull();
   });
 
   it("never calls A0.5's, A1's, or A2's endpoints — A3's findings are its own", async () => {
@@ -334,12 +341,65 @@ describe("StaticFindingsPanel", () => {
     expect(screen.getByText(/static-findings/)).toBeTruthy();
   });
 
-  it("does not fabricate a 'clustered' count — the funnel describes the transformation instead", async () => {
-    getStaticFindings.mockResolvedValue(REPORT);
+  it("never renders more than the backend's own prioritized findings, however large rawCount is", async () => {
+    const many = {
+      scannerStatus: { bandit: "ok", semgrep: "ok", ruff: "ok" },
+      rawCount: 15000,
+      prioritizedCount: 8,
+      findings: Array.from({ length: 8 }, (_, i) => ({
+        id: `finding-${i}`,
+        rank: i + 1,
+        file: `pkg/mod_${i}.py`,
+        line: i + 1,
+        message: "issue",
+        tools: ["bandit"],
+        severity: 0.5,
+        severityMeasured: true,
+        consensus: false,
+        blastRadiusScore: 0.5 - i * 0.01,
+        criticality: 0.5,
+        churnWeight: 0.5,
+      })),
+    };
+    getStaticFindings.mockResolvedValue(many);
     render(<StaticFindingsPanel runId="r1" />);
 
-    await screen.findByText("Scanner analysis");
-    expect(screen.getByText(/clustered by file and nearby line/)).toBeTruthy();
-    expect(screen.queryByText(/^Clustered$/)).toBeNull();
+    await screen.findByText("Static Analysis");
+    expect(screen.getByText("15000", { selector: "div" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: /pkg\/mod_\d+\.py/ }).length).toBe(8);
+  });
+
+  it("only ranks #1 and #2 show the full equation by default — the rest stay compact until clicked", async () => {
+    const many = {
+      scannerStatus: { bandit: "ok", semgrep: "ok", ruff: "ok" },
+      rawCount: 8,
+      prioritizedCount: 8,
+      findings: Array.from({ length: 8 }, (_, i) => ({
+        id: `finding-${i}`,
+        rank: i + 1,
+        file: `pkg/mod_${i}.py`,
+        line: i + 1,
+        message: "issue",
+        tools: ["bandit"],
+        severity: 0.5,
+        severityMeasured: true,
+        consensus: false,
+        blastRadiusScore: 0.5 - i * 0.01,
+        criticality: 0.5,
+        churnWeight: 0.5,
+      })),
+    };
+    getStaticFindings.mockResolvedValue(many);
+    const user = userEvent.setup();
+    render(<StaticFindingsPanel runId="r1" />);
+
+    await screen.findByText("Static Analysis");
+    // The "Severity" factor label only renders inside an expanded equation —
+    // by default that is exactly ranks #1 and #2.
+    expect(screen.getAllByText("Severity").length).toBe(2);
+
+    // Clicking a compact row (#3) expands its own equation too.
+    await user.click(screen.getByRole("button", { name: /pkg\/mod_2\.py/ }));
+    expect(screen.getAllByText("Severity").length).toBe(3);
   });
 });

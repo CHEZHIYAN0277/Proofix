@@ -955,6 +955,146 @@ def test_security_rescan_new_finding_projects_no_severity_field():
     }
 
 
+def _reconciled_state(reconciliation, **overrides) -> RunStateModel:
+    security = {
+        "new_findings": [],
+        "rejected": False,
+        "security_score": 100.0,
+        "scanners_run": ["bandit"],
+        "reconciliation": reconciliation,
+        "reexecution_command": "bandit -f json -q -r vulnapi",
+        "reexecution_timeout_seconds": 60,
+    }
+    security.update(overrides)
+    return RunStateModel(
+        run_id=RUN_ID, repo_path="vulnapi", status="completed", security_result=security
+    )
+
+
+def test_security_rescan_projects_a_carried_pair_with_its_line_delta():
+    """The point of the ledger: a shifted finding is visibly shifted, not
+    silently absent from the new-findings list."""
+    state = _reconciled_state(
+        [
+            {
+                "tool": "bandit",
+                "compared": True,
+                "keys": [
+                    {
+                        "tool": "bandit",
+                        "file": "vulnapi/auth.py",
+                        "message": "Possible hardcoded password",
+                        "baseline": [{"line": 12}],
+                        "post": [{"line": 14}],
+                        "matched": [
+                            {"baseline_index": 0, "post_index": 0, "line_delta": 2}
+                        ],
+                        "introduced_indexes": [],
+                        "resolved_indexes": [],
+                    }
+                ],
+            },
+            {"tool": "semgrep", "compared": False, "keys": []},
+        ]
+    )
+
+    result = build_security_rescan(state)
+
+    assert result["reconciliationAvailable"] is True
+    bandit_lane, semgrep_lane = result["reconciliation"]
+    key = bandit_lane["keys"][0]
+    assert key["baseline"] == [{"id": "b-bandit-0-0", "line": 12}]
+    assert key["post"] == [{"id": "p-bandit-0-0", "line": 14}]
+    assert key["rails"] == [
+        {"baselineId": "b-bandit-0-0", "postId": "p-bandit-0-0", "lineDelta": 2}
+    ]
+    assert key["introducedIds"] == []
+    # A scanner that did not run is a lane that says so, never an empty pass.
+    assert semgrep_lane == {"tool": "semgrep", "compared": False, "keys": []}
+
+
+def test_security_rescan_projects_multiplicity_as_one_rail_and_one_dangling_chip():
+    state = _reconciled_state(
+        [
+            {
+                "tool": "bandit",
+                "compared": True,
+                "keys": [
+                    {
+                        "tool": "bandit",
+                        "file": "vulnapi/auth.py",
+                        "message": "Possible hardcoded password",
+                        "baseline": [{"line": 12}],
+                        "post": [{"line": 12}, {"line": 40}],
+                        "matched": [
+                            {"baseline_index": 0, "post_index": 0, "line_delta": 0}
+                        ],
+                        "introduced_indexes": [1],
+                        "resolved_indexes": [],
+                    }
+                ],
+            },
+            {"tool": "semgrep", "compared": True, "keys": []},
+        ],
+        rejected=True,
+        security_score=75.0,
+        scanners_run=["bandit", "semgrep"],
+    )
+
+    key = build_security_rescan(state)["reconciliation"][0]["keys"][0]
+
+    assert len(key["post"]) == 2
+    assert len(key["rails"]) == 1
+    assert key["introducedIds"] == ["p-bandit-0-1"]
+    # The dangling chip is exactly the one no rail reaches.
+    railed = {r["postId"] for r in key["rails"]}
+    assert [p["id"] for p in key["post"] if p["id"] not in railed] == key["introducedIds"]
+
+
+def test_security_rescan_reconciliation_carries_no_severity():
+    """Every A9 finding is stamped with a constant 0.7. It is not a
+    measurement, so no occurrence may carry it into the panel."""
+    state = _reconciled_state(
+        [
+            {
+                "tool": "bandit",
+                "compared": True,
+                "keys": [
+                    {
+                        "tool": "bandit",
+                        "file": "vulnapi/auth.py",
+                        "message": "Possible hardcoded password",
+                        "baseline": [],
+                        "post": [{"line": 40}],
+                        "matched": [],
+                        "introduced_indexes": [0],
+                        "resolved_indexes": [],
+                    }
+                ],
+            },
+            {"tool": "semgrep", "compared": True, "keys": []},
+        ]
+    )
+
+    key = build_security_rescan(state)["reconciliation"][0]["keys"][0]
+    assert key["post"] == [{"id": "p-bandit-0-0", "line": 40}]
+    assert "severity" not in key
+
+
+def test_security_rescan_without_a_stored_reconciliation_says_so():
+    """A run completed before A9 recorded the comparison must not render an
+    empty ledger — "nothing carried" is a claim, and it was never measured."""
+    state = _reconciled_state([], scanners_run=["bandit", "semgrep"])
+
+    result = build_security_rescan(state)
+
+    assert result["reconciliationAvailable"] is False
+    assert result["reconciliation"] == [
+        {"tool": "bandit", "compared": True, "keys": []},
+        {"tool": "semgrep", "compared": True, "keys": []},
+    ]
+
+
 def test_security_rescan_backward_compatible_with_state_missing_scanners_run():
     """State persisted before `scanners_run` existed must still project cleanly."""
     state = RunStateModel(
@@ -1169,6 +1309,65 @@ def test_mergeability_decision_phantoms_true_leaks_no_fabricated_identity():
     assert result["phantomChangesDetected"] is True
     firing = [g for g in result["hardGates"] if g["checked"] and g["passed"] is False]
     assert firing[0]["code"] == "phantoms_detected"
+
+
+def test_mergeability_decision_repository_evidence_is_none_when_nothing_ran():
+    state = _mergeable_state(sig=None, blast_graph=None, patch_bundle=None)
+    result = build_mergeability_decision(state)
+    assert result is not None
+    assert result["repositoryEvidence"] is None
+
+
+def test_mergeability_decision_repository_evidence_counts_are_real_not_fabricated():
+    state = _mergeable_state(
+        sig={
+            "files": {
+                "vulnapi/auth.py": {"role": "handler"},
+                "vulnapi/middleware.py": {"role": "handler"},
+                "vulnapi/config.py": {"role": "config"},
+            }
+        },
+        blast_graph={
+            "scope": [
+                {"path": "vulnapi/middleware.py", "hop_count": 1},
+                {"path": "vulnapi/config.py", "hop_count": 2},
+            ],
+            "edges": [
+                {"from_path": "vulnapi/auth.py", "to_path": "vulnapi/middleware.py"},
+                {"from_path": "vulnapi/middleware.py", "to_path": "vulnapi/config.py"},
+            ],
+        },
+        patch_bundle={
+            "patches": [{"file": "vulnapi/auth.py", "original": "", "patched": ""}],
+        },
+    )
+    result = build_mergeability_decision(state)
+    assert result is not None
+    evidence = result["repositoryEvidence"]
+    assert evidence["filesAnalyzed"] == 3
+    assert evidence["changedFiles"] == ["vulnapi/auth.py"]
+    assert evidence["dependencyEdgeCount"] == 2
+    assert evidence["blastScopeFiles"] == ["vulnapi/config.py", "vulnapi/middleware.py"]
+    # Modules are directories of the real changed + blast-scope files only —
+    # no path outside those two real sets appears here.
+    assert evidence["affectedModules"] == ["vulnapi"]
+
+
+def test_mergeability_decision_repository_evidence_distinguishes_zero_from_never_ran():
+    # A5 ran and found an empty scope — a real fact, distinct from A5 never
+    # having run at all, which must read as `None` rather than a bare 0.
+    state = _mergeable_state(
+        sig={"files": {"vulnapi/auth.py": {"role": "handler"}}},
+        blast_graph={"scope": [], "edges": []},
+        patch_bundle=None,
+    )
+    result = build_mergeability_decision(state)
+    assert result is not None
+    evidence = result["repositoryEvidence"]
+    assert evidence["filesAnalyzed"] == 1
+    assert evidence["dependencyEdgeCount"] == 0
+    assert evidence["blastScopeFiles"] == []
+    assert evidence["changedFiles"] == []
 
 
 def test_reproduction_evidence_is_none_before_a3_5_completes():

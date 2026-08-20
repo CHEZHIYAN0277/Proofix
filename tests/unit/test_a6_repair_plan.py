@@ -52,6 +52,7 @@ async def test_stub_mode_records_deterministic_ordering(monkeypatch):
 
     assert result.fix_dag["ordering_source"] == "deterministic"
     assert result.fix_dag["ordering_rationale"] == ""
+    assert result.fix_dag["deterministic_order"] == result.fix_dag["execution_order"]
 
 
 @pytest.mark.asyncio
@@ -72,6 +73,10 @@ async def test_llm_ordering_is_recorded_with_its_rationale(monkeypatch):
         "Fix the auth boundary first since it is the reachable CVE surface."
     )
     assert result.fix_dag["execution_order"] == ["finding-0"]
+    # The independent graph-computed order is still recorded even though the
+    # LLM path produced `execution_order` — a client comparing the two must
+    # never be left to guess what the graph itself would have said.
+    assert result.fix_dag["deterministic_order"] == ["finding-0"]
 
 
 @pytest.mark.asyncio

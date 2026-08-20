@@ -160,6 +160,13 @@ const AUTO_MERGE: MergeabilityDecision = {
       },
     ],
   },
+  repositoryEvidence: {
+    filesAnalyzed: 1284,
+    changedFiles: ["vulnapi/auth.py"],
+    affectedModules: ["vulnapi"],
+    blastScopeFiles: ["vulnapi/auth.py", "vulnapi/middleware.py"],
+    dependencyEdgeCount: 12,
+  },
 };
 
 const DRAFT_UNMEASURED: MergeabilityDecision = {
@@ -222,6 +229,7 @@ const DRAFT_UNMEASURED: MergeabilityDecision = {
   descriptionWhy: "",
   descriptionWhat: "",
   proofBundle: null,
+  repositoryEvidence: null,
 };
 
 beforeEach(() => {
@@ -229,13 +237,18 @@ beforeEach(() => {
 });
 
 describe("MergeabilityDecisionPanel", () => {
-  it("shows the real auto-mergeable verdict with the real trust score", async () => {
+  it("shows the real auto-mergeable verdict, with the real trust score behind detail", async () => {
     getMergeabilityDecision.mockResolvedValue(clone(AUTO_MERGE));
     render(<MergeabilityDecisionPanel runId="run-1" />);
 
     const band = await screen.findByRole("status");
     expect(within(band).getByText(/auto-mergeable/i)).toBeTruthy();
-    expect(screen.getByText("0.95")).toBeTruthy();
+
+    // Trust is real but ranks below the routing decision — it lives behind
+    // the optional-detail disclosure, not on the main face of the panel.
+    expect(screen.queryByText("0.95")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /pr & proof-bundle detail/i }));
+    expect(await screen.findByText("0.95")).toBeTruthy();
   });
 
   it("never turns an unmeasured axis into a zero", async () => {
@@ -259,23 +272,200 @@ describe("MergeabilityDecisionPanel", () => {
     render(<MergeabilityDecisionPanel runId="run-1" />);
 
     await screen.findByRole("status");
-    const securityRow = screen.getByText("Security").closest("div")!.parentElement!;
+    // Several "Security" labels exist now (the circuit's gate captions, the
+    // axis card) — anchor on the axis meter's own accessible name instead.
+    const securityRow = screen.getByLabelText("Security 85, threshold 80").closest("div")!.parentElement!;
     expect(within(securityRow).getByText(/≥ 90 for auto-merge ✕/)).toBeTruthy();
     expect(within(securityRow).getByText(/≥ 80 ✓/)).toBeTruthy();
   });
 
-  it("renders a not-reached gate distinctly from a passed one", async () => {
+  it("renders a not-evaluated gate as its own third state, not as passed or failed", async () => {
     getMergeabilityDecision.mockResolvedValue(clone(DRAFT_UNMEASURED));
     render(<MergeabilityDecisionPanel runId="run-1" />);
 
     await screen.findByRole("status");
-    expect(screen.getByText(/not reached/i)).toBeTruthy();
+    // The tenth gate was never reached; the circuit must say so in its own
+    // words rather than folding it into pass or fail. The wide rail and the
+    // narrow ladder both render every gate (CSS decides which is visible),
+    // so this can match either or both.
+    expect(
+      screen.getAllByLabelText(/gate 10: bug reproduction confirmed — not evaluated/i).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText(/not evaluated/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/not measured: security/i).length).toBeGreaterThan(0);
+  });
+
+  it("states how many gates were never evaluated behind the blocker", async () => {
+    getMergeabilityDecision.mockResolvedValue(clone(DRAFT_UNMEASURED));
+    render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    expect(screen.getByText(/1 never evaluated/i)).toBeTruthy();
+    // Concise, decision-oriented copy — states the fact, never claims a
+    // later gate passes or fails.
+    expect(screen.getByText(/never evaluated — not claimed to pass, not claimed to fail/i)).toBeTruthy();
+  });
+
+  it("shows the two outlets this run did not take alongside the one it did, greyed rather than hidden", async () => {
+    getMergeabilityDecision.mockResolvedValue(clone(DRAFT_UNMEASURED));
+    render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    const outcomes = screen.getByRole("list", { name: /routing outcomes/i });
+    expect(within(outcomes).getByText(/— taken/)).toBeTruthy();
+    expect(within(outcomes).getByText("Auto-Mergeable")).toBeTruthy();
+    expect(within(outcomes).getByText("Diff Only")).toBeTruthy();
+    expect(within(outcomes).getByText(/draft pr/i)).toBeTruthy();
+  });
+
+  it("headlines the blocking gate by topic, never by echoing its passing-condition label", async () => {
+    getMergeabilityDecision.mockResolvedValue(clone(DRAFT_UNMEASURED));
+    render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    // The real gate label is "All four axes measured" — echoing it next to
+    // "BLOCKED HERE" would say the opposite of what happened. The headline
+    // must name the topic instead and never contain that literal sentence.
+    // Anchored: the circuit's own hover tooltips also mention gate 9's topic
+    // and state (on a separate line, followed by "Required: …"), so an
+    // unanchored match would hit those too. The headline div's normalized
+    // text is exactly this string and nothing more.
+    expect(screen.getByText(/^gate 9 · axes measurement — blocked here$/i)).toBeTruthy();
+    expect(screen.queryByText(/all four axes measured — blocked here/i)).toBeNull();
+
+    // Dynamic, grounded in the real axes: 3 of 4 measured, security is the
+    // one that isn't.
+    expect(screen.getByText(/3 \/ 4 axes measured/i)).toBeTruthy();
+    expect(screen.getByText(/security unavailable/i)).toBeTruthy();
+    expect(screen.getByText(/1 known blocker · 1 later gate unverified/i)).toBeTruthy();
+  });
+
+  it("connects the blocker to the specific axis evidence responsible for it", async () => {
+    getMergeabilityDecision.mockResolvedValue(clone(DRAFT_UNMEASURED));
+    render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    expect(screen.getByText("GATE 9 ✕")).toBeTruthy();
+    expect(screen.getByText(/Correctness —/)).toBeTruthy();
+    expect(screen.getByText(/92 \(meets threshold\)/)).toBeTruthy();
+    expect(screen.getByText(/Security — NOT MEASURED/)).toBeTruthy();
+  });
+
+  it("gives a next action that names the actual missing evidence, not a generic instruction", async () => {
+    getMergeabilityDecision.mockResolvedValue(clone(DRAFT_UNMEASURED));
+    render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    expect(screen.getByText(/next action/i)).toBeTruthy();
+    expect(
+      screen.getByText(/run the tools that produce the security score, then re-run a10/i),
+    ).toBeTruthy();
+  });
+
+  it("renders both the wide rail and the narrow two-row grid so the panel adapts without a JS breakpoint", async () => {
+    getMergeabilityDecision.mockResolvedValue(clone(DRAFT_UNMEASURED));
+    const { container } = render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    // The wide rail: an SVG with one accessible node per gate.
+    expect(container.querySelector("svg[role='img']")).toBeTruthy();
+    // The narrow fallback: two rows of five gates, `@sm:hidden` at render
+    // time — CSS switches between them, so both exist for a container-query
+    // engine to pick from regardless of jsdom's lack of layout. Gate order
+    // is preserved: row one is gates 1-5, row two is gates 6-10.
+    const grid = container.querySelector("div.\\@sm\\:hidden");
+    expect(grid).toBeTruthy();
+    const gridButtons = within(grid as HTMLElement).getAllByRole("button");
+    expect(gridButtons.length).toBe(10);
+    expect(gridButtons[0].getAttribute("aria-label")).toMatch(/^Gate 1:/);
+    expect(gridButtons[5].getAttribute("aria-label")).toMatch(/^Gate 6:/);
+  });
+
+  it("shows repository evidence as aggregate chips, never a per-file list, until expanded", async () => {
+    getMergeabilityDecision.mockResolvedValue(clone(AUTO_MERGE));
+    render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    expect(screen.getByText(/1,284 files analyzed/)).toBeTruthy();
+    expect(screen.getByText(/1 changed/)).toBeTruthy();
+    expect(screen.getByText(/1 module affected/)).toBeTruthy();
+    expect(screen.getByText(/12 dependency paths/)).toBeTruthy();
+
+    // Nothing per-file until the reviewer opens it.
+    expect(screen.queryByText("vulnapi/")).toBeNull();
+    expect(screen.queryByText(/auth\.py/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /view affected files/i }));
+
+    // Grouped by module, filename shown relative to its module.
+    expect(await screen.findByText("vulnapi/")).toBeTruthy();
+    expect(screen.getByText(/auth\.py/)).toBeTruthy();
+  });
+
+  it("filters affected files by search, and caps how many modules render at once", async () => {
+    const manyModules = clone(AUTO_MERGE);
+    const changed = Array.from({ length: 25 }, (_, i) => `pkg${i}/module.py`);
+    manyModules.repositoryEvidence = {
+      filesAnalyzed: 50000,
+      changedFiles: changed,
+      affectedModules: changed.map((f) => f.split("/")[0]),
+      blastScopeFiles: [],
+      dependencyEdgeCount: 40,
+    };
+    getMergeabilityDecision.mockResolvedValue(manyModules);
+    render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    await userEvent.click(screen.getByRole("button", { name: /view affected files/i }));
+
+    // 25 modules exist; only a bounded page renders up front (alphabetical
+    // sort puts "pkg9" last), with a "show more" control naming how many are
+    // left — never all 25 at once.
+    expect(await screen.findByText("pkg0/")).toBeTruthy();
+    expect(screen.queryByText("pkg9/")).toBeNull();
+    expect(screen.getByRole("button", { name: /show \d+ more modules/i })).toBeTruthy();
+
+    // Search filters the real file set client-side.
+    const search = screen.getByPlaceholderText(/filter files or modules/i);
+    await userEvent.type(search, "pkg9");
+    expect(await screen.findByText("pkg9/")).toBeTruthy();
+    expect(screen.queryByText("pkg0/")).toBeNull();
+  });
+
+  it("shows the proof bundle only behind its own repository-evidence disclosure", async () => {
+    getMergeabilityDecision.mockResolvedValue(clone(AUTO_MERGE));
+    render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    expect(screen.queryByText(/pytest tests\/test_auth\.py::test_expired/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /view proof bundle/i }));
+    expect(await screen.findByText(/pytest tests\/test_auth\.py::test_expired/)).toBeTruthy();
+  });
+
+  it("says a count was not measured rather than fabricating a zero when an agent never ran", async () => {
+    const noEvidence = clone(AUTO_MERGE);
+    noEvidence.repositoryEvidence = null;
+    getMergeabilityDecision.mockResolvedValue(noEvidence);
+    render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    expect(screen.getByText(/no repository evidence yet/i)).toBeTruthy();
+  });
+
+  it("offers no next action when every gate cleared", async () => {
+    getMergeabilityDecision.mockResolvedValue(clone(AUTO_MERGE));
+    render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    expect(screen.queryByText(/next action/i)).toBeNull();
+    expect(screen.getByText(/all 10 cleared/i)).toBeTruthy();
   });
 
   it("shows routing modifiers only once every hard gate clears", async () => {
     getMergeabilityDecision.mockResolvedValue(clone(DRAFT_UNMEASURED));
     render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    await userEvent.click(screen.getByRole("button", { name: /pr & proof-bundle detail/i }));
 
     await screen.findByText(/routing modifiers/i);
     expect(screen.getByText(/not applicable/i)).toBeTruthy();
@@ -285,6 +475,9 @@ describe("MergeabilityDecisionPanel", () => {
   it("shows routing modifiers as real facts when hard gates are clear", async () => {
     getMergeabilityDecision.mockResolvedValue(clone(AUTO_MERGE));
     render(<MergeabilityDecisionPanel runId="run-1" />);
+
+    await screen.findByRole("status");
+    await userEvent.click(screen.getByRole("button", { name: /pr & proof-bundle detail/i }));
 
     await screen.findByText(/citation review needed/i);
     expect(screen.getByText(/reproduction confidence/i)).toBeTruthy();
@@ -318,7 +511,9 @@ describe("MergeabilityDecisionPanel", () => {
     await screen.findByRole("status");
     expect(container.textContent).not.toMatch(/probability/i);
     expect(container.textContent).not.toMatch(/confidence score/i);
-    expect(screen.getByText(/not itself the routing gate/i)).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: /pr & proof-bundle detail/i }));
+    expect(await screen.findByText(/not itself the routing gate/i)).toBeTruthy();
   });
 
   it("distinguishes A10 pending from A10 running", async () => {

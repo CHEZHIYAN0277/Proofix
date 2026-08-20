@@ -26,6 +26,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from backend.models.validation import MutantRecord
+
 # A mutant the test suite demonstrably caught.
 DETECTED_STATUSES = frozenset({"killed", "timeout", "caught by type check"})
 
@@ -56,6 +58,90 @@ _RESULT_LINE_RE = re.compile(
     r"^\s*(?P<key>\S+):\s*(?P<status>" + "|".join(sorted(KNOWN_STATUSES, key=len, reverse=True)) + r")\s*$",
     re.MULTILINE,
 )
+
+# mutmut names every mutant after the function it mutates:
+# "x_decode_token__mutmut_3". This is the only attribution A8 gets for free —
+# real, mutmut's own naming convention, not a guess — so it is worth keeping
+# even though it is function-level, not line-level.
+_FUNCTION_FROM_ID_RE = re.compile(r"^x_(?P<func>.+?)__mutmut_\d+$")
+
+# `mutmut show <id>` unified-diff headers, used to recover the one line a
+# mutant actually changed (line-level, exact) for mutants worth the extra
+# subprocess call — see `parse_mutmut_show_diff`.
+_DIFF_FILE_HEADER_RE = re.compile(r"^--- (?:a/)?(?P<file>\S+)")
+_DIFF_HUNK_HEADER_RE = re.compile(r"^@@ -(?P<start>\d+)(?:,\d+)? \+\d+(?:,\d+)? @@")
+
+
+def mutant_function_name(mutant_id: str) -> str | None:
+    """The function mutmut's own naming convention says this mutant attacks.
+
+    `None` for anything that doesn't match `x_<function>__mutmut_<n>` — never
+    a guess at attribution the id doesn't actually carry.
+    """
+    match = _FUNCTION_FROM_ID_RE.match(mutant_id)
+    return match.group("func") if match else None
+
+
+def parse_mutant_records(text: str) -> list[MutantRecord]:
+    """Every individual mutant from a `mutmut results --all true` listing.
+
+    Returns `[]` when the text isn't the per-mutant listing shape (the
+    progress-summary and legacy-section formats carry no per-mutant lines to
+    extract) — callers must not treat an empty list as "zero mutants".
+    """
+    records: list[MutantRecord] = []
+    for match in _RESULT_LINE_RE.finditer(text):
+        key = match.group("key")
+        records.append(
+            MutantRecord(
+                mutant_id=key,
+                status=match.group("status"),
+                function=mutant_function_name(key),
+            )
+        )
+    return records
+
+
+def parse_mutmut_show_diff(text: str) -> dict | None:
+    """The one line `mutmut show <id>` says this mutant changed.
+
+    Reads a real unified diff and returns `None` the moment the shape doesn't
+    match what it expects — this never fabricates a line number or a before/
+    after pair from output it can't parse.
+    """
+    file = None
+    for raw in text.splitlines():
+        header = _DIFF_FILE_HEADER_RE.match(raw)
+        if header:
+            file = header.group("file")
+            break
+
+    lines = text.splitlines()
+    for i, raw in enumerate(lines):
+        hunk = _DIFF_HUNK_HEADER_RE.match(raw)
+        if not hunk:
+            continue
+        cursor = int(hunk.group("start"))
+        before: str | None = None
+        before_line: int | None = None
+        after: str | None = None
+        for body in lines[i + 1 :]:
+            if body.startswith("@@") or body.startswith("--- ") or body.startswith("+++ "):
+                break
+            if body.startswith("-"):
+                before = body[1:].strip()
+                before_line = cursor
+                cursor += 1
+                continue
+            if body.startswith("+"):
+                after = body[1:].strip()
+                if before is not None:
+                    break
+                continue
+            cursor += 1  # unchanged context line
+        if before is not None and after is not None:
+            return {"file": file, "line": before_line, "before": before, "after": after}
+    return None
 
 # mutmut 3.x progress line. The spinner prefix and \r carriage returns are
 # tolerated; the counts are anchored on their emoji.
@@ -139,6 +225,10 @@ class MutationOutcome(BaseModel):
     inconclusive_mutants: int | None = None
     unavailable_reason: str | None = None
     by_status: dict[str, int] = Field(default_factory=dict)
+    #: Individual mutants, when the per-mutant listing was available. `[]`
+    #: for the progress-summary and legacy-section formats, which carry only
+    #: aggregate counts — never backfilled with synthesized records.
+    mutants: list[MutantRecord] = Field(default_factory=list)
 
     @property
     def mutant_survived(self) -> bool:
@@ -204,8 +294,11 @@ def parse_legacy_sections(text: str) -> MutationCounts | None:
     return counts if counts.recorded else None
 
 
-def counts_to_outcome(counts: MutationCounts) -> MutationOutcome:
+def counts_to_outcome(
+    counts: MutationCounts, mutants: list[MutantRecord] | None = None
+) -> MutationOutcome:
     """Convert parsed counts into an outcome, or `unavailable` if inconclusive."""
+    records = mutants or []
     score = counts.score()
     if score is None:
         return MutationOutcome(
@@ -219,6 +312,7 @@ def counts_to_outcome(counts: MutationCounts) -> MutationOutcome:
             total_mutants=0,
             inconclusive_mutants=counts.inconclusive,
             by_status=dict(counts.by_status),
+            mutants=records,
         )
 
     return MutationOutcome(
@@ -229,6 +323,7 @@ def counts_to_outcome(counts: MutationCounts) -> MutationOutcome:
         total_mutants=counts.evaluated,
         inconclusive_mutants=counts.inconclusive,
         by_status=dict(counts.by_status),
+        mutants=records,
     )
 
 
@@ -253,7 +348,10 @@ def parse_mutation_output(
 
     # Per-mutant listing is the most precise source available.
     if results_exit_code != -1:
-        counts = parse_results_output(results_stdout) or parse_legacy_sections(results_stdout)
+        counts = parse_results_output(results_stdout)
+        if counts:
+            return counts_to_outcome(counts, parse_mutant_records(results_stdout))
+        counts = parse_legacy_sections(results_stdout)
         if counts:
             return counts_to_outcome(counts)
 

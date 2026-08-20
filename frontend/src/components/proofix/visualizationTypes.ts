@@ -178,6 +178,13 @@ export interface PatchFileProvenance {
   retryNumber: number | null;
   retryReason: string | null;
   semanticDiff: boolean | null;
+  /**
+   * `false` for a plan A7 attempted but never wrote — every retry rejected
+   * by the integrity guard, or the LLM call itself came back empty. `true`
+   * for every file present in `PatchBundle.patches`. `undefined` only for
+   * provenance from a run recorded before this field existed.
+   */
+  written?: boolean;
 }
 export interface PatchPayload {
   files: PatchFileProvenance[];

@@ -32,6 +32,10 @@ import {
   Settings2,
   Component,
   Braces,
+  ArrowRight,
+  ArrowDown,
+  ChevronRight,
+  CheckCircle2,
   type LucideIcon,
 } from "lucide-react";
 import type { IntelligencePayload } from "./visualizationTypes";
@@ -81,6 +85,90 @@ function StatChip({ label, value }: { label: string; value: string | number }) {
       <div className="text-[9px] font-medium uppercase tracking-wider text-ink-soft">{label}</div>
       <div className="font-mono text-sm font-semibold text-ink">{value}</div>
     </div>
+  );
+}
+
+/**
+ * A controlled, deterministic stand-in for the real graph — a hub with one
+ * spoke-cluster per node type actually present in `nodes_by_type`, sized
+ * (never counted) by that type's real proportion of the total. This is a
+ * visual metaphor for "the repository became a connected graph", not a
+ * rendering of real nodes/edges: it carries no labels and no node identity,
+ * and the dashed spokes deliberately do not claim to be real edges. The
+ * literal node/edge totals are shown as `StatChip`s beside it, sourced from
+ * `metrics.node_count` / `metrics.edge_count`. Node count is capped at 8–14
+ * so it never becomes the hairball the real graph would be at repo scale.
+ */
+function MiniGraph({
+  typeCounts,
+  colorOf,
+}: {
+  typeCounts: [string, number][];
+  colorOf: (type: string) => string;
+}) {
+  if (typeCounts.length === 0) return null;
+
+  const MIN_DOTS = 8;
+  const MAX_DOTS = 14;
+  const budget = Math.min(MAX_DOTS, Math.max(MIN_DOTS, typeCounts.length + 4));
+  const total = typeCounts.reduce((sum, [, count]) => sum + count, 0) || 1;
+
+  const slots = typeCounts.map(([type, count]) => ({
+    type,
+    n: Math.max(1, Math.round((count / total) * (budget - typeCounts.length))),
+  }));
+  // Trim deterministically (left to right) until the visual budget is met —
+  // never below one dot per type actually present.
+  let over = slots.reduce((sum, s) => sum + s.n, 0) - budget;
+  for (let i = 0; over > 0 && i < slots.length * 4; i += 1) {
+    const s = slots[i % slots.length];
+    if (s.n > 1) {
+      s.n -= 1;
+      over -= 1;
+    }
+  }
+
+  const HUB = { x: 110, y: 74 };
+  const RADIUS = 52;
+  const angleStep = (2 * Math.PI) / slots.length;
+  const dots = slots.flatMap((s, typeIdx) => {
+    const base = typeIdx * angleStep - Math.PI / 2;
+    return Array.from({ length: s.n }, (_, k) => {
+      const spread = s.n > 1 ? (k / (s.n - 1) - 0.5) * 0.7 : 0;
+      const r = RADIUS + (k % 2) * 12;
+      return {
+        type: s.type,
+        x: HUB.x + r * Math.cos(base + spread),
+        y: HUB.y + r * Math.sin(base + spread),
+      };
+    });
+  });
+
+  return (
+    <svg
+      viewBox="0 0 220 148"
+      role="img"
+      aria-label="Repository structure represented as a connected knowledge graph"
+      className="h-[144px] w-full"
+    >
+      {dots.map((d, i) => (
+        <line
+          key={`spoke-${i}`}
+          x1={HUB.x}
+          y1={HUB.y}
+          x2={d.x}
+          y2={d.y}
+          stroke="currentColor"
+          strokeWidth={1}
+          strokeDasharray="2.5 2.5"
+          className="text-border"
+        />
+      ))}
+      <circle cx={HUB.x} cy={HUB.y} r={6} fill="currentColor" className="text-ink-soft" />
+      {dots.map((d, i) => (
+        <circle key={`dot-${i}`} cx={d.x} cy={d.y} r={4} fill={colorOf(d.type)} />
+      ))}
+    </svg>
   );
 }
 
@@ -872,6 +960,17 @@ export function RepositoryIntelligencePanel({
 
   const dna = metrics.nodes_by_type;
   const languages = Object.entries(metrics.workspace.languages ?? {}).sort((a, b) => b[1] - a[1]);
+  const typeCounts = Object.entries(dna)
+    .filter(([, count]) => count > 0)
+    .sort((a, b) => b[1] - a[1]);
+  const colorOfType = (type: string) => graph.nodes.find((n) => n.type === type)?.color ?? "#888";
+  // Real, already-fetched structural labels for the repository box — the same
+  // "package" nodes the Structure tree and node-type filters use, never a new
+  // fetch or a derived guess.
+  const packageLabels = graph.nodes
+    .filter((n) => n.type === "package" || n.type === "directory")
+    .map((n) => n.label)
+    .sort();
 
   return (
     <section className="space-y-4 rounded-2xl border border-border bg-surface p-4">
@@ -881,9 +980,7 @@ export function RepositoryIntelligencePanel({
             Repository Knowledge Graph
           </h3>
           <p className="mt-0.5 text-[11px] text-ink-soft">
-            A0.5 reads every file once, extracts its structure, call graph, git history and
-            ownership, and builds the graph every later stage reuses instead of re-scanning the
-            repository.
+            Repository structure transformed into reusable knowledge.
           </p>
         </div>
         {intelligence && (
@@ -899,12 +996,95 @@ export function RepositoryIntelligencePanel({
         )}
       </div>
 
-      {/* Step 8 — index/cache status, from A0.5's own event. */}
+      {/* Hero — Repository transformed into a knowledge graph. The single
+          thing this agent does, shown rather than stated: real repository
+          facts on the left, the real aggregate graph scale on the right,
+          connected by one directional arrow. */}
+      <div className="grid grid-cols-1 gap-2 lg:grid-cols-[1fr_auto_1.15fr] lg:items-stretch">
+        <div className="rounded-xl border border-border bg-surface-muted/30 p-3">
+          <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
+            <FolderTree className="h-3.5 w-3.5" />
+            Repository
+          </div>
+          {packageLabels.length > 0 && (
+            <div className="mt-2 space-y-0.5 font-mono text-[11px] text-ink-soft">
+              {packageLabels.slice(0, 4).map((p) => (
+                <div key={p} className="truncate" title={p}>
+                  {p}/
+                </div>
+              ))}
+              {packageLabels.length > 4 && (
+                <div className="text-ink-soft/60">+{packageLabels.length - 4} more</div>
+              )}
+            </div>
+          )}
+          <div className="mt-3 grid grid-cols-3 gap-1.5">
+            <StatChip label="Files" value={dna.file ?? 0} />
+            <StatChip label="Packages" value={dna.package ?? 0} />
+            <StatChip label="Classes" value={dna.class ?? 0} />
+            <StatChip label="Callables" value={(dna.function ?? 0) + (dna.method ?? 0)} />
+            <StatChip label="Tests" value={dna.test ?? 0} />
+            <StatChip label="Import Edges" value={metrics.edges_by_type.IMPORTS ?? 0} />
+          </div>
+          {languages.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {languages.map(([lang, count]) => (
+                <span
+                  key={lang}
+                  className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[10px] text-ink-soft"
+                >
+                  {lang} {count}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-center py-1 text-ink-soft/50 lg:py-0">
+          <ArrowDown className="h-4 w-4 lg:hidden" aria-hidden="true" />
+          <ArrowRight className="hidden h-4 w-4 lg:block" aria-hidden="true" />
+        </div>
+
+        <div className="rounded-xl border border-border bg-surface-muted/30 p-3">
+          <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
+            <Network className="h-3.5 w-3.5" />
+            Knowledge graph
+          </div>
+          <MiniGraph typeCounts={typeCounts} colorOf={colorOfType} />
+          {typeCounts.length > 1 && (
+            <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+              {typeCounts.map(([type, count]) => (
+                <span key={type} className="flex items-center gap-1 text-[9px] text-ink-soft">
+                  <span
+                    className="h-1.5 w-1.5 rounded-full"
+                    style={{ background: colorOfType(type) }}
+                  />
+                  {type}
+                  <span className="font-mono text-ink">{count}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="mt-2 grid grid-cols-2 gap-1.5">
+            <StatChip label="Nodes" value={metrics.node_count} />
+            <StatChip label="Edges" value={metrics.edge_count} />
+          </div>
+        </div>
+      </div>
+
+      {/* Step 8 — index/cache status, from A0.5's own event. This is A0.5's
+          entire reason to exist as a separate stage: whether it reused a
+          previous index or had to build one. */}
       {intelligence && (
-        <div className="rounded-lg border border-border bg-surface-muted/40 p-2.5 text-[11px] text-ink-soft">
-          {intelligence.modeDetail}
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface-muted/40 p-2.5 text-[11px] text-ink-soft">
+          <span
+            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+              intelligence.mode === "cache hit" ? "bg-status-completed" : "bg-status-retry"
+            }`}
+          />
+          <span>{intelligence.modeDetail}</span>
           {intelligence.totalMs > 0 && (
-            <span className="ml-1 font-mono text-ink">· {intelligence.totalMs}ms</span>
+            <span className="font-mono text-ink">· {intelligence.totalMs}ms</span>
           )}
         </div>
       )}
@@ -915,41 +1095,88 @@ export function RepositoryIntelligencePanel({
         <IndexingPipeline phases={intelligence.phases} totalMs={intelligence.totalMs} />
       )}
 
-      {/* Step 7 — Repository DNA. */}
+      {/* Intelligence strip — what A0.5 discovered, not just what it counted. */}
       <div>
         <div className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-ink-soft">
-          Repository DNA
+          Intelligence
         </div>
-        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
-          <StatChip label="Files" value={dna.file ?? 0} />
-          <StatChip label="Packages" value={dna.package ?? 0} />
-          <StatChip label="Classes" value={dna.class ?? 0} />
-          <StatChip label="Callables" value={(dna.function ?? 0) + (dna.method ?? 0)} />
-          <StatChip label="Tests" value={dna.test ?? 0} />
-          <StatChip label="Import Edges" value={metrics.edges_by_type.IMPORTS ?? 0} />
+        <div className="grid grid-cols-2 gap-1.5 sm:w-64">
+          <StatChip label="Capabilities" value={capabilities?.length ?? "Not measured"} />
+          <StatChip label="Hotspots" value={hotspots?.length ?? "Not measured"} />
         </div>
-        {languages.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            {languages.map(([lang, count]) => (
-              <span
-                key={lang}
-                className="rounded bg-surface-muted px-1.5 py-0.5 font-mono text-[10px] text-ink-soft"
-              >
-                {lang} {count}
-              </span>
-            ))}
+        {((capabilities && capabilities.length > 0) || (hotspots && hotspots.length > 0)) && (
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {capabilities && capabilities.length > 0 && (
+              <div className="rounded-lg border border-border p-2">
+                <div className="text-[9px] uppercase tracking-wider text-ink-soft">
+                  Capabilities
+                </div>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {capabilities.slice(0, 4).map((c) => (
+                    <span
+                      key={c.slug}
+                      className="rounded-full border border-border bg-surface-muted px-2 py-0.5 text-[10px] text-ink"
+                      title={c.why || undefined}
+                    >
+                      {c.name}
+                      {typeof c.confidence === "number" && (
+                        <span className="ml-1 font-mono text-ink-soft">
+                          {Math.round(c.confidence * 100)}%
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                  {capabilities.length > 4 && (
+                    <span className="self-center text-[10px] text-ink-soft">
+                      +{capabilities.length - 4} more
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+            {hotspots && hotspots.length > 0 && (
+              <div className="rounded-lg border border-border p-2">
+                <div className="text-[9px] uppercase tracking-wider text-ink-soft">Hotspots</div>
+                <div className="mt-1 space-y-1">
+                  {hotspots.slice(0, 4).map((h, i) => (
+                    <div
+                      key={`${h.kind}-${h.target}-${i}`}
+                      className="flex items-center gap-1.5 text-[10px]"
+                    >
+                      <span
+                        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                          h.severity >= 0.7
+                            ? "bg-status-failed"
+                            : h.severity >= 0.4
+                              ? "bg-status-retry"
+                              : "bg-status-completed"
+                        }`}
+                        title={`severity ${h.severity}`}
+                      />
+                      <span className="truncate font-mono text-ink" title={h.target}>
+                        {h.target}
+                      </span>
+                    </div>
+                  ))}
+                  {hotspots.length > 4 && (
+                    <div className="text-[10px] text-ink-soft">+{hotspots.length - 4} more</div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Step 9 — knowledge graph health. */}
-      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-        <StatChip label="Nodes" value={metrics.node_count} />
-        <StatChip label="Edges" value={metrics.edge_count} />
-        <StatChip label="Capabilities" value={capabilities?.length ?? "Not measured"} />
-        <StatChip label="Hotspots" value={hotspots?.length ?? "Not measured"} />
-      </div>
-
+      {/* Collapsed by default — the hero already answers "what did A0.5 do";
+          this is the file-browser-style explorer for someone who wants to
+          drill into a specific node, not part of the at-a-glance story. */}
+      <details className="group rounded-lg border border-border">
+        <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-[11px] font-medium text-ink-soft [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90" />
+          Repository structure
+        </summary>
+        <div className="space-y-3 border-t border-border p-3">
       {/* Toolbar: view switch, search, filters. */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex rounded-md border border-border p-0.5">
@@ -1076,12 +1303,17 @@ export function RepositoryIntelligencePanel({
           />
         )}
       </div>
+        </div>
+      </details>
 
-      {/* Step 14 — explainability. */}
-      <p className="text-[10px] text-ink-soft">
-        Repository graph shows indexed files and relationships discovered by A0.5. Source:{" "}
-        <code className="font-mono">GET /api/knowledge/{"{run_id}"}/export/repository</code>
-      </p>
+      {/* Terminal status — reached only once metrics/graph loaded without
+          error, so this is a real state, not a decorative badge. */}
+      <div className="flex items-center gap-1.5 rounded-lg border border-status-completed/30 bg-status-completed-bg px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-status-completed">
+        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+        Index ready <span className="mx-0.5 opacity-60">·</span>
+        <span className="font-medium normal-case tracking-normal">Reusable by downstream agents</span>
+      </div>
+
     </section>
   );
 }

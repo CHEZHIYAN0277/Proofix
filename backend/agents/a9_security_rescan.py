@@ -17,7 +17,7 @@ was not a measurement:
 """
 
 import re
-from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 from backend.agents.base import AgentBase
@@ -57,11 +57,113 @@ def finding_key(finding: dict, tool: str) -> FindingKey:
     return (tool, normalize_path_token(str(finding.get("file", ""))), message)
 
 
-def new_findings_by_multiplicity(
+#: The scanners A9 can compare. `ruff` is deliberately absent — style, not
+#: security (see `_keyed`) — so it never gets a lane in the ledger either.
+KNOWN_SCANNERS: tuple[str, ...] = ("bandit", "semgrep")
+
+
+def _line_of(finding: dict) -> int:
+    return int(finding.get("line", 0) or 0)
+
+
+@dataclass(frozen=True)
+class KeyReconciliation:
+    """One `(tool, file, message)` key, reconciled across the two scans.
+
+    `entry` is the durable, JSON-safe account of the comparison; `baseline` and
+    `post` are the original finding dicts it indexes into, kept only so the
+    caller can lift the introduced ones back out without re-deriving them.
+    """
+
+    entry: dict
+    baseline: list[dict]
+    post: list[dict]
+
+
+def _reconcile_key(
+    key: FindingKey,
+    baseline_findings: list[dict],
+    post_findings: list[dict],
+) -> dict:
+    """The whole comparison for one key: what carried, what is new, what went.
+
+    Two occurrences of the same key are *the same finding across the two scans*
+    only up to multiplicity — nothing in either scanner's output identifies an
+    individual occurrence, so the pairing is constructed, not read off. It is
+    constructed the way a reader would: an occurrence still sitting on its
+    original line pairs with itself first (delta 0), and only then do the moved
+    ones pair with the nearest baseline line left over. That ordering is what
+    makes the rendered rails show the *smallest* shift consistent with the
+    evidence rather than an arbitrary one.
+
+    The surplus rule is unchanged and load-bearing: when a key gained
+    occurrences, the ones reported as introduced are those whose line the
+    baseline cannot account for, so the retry brief names the copy the patch
+    added rather than the pre-existing one.
+    """
+    tool, file, _normalized = key
+    surplus = max(0, len(post_findings) - len(baseline_findings))
+    known_lines = {_line_of(f) for f in baseline_findings}
+    # Stable sort on a boolean: unmatched lines keep their scan order, then the
+    # already-occupied ones. Identical to the ordering this replaced.
+    ordered = sorted(
+        range(len(post_findings)),
+        key=lambda j: _line_of(post_findings[j]) in known_lines,
+    )
+    introduced_indexes = ordered[:surplus]
+    carried_indexes = ordered[surplus:]
+
+    remaining = list(range(len(baseline_findings)))
+    matched: list[tuple[int, int]] = []
+    unpaired: list[int] = []
+    for j in sorted(carried_indexes, key=lambda j: _line_of(post_findings[j])):
+        exact = next(
+            (i for i in remaining if _line_of(baseline_findings[i]) == _line_of(post_findings[j])),
+            None,
+        )
+        if exact is None:
+            unpaired.append(j)
+            continue
+        remaining.remove(exact)
+        matched.append((exact, j))
+    for j in unpaired:
+        # `carried_indexes` never exceeds the baseline count, so `remaining`
+        # cannot be empty here.
+        i = min(
+            remaining,
+            key=lambda i: abs(_line_of(baseline_findings[i]) - _line_of(post_findings[j])),
+        )
+        remaining.remove(i)
+        matched.append((i, j))
+    matched.sort(key=lambda pair: _line_of(post_findings[pair[1]]))
+
+    # The displayed message is the raw one, not the key's casefolded/whitespace-
+    # collapsed form — the key exists to compare, not to read.
+    sample = (post_findings or baseline_findings or [{}])[0]
+    return {
+        "tool": tool,
+        "file": file,
+        "message": str(sample.get("message", "")),
+        "baseline": [{"line": _line_of(f)} for f in baseline_findings],
+        "post": [{"line": _line_of(f)} for f in post_findings],
+        "matched": [
+            {
+                "baseline_index": i,
+                "post_index": j,
+                "line_delta": _line_of(post_findings[j]) - _line_of(baseline_findings[i]),
+            }
+            for i, j in matched
+        ],
+        "introduced_indexes": introduced_indexes,
+        "resolved_indexes": sorted(remaining),
+    }
+
+
+def reconcile(
     baseline: list[tuple[FindingKey, dict]],
     post: list[tuple[FindingKey, dict]],
-) -> list[dict]:
-    """Post-scan findings with no counterpart in the baseline.
+) -> list[KeyReconciliation]:
+    """The full two-scan reconciliation, per key, computed once.
 
     Counting, not set difference. Set difference answers "does this kind of
     finding exist in both scans", which drops a real regression: a file that had
@@ -69,31 +171,63 @@ def new_findings_by_multiplicity(
     key. Comparing *counts* per key catches that while still absorbing a pure
     line shift, where the count is unchanged.
 
-    When a key has surplus occurrences, the ones reported are those whose line
-    is not already occupied in the baseline — so a genuinely-new second finding
-    is named at its own line rather than at the pre-existing one's.
+    Keys present in the post scan come first, in scan order — `new_findings` is
+    read straight off this list and its order is part of A9's existing contract.
+    Keys only the baseline had (every occurrence resolved) follow.
     """
-    baseline_counts = Counter(key for key, _ in baseline)
-    baseline_lines: dict[FindingKey, set[int]] = {}
+    baseline_groups: dict[FindingKey, list[dict]] = {}
     for key, finding in baseline:
-        baseline_lines.setdefault(key, set()).add(int(finding.get("line", 0) or 0))
-
-    grouped: dict[FindingKey, list[dict]] = {}
+        baseline_groups.setdefault(key, []).append(finding)
+    post_groups: dict[FindingKey, list[dict]] = {}
     for key, finding in post:
-        grouped.setdefault(key, []).append(finding)
+        post_groups.setdefault(key, []).append(finding)
 
-    introduced: list[dict] = []
-    for key, findings in grouped.items():
-        surplus = len(findings) - baseline_counts.get(key, 0)
-        if surplus <= 0:
-            continue
-        # Unmatched lines first: they are the occurrences the baseline cannot
-        # account for, and naming them points the retry at the right place.
-        known = baseline_lines.get(key, set())
-        ordered = sorted(findings, key=lambda f: int(f.get("line", 0) or 0) in known)
-        introduced.extend(ordered[:surplus])
+    ordered_keys = list(post_groups) + [k for k in baseline_groups if k not in post_groups]
+    return [
+        KeyReconciliation(
+            entry=_reconcile_key(key, baseline_groups.get(key, []), post_groups.get(key, [])),
+            baseline=baseline_groups.get(key, []),
+            post=post_groups.get(key, []),
+        )
+        for key in ordered_keys
+    ]
 
-    return introduced
+
+def introduced_from_reconciliation(reconciliations: list[KeyReconciliation]) -> list[dict]:
+    """The post-scan findings the baseline cannot account for."""
+    return [rec.post[j] for rec in reconciliations for j in rec.entry["introduced_indexes"]]
+
+
+def reconciliation_lanes(
+    reconciliations: list[KeyReconciliation], scanners_run: list[str]
+) -> list[dict]:
+    """One lane per known scanner, whether or not it ran.
+
+    A scanner that did not run gets a lane with `compared=False` and no keys,
+    never an empty lane that reads as "nothing found". Its baseline is already
+    excluded upstream (`_keyed` only keys tools that ran), so there is nothing
+    to put in it — the lane exists precisely to say so.
+    """
+    return [
+        {
+            "tool": tool,
+            "compared": tool in scanners_run,
+            "keys": [rec.entry for rec in reconciliations if rec.entry["tool"] == tool],
+        }
+        for tool in KNOWN_SCANNERS
+    ]
+
+
+def new_findings_by_multiplicity(
+    baseline: list[tuple[FindingKey, dict]],
+    post: list[tuple[FindingKey, dict]],
+) -> list[dict]:
+    """Post-scan findings with no counterpart in the baseline.
+
+    Kept as the narrow question A9's rejection gate asks; the reasoning lives in
+    `reconcile`, which also keeps the side of the comparison this discards.
+    """
+    return introduced_from_reconciliation(reconcile(baseline, post))
 
 
 class A9SecurityRescanAgent(AgentBase):
@@ -125,6 +259,11 @@ class A9SecurityRescanAgent(AgentBase):
             (finding_key(f, "semgrep"), f) for f in post_semgrep
         ]
 
+        # Reconciled once and kept. The rejection gate reads only the introduced
+        # side, but the carried pairs are the evidence that a shifted finding is
+        # a shifted finding — discarding them left every downstream reader with
+        # "trust me" where the comparison should be.
+        reconciliations = reconcile(baseline_pairs, post_pairs)
         new_findings = [
             Finding(
                 id=f"new-{index}",
@@ -134,7 +273,7 @@ class A9SecurityRescanAgent(AgentBase):
                 tools=[f.get("tool", "")],
                 severity=f.get("severity", 0.7),
             )
-            for index, f in enumerate(new_findings_by_multiplicity(baseline_pairs, post_pairs))
+            for index, f in enumerate(introduced_from_reconciliation(reconciliations))
         ]
 
         rejected = len(new_findings) > 0
@@ -173,6 +312,7 @@ class A9SecurityRescanAgent(AgentBase):
             reexecution_command=reexecution_command,
             reexecution_timeout_seconds=reexecution_timeout,
             scanners_run=scanners_run,
+            reconciliation=reconciliation_lanes(reconciliations, scanners_run),
         )
         result_dict = result.model_dump(mode="json")
         if validation_failure:

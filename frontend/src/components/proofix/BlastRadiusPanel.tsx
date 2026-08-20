@@ -37,6 +37,7 @@ import {
   Pin,
 } from "lucide-react";
 import type { BlastImpact, BlastScopeFile } from "./blastTypes";
+import { BlastRadiusMap } from "./BlastRadiusMap";
 import { getBlastImpact } from "@/lib/runService";
 import type { AgentStatus } from "./data";
 
@@ -670,6 +671,8 @@ export function BlastRadiusPanel({ runId, status }: { runId: string; status?: Ag
 
       {impact.scope.length > 0 && (
         <>
+          <BlastRadiusMap impact={impact} onSelect={setSelected} />
+
           <Flow />
           <DirectImpact files={direct} onSelect={setSelected} />
           <TransitiveImpact files={transitive} onSelect={setSelected} />

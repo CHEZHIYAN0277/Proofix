@@ -20,6 +20,18 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { AgentEntry } from "./data";
 import type { PatchFileProvenance } from "./visualizationTypes";
 
+/**
+ * Matches an element whose full (recursive) text equals `text`. `DiffView`
+ * colours tokens in separate `<span>`s, so RTL's default text query — which
+ * reads only a node's direct text-node children, not descendant text — never
+ * sees a highlighted line as one string; this reads `element.textContent`
+ * directly instead of the (empty) `content` argument RTL passes in.
+ */
+function diffLine(text: string) {
+  return (_content: string, element: Element | null) =>
+    element?.textContent?.trim() === text;
+}
+
 const navigate = vi.fn();
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigate,
@@ -301,8 +313,8 @@ describe("Patch panel", () => {
 
     // Testing Library trims text on both sides, so the indentation the diff
     // preserves is not part of the query.
-    expect(await screen.findByText("return False")).toBeTruthy();
-    expect(screen.getByText("return True")).toBeTruthy();
+    expect(await screen.findByText(diffLine("return False"))).toBeTruthy();
+    expect(screen.getByText(diffLine("return True"))).toBeTruthy();
     // Anchored: the summary spans hold exactly "+1" and "−1", while their
     // parent holds "+1 −1 across 1 file" and must not also match.
     expect(screen.getByText(/^\+1$/)).toBeTruthy();
@@ -416,7 +428,7 @@ describe("Patch panel", () => {
     // Only the active file's diff content is on screen — the inactive
     // file's changed line is not, because the two diffs are not merged into
     // one view.
-    expect(screen.queryByText("return None")).toBeNull();
+    expect(screen.queryByText(diffLine("return None"))).toBeNull();
   });
 
   it("switching the file selector changes the displayed diff", async () => {
@@ -427,13 +439,13 @@ describe("Patch panel", () => {
     });
 
     render(<Workspace runId="run-patch-switch" />);
-    await screen.findByText("return False");
-    expect(screen.queryByText("return None")).toBeNull();
+    await screen.findByText(diffLine("return False"));
+    expect(screen.queryByText(diffLine("return None"))).toBeNull();
 
     await user.click(screen.getByText("pkg/session.py"));
 
-    expect(await screen.findByText("return None")).toBeTruthy();
-    expect(screen.queryByText("return False")).toBeNull();
+    expect(await screen.findByText(diffLine("return None"))).toBeTruthy();
+    expect(screen.queryByText(diffLine("return False"))).toBeNull();
   });
 
   it("marks the resolved target file using real backend provenance, not a guess", async () => {
@@ -537,6 +549,76 @@ describe("Patch panel", () => {
     expect(screen.getByText("A8 validation")).toBeTruthy();
     expect(screen.queryByText(/A8 passed/i)).toBeNull();
     expect(screen.queryByText(/validated successfully/i)).toBeNull();
+  });
+
+  it("shows a rejected attempt alongside a successful one, not just the survivor", async () => {
+    backendReturns({
+      agents: [
+        patchAgentWithProvenance([
+          { file: "pkg/auth.py", written: true },
+          {
+            file: "pkg/broken.py",
+            written: false,
+            retryNumber: 2,
+            retryReason: "no semantic diff — output identical to original",
+          },
+        ]),
+        agent("merge", "Mergeability"),
+      ],
+      patch: BUNDLE,
+    });
+
+    render(<Workspace runId="run-patch-rejected" />);
+
+    expect(await screen.findByText("pkg/broken.py")).toBeTruthy();
+    expect(
+      screen.getByText(/Rejected — no semantic diff — output identical to original after 2 retries/),
+    ).toBeTruthy();
+    // The written file's real diff is still on screen — the reject pile is
+    // additive, not a replacement for the successful patch.
+    expect(screen.getByText(diffLine("return False"))).toBeTruthy();
+  });
+
+  it("marks a fully-rejected run as rejected, not as 'no change'", async () => {
+    backendReturns({
+      agents: [
+        patchAgentWithProvenance([
+          { file: "pkg/auth.py", written: false, retryReason: "invalid Python" },
+        ]),
+        agent("merge", "Mergeability"),
+      ],
+      patch: { ...BUNDLE, patches: [], diff_text: "" },
+    });
+
+    render(<Workspace runId="run-patch-all-rejected" />);
+
+    expect(await screen.findByText(/Rejected — invalid Python/)).toBeTruthy();
+    expect(screen.queryByText(/completed and produced no change/)).toBeNull();
+  });
+
+  it("collapses a long diff behind an expand affordance, then reveals it on click", async () => {
+    const user = (await import("@testing-library/user-event")).default.setup();
+    const hunkLines = Array.from({ length: 90 }, (_, i) => ` line ${i}`).join("\n");
+    const longDiff =
+      `--- a/pkg/big.py\n+++ b/pkg/big.py\n@@ -1,90 +1,90 @@\n${hunkLines}\n` +
+      "-old tail line\n+new tail line marker\n";
+    backendReturns({
+      agents: PATCH_AGENTS,
+      patch: { ...BUNDLE, patches: [{ ...BUNDLE.patches[0], file: "pkg/big.py" }], diff_text: longDiff },
+    });
+
+    render(<Workspace runId="run-patch-long-diff" />);
+
+    // Head and tail context stay visible behind the fold, matching a
+    // terminal transcript's head/tail collapse — only the middle is hidden.
+    const expandButton = await screen.findByText(/click to expand/);
+    expect(screen.getByText(diffLine("new tail line marker"))).toBeTruthy();
+    expect(screen.queryByText(diffLine("line 60"))).toBeNull();
+
+    await user.click(expandButton);
+
+    expect(await screen.findByText(diffLine("line 60"))).toBeTruthy();
+    expect(screen.queryByText(/click to expand/)).toBeNull();
   });
 });
 

@@ -91,6 +91,13 @@ export interface RepairPlan {
   /** The LLM's own account of its ordering choice. Empty when the
    * deterministic path ran, or when the LLM gave none. */
   orderingRationale: string;
+  /** `topological_execution_order(nodes, dependency_edges)` — computed by A6
+   * unconditionally, independent of which path produced `execution_order`
+   * above. Equal to `execution_order` step-for-step when `orderingSource ===
+   * "deterministic"`. Empty on a run predating this field. This is what makes
+   * the LLM-vs-graph comparison a real fact rather than a client guess: never
+   * recompute a topological order in this UI, only ever read this one. */
+  deterministicOrder: string[];
   totalDependencyEdges: number;
   executionAuthority: ExecutionAuthority;
   /** `null` when A5.5 has not produced a context package for this run —

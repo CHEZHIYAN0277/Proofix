@@ -38,6 +38,7 @@ from backend.services.ui_projection import (
     build_repair_plan,
     build_reproduction_evidence,
     build_mergeability_decision,
+    build_mutation_validation,
     build_run_report,
     build_security_rescan,
     build_semantic_graph,
@@ -356,9 +357,11 @@ async def get_run_security_rescan(
 
     Returns the projection built by `build_security_rescan`: whether the
     re-scan measured anything at all (`scannersRun`), the real differential
-    verdict against A3's baseline (`verdict`, `rejected`), and every newly
-    introduced finding A9 found — no severity (A9 never measures it), no
-    resolved/unchanged tally (A9 never computes it).
+    verdict against A3's baseline (`verdict`, `rejected`), every newly
+    introduced finding A9 found, and `reconciliation` — the comparison itself,
+    one lane per scanner, pairing each carried finding with its baseline
+    occurrence and the number of lines the patch moved it by. No severity: A9
+    never measures it.
 
     A 404 means A9 has not produced a durable result for this run yet. A 200
     with an empty `newFindings` list means A9 ran and found nothing new —
@@ -371,6 +374,31 @@ async def get_run_security_rescan(
         raise HTTPException(
             status_code=404,
             detail="No security re-scan for this run — A9 has not completed",
+        )
+    return projection
+
+
+@router.get("/runs/{run_id}/mutation")
+async def get_run_mutation_validation(
+    run_id: str,
+    store: Annotated[RedisStore, Depends(get_store)],
+) -> dict:
+    """A8's scoped-validation + mutation gauntlet.
+
+    Returns the projection built by `build_mutation_validation`: which of the
+    three gates (target test, regression suite, mutmut) the run reached
+    (`stage`), the real mutant tallies A8 measured (`mutationStatus` says
+    whether a score exists at all), and the regression diff against A3.5's
+    baseline (`newFailures` vs `preExistingFailures`).
+
+    A 404 means A8 has not produced a durable result for this run yet.
+    """
+    state = await _load_run(store, run_id)
+    projection = build_mutation_validation(state)
+    if projection is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No mutation validation for this run — A8 has not completed",
         )
     return projection
 

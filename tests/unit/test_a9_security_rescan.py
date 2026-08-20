@@ -23,7 +23,10 @@ from backend.agents.a10_routing import SECURITY_TECHNICAL_THRESHOLD
 from backend.agents.a9_security_rescan import (
     A9SecurityRescanAgent,
     finding_key,
+    introduced_from_reconciliation,
     new_findings_by_multiplicity,
+    reconcile,
+    reconciliation_lanes,
 )
 from backend.config import Settings
 from backend.models.validation import SecurityRescanResult
@@ -125,6 +128,189 @@ class TestNewFindingDetection:
     def test_empty_baseline_makes_every_finding_new(self):
         post = keyed([bandit_finding("pkg/auth.py", 1, HARDCODED)])
         assert len(new_findings_by_multiplicity([], post)) == 1
+
+
+class TestReconciliation:
+    """The comparison A9 performs, kept rather than reduced to its verdict.
+
+    `new_findings` alone asks the reader to take on trust that a finding two
+    lines lower is the same finding. These pin the record that makes it
+    checkable: which post occurrence paired with which baseline one, and by
+    how much it moved.
+    """
+
+    def test_a_pure_line_shift_is_a_carried_pair_not_an_introduction(self):
+        baseline = keyed([bandit_finding("pkg/auth.py", 12, HARDCODED)])
+        post = keyed([bandit_finding("pkg/auth.py", 14, HARDCODED)])
+
+        [rec] = reconcile(baseline, post)
+
+        assert rec.entry["matched"] == [
+            {"baseline_index": 0, "post_index": 0, "line_delta": 2}
+        ]
+        assert rec.entry["introduced_indexes"] == []
+        assert rec.entry["resolved_indexes"] == []
+
+    def test_multiplicity_one_to_two_carries_one_and_introduces_one(self):
+        """The case set difference gets wrong, rendered whole.
+
+        One hardcoded password became two: one occurrence pairs with the
+        baseline, the surplus one dangles — and it is the one at the line the
+        baseline cannot account for.
+        """
+        baseline = keyed([bandit_finding("pkg/auth.py", 12, HARDCODED)])
+        post = keyed(
+            [
+                bandit_finding("pkg/auth.py", 12, HARDCODED),
+                bandit_finding("pkg/auth.py", 40, HARDCODED),
+            ]
+        )
+
+        [rec] = reconcile(baseline, post)
+
+        assert rec.entry["introduced_indexes"] == [1]
+        assert rec.entry["post"][1] == {"line": 40}
+        assert rec.entry["matched"] == [
+            {"baseline_index": 0, "post_index": 0, "line_delta": 0}
+        ]
+
+    def test_an_occurrence_on_its_original_line_pairs_with_itself_first(self):
+        """Two occurrences, one moved: the pairing must show the smallest shift.
+
+        Pairing by scan order would report the stationary one as having moved
+        +28 and the moved one as -28 — two fabricated deltas where the evidence
+        supports one delta of +2.
+        """
+        baseline = keyed(
+            [bandit_finding("pkg/auth.py", 12, HARDCODED), bandit_finding("pkg/auth.py", 40, HARDCODED)]
+        )
+        post = keyed(
+            [bandit_finding("pkg/auth.py", 40, HARDCODED), bandit_finding("pkg/auth.py", 14, HARDCODED)]
+        )
+
+        [rec] = reconcile(baseline, post)
+
+        deltas = sorted(m["line_delta"] for m in rec.entry["matched"])
+        assert deltas == [0, 2]
+        assert rec.entry["introduced_indexes"] == []
+
+    def test_a_removed_occurrence_is_recorded_as_resolved(self):
+        baseline = keyed(
+            [bandit_finding("pkg/auth.py", 12, HARDCODED), bandit_finding("pkg/auth.py", 40, HARDCODED)]
+        )
+        post = keyed([bandit_finding("pkg/auth.py", 12, HARDCODED)])
+
+        [rec] = reconcile(baseline, post)
+
+        assert rec.entry["resolved_indexes"] == [1]
+        assert rec.entry["introduced_indexes"] == []
+
+    def test_a_key_only_the_baseline_had_still_gets_an_entry(self):
+        baseline = keyed([bandit_finding("pkg/auth.py", 12, HARDCODED)])
+
+        [rec] = reconcile(baseline, [])
+
+        assert rec.entry["post"] == []
+        assert rec.entry["resolved_indexes"] == [0]
+
+    def test_the_displayed_message_is_the_raw_one_not_the_comparison_key(self):
+        """The key is casefolded and whitespace-collapsed to compare. The
+        ledger shows what the scanner actually said."""
+        raw = "Possible   hardcoded PASSWORD: 'hunter2'"
+        [rec] = reconcile([], keyed([bandit_finding("pkg/auth.py", 3, raw)]))
+
+        assert rec.entry["message"] == raw
+
+    def test_introduced_side_still_matches_the_narrow_function(self):
+        baseline = keyed([bandit_finding("pkg/auth.py", 12, HARDCODED)])
+        post = keyed(
+            [
+                bandit_finding("pkg/auth.py", 14, HARDCODED),
+                bandit_finding("pkg/auth.py", 20, ASSERT_USED),
+            ]
+        )
+
+        assert introduced_from_reconciliation(reconcile(baseline, post)) == (
+            new_findings_by_multiplicity(baseline, post)
+        )
+
+    def test_no_severity_leaks_into_the_kept_record(self):
+        """`_run_bandit` stamps a constant 0.7 on every finding. It is not a
+        measurement, so it must not be persisted as one."""
+        [rec] = reconcile([], keyed([bandit_finding("pkg/auth.py", 3, HARDCODED)]))
+
+        assert rec.entry["post"] == [{"line": 3}]
+
+
+class TestReconciliationLanes:
+    def test_a_scanner_that_did_not_run_gets_a_lane_marked_not_compared(self):
+        recs = reconcile([], keyed([bandit_finding("pkg/auth.py", 3, HARDCODED)]))
+
+        lanes = reconciliation_lanes(recs, ["bandit"])
+
+        assert [lane["tool"] for lane in lanes] == ["bandit", "semgrep"]
+        assert lanes[0]["compared"] is True
+        assert len(lanes[0]["keys"]) == 1
+        # Not an empty lane that reads as "found nothing" — an absent one.
+        assert lanes[1]["compared"] is False
+        assert lanes[1]["keys"] == []
+
+    def test_ruff_never_gets_a_lane(self):
+        """`_keyed` excludes ruff as style, not security. The ledger agrees."""
+        lanes = reconciliation_lanes([], ["bandit", "semgrep", "ruff"])
+        assert [lane["tool"] for lane in lanes] == ["bandit", "semgrep"]
+
+
+class TestAgentKeepsTheReconciliation:
+    @pytest.mark.asyncio
+    async def test_a_shifted_finding_is_visible_as_a_carried_pair(self, monkeypatch, tmp_path):
+        agent = make_agent(monkeypatch, bandit=[bandit_json("pkg/auth.py", 14, HARDCODED)])
+        state = make_state(
+            tmp_path, [{"file": "pkg/auth.py", "line": 12, "message": HARDCODED, "severity": 0.9}]
+        )
+
+        result = (await agent.run(state)).security_result
+
+        bandit_lane = result["reconciliation"][0]
+        assert bandit_lane["compared"] is True
+        assert bandit_lane["keys"][0]["matched"][0]["line_delta"] == 2
+        assert result["new_findings"] == []
+
+    @pytest.mark.asyncio
+    async def test_an_absent_scanner_excludes_its_baseline_from_the_ledger(
+        self, monkeypatch, tmp_path
+    ):
+        """A semgrep baseline with no semgrep re-scan is not "resolved" — it is
+        not compared, and nothing about it may appear in the ledger."""
+        agent = make_agent(
+            monkeypatch, bandit=[bandit_json("pkg/auth.py", 3, HARDCODED)], semgrep_ran=False
+        )
+        state = make_state(
+            tmp_path, [{"file": "pkg/auth.py", "line": 3, "message": HARDCODED, "severity": 0.9}]
+        )
+        state.static_report["baseline_json"]["semgrep"] = [
+            {"file": "pkg/other.py", "line": 9, "message": "sql injection", "severity": 0.9}
+        ]
+
+        result = (await agent.run(state)).security_result
+
+        bandit_lane, semgrep_lane = result["reconciliation"]
+        assert semgrep_lane == {"tool": "semgrep", "compared": False, "keys": []}
+        assert [k["file"] for k in bandit_lane["keys"]] == ["pkg/auth.py"]
+
+
+class TestReconciliationBackwardCompatibility:
+    def test_state_persisted_before_the_field_existed_still_deserializes(self):
+        legacy = {
+            "new_findings": [],
+            "rejected": False,
+            "security_score": 100.0,
+            "scanners_run": ["bandit"],
+            "reexecution_command": "bandit -f json -q -r .",
+            "reexecution_timeout_seconds": 150,
+        }
+        result = SecurityRescanResult.model_validate(legacy)
+        assert result.reconciliation == []
 
 
 async def _noop(*args, **kwargs):

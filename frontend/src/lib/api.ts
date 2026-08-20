@@ -45,6 +45,9 @@ export const ENDPOINTS = {
   // A9's post-patch security re-scan — read-only, projected from
   // `state.security_result`.
   runSecurity: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/security`,
+  // A8's scoped-validation + mutation gauntlet — read-only, projected from
+  // `state.mutation_result`.
+  runMutation: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/mutation`,
   // A10's mergeability routing decision — read-only, projected from
   // `state.pr_decision` and `state.proof_bundle`.
   runDecision: (runId: string) => `/api/runs/${encodeURIComponent(runId)}/decision`,
