@@ -182,8 +182,9 @@ export async function validateRepository(url: string): Promise<RepoMetadata | nu
         method: "POST",
         json: { url },
       });
-    } catch {
-      return null;
+    } catch (reason) {
+      if (isStatus(reason, 404)) return null;
+      throw reason;
     }
   }
   // Mock: synthesise metadata from the URL without any network call.
