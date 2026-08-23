@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
     gemini_api_key: str = ""
+
+    # ---- Sarvam AI Speech-to-Text -----------------------------------
+    # Used only by backend/api/routes/speech.py. Never exposed to the frontend.
+    sarvam_api_key: str = ""
     gemini_model: str = "gemini-1.5-pro"
     ollama_base_url: str = ""
     ollama_model: str = "codellama"

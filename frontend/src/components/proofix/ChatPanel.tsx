@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect, type RefObject } from "react";
+import { useState, useRef, useEffect, useCallback, type RefObject } from "react";
 import { ArrowUp, AudioLines } from "lucide-react";
 import { MOCK_CHAT_SUGGESTIONS, mockAnswerer } from "@/mocks";
 import { DATA_SOURCE } from "@/lib/api";
+import { transcribeAudio } from "@/lib/speechService";
 
 const isLive = DATA_SOURCE === "api";
 
@@ -16,6 +17,28 @@ const LIVE_CHAT_SUGGESTIONS = [
 ];
 
 type Mode = "idle" | "hover";
+
+/** Internal voice-recording lifecycle — drives the mic button tooltip only. */
+type VoiceState = "idle" | "recording" | "transcribing";
+
+/** Maximum recording duration before we auto-stop (Sarvam REST limit: 30 s). */
+const MAX_RECORDING_MS = 29_000;
+
+/** Prefer webm/opus; fall back to any supported type. */
+function preferredMimeType(): string {
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/ogg",
+    "audio/mp4",
+    "",
+  ];
+  for (const type of candidates) {
+    if (!type || MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return "";
+}
 
 export function ChatPanel({
   suggestions = isLive ? LIVE_CHAT_SUGGESTIONS : MOCK_CHAT_SUGGESTIONS,
@@ -39,6 +62,15 @@ export function ChatPanel({
   const [bounds, setBounds] = useState<{ left: number; width: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // ── Voice state ──────────────────────────────────────────────────────
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Anchor tracking (unchanged) ──────────────────────────────────────
   useEffect(() => {
     const el = anchorRef?.current;
     if (!el) return;
@@ -56,6 +88,26 @@ export function ChatPanel({
     };
   }, [anchorRef]);
 
+  // ── Stop mic tracks and clear refs ──────────────────────────────────
+  const stopMicrophone = useCallback(() => {
+    if (autoStopTimerRef.current !== null) {
+      clearTimeout(autoStopTimerRef.current);
+      autoStopTimerRef.current = null;
+    }
+    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    mediaStreamRef.current = null;
+    mediaRecorderRef.current = null;
+    audioChunksRef.current = [];
+  }, []);
+
+  // ── Cleanup on unmount ───────────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      stopMicrophone();
+    };
+  }, [stopMicrophone]);
+
+  // ── Existing send (unchanged) ────────────────────────────────────────
   const send = async (text: string) => {
     const q = text.trim();
     if (!q) return;
@@ -63,6 +115,110 @@ export function ChatPanel({
     setMode("idle");
     await Promise.resolve(answerer(q));
   };
+
+  // ── Submit transcript through the existing send() path ───────────────
+  const submitTranscript = useCallback(
+    async (blob: Blob) => {
+      setVoiceState("transcribing");
+      setVoiceError(null);
+      try {
+        const transcript = await transcribeAudio(blob);
+        // Feed the transcript into the existing send() — identical to typing.
+        await send(transcript);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Voice input failed — try again";
+        setVoiceError(msg);
+        console.error("[ChatPanel] STT error:", err);
+      } finally {
+        setVoiceState("idle");
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [answerer],
+  );
+
+  // ── Mic button handler ───────────────────────────────────────────────
+  const handleMicClick = useCallback(async () => {
+    // Guard: do not interrupt a transcription in progress
+    if (voiceState === "transcribing") return;
+
+    // SECOND CLICK — stop recording
+    if (voiceState === "recording") {
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        // onstop will fire, collect chunks, and call submitTranscript
+        recorder.stop();
+      }
+      return;
+    }
+
+    // FIRST CLICK — start recording
+    setVoiceError(null);
+
+    // Browser support guard
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setVoiceError("Your browser does not support voice input.");
+      return;
+    }
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      const msg =
+        err instanceof Error && err.name === "NotAllowedError"
+          ? "Microphone permission denied."
+          : "Could not access the microphone.";
+      setVoiceError(msg);
+      console.error("[ChatPanel] Mic permission error:", err);
+      return;
+    }
+
+    mediaStreamRef.current = stream;
+    audioChunksRef.current = [];
+
+    const mimeType = preferredMimeType();
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    mediaRecorderRef.current = recorder;
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        audioChunksRef.current.push(e.data);
+      }
+    };
+
+    recorder.onstop = () => {
+      stopMicrophone();
+      const chunks = audioChunksRef.current;
+      const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
+      if (blob.size === 0) {
+        setVoiceError("No audio was recorded. Please try again.");
+        setVoiceState("idle");
+        return;
+      }
+      void submitTranscript(blob);
+    };
+
+    recorder.start();
+    setVoiceState("recording");
+
+    // Auto-stop at MAX_RECORDING_MS to stay within Sarvam's REST limit
+    autoStopTimerRef.current = setTimeout(() => {
+      if (mediaRecorderRef.current?.state !== "inactive") {
+        mediaRecorderRef.current?.stop();
+      }
+    }, MAX_RECORDING_MS);
+  }, [voiceState, stopMicrophone, submitTranscript]);
+
+  // ── Tooltip text for the mic button (no visual change) ───────────────
+  const micTitle =
+    voiceError
+      ? voiceError
+      : voiceState === "recording"
+        ? "Recording… click to stop"
+        : voiceState === "transcribing"
+          ? "Transcribing…"
+          : "Voice input";
 
   const expanded = mode === "hover";
 
@@ -138,9 +294,11 @@ export function ChatPanel({
             ) : (
               <button
                 type="button"
-                title="Voice input isn't available yet"
+                title={micTitle}
+                aria-label={micTitle}
+                disabled={voiceState === "transcribing"}
+                onClick={() => void handleMicClick()}
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-white transition hover:brightness-110"
-                aria-label="Voice input"
               >
                 <AudioLines className="h-3.5 w-3.5 text-white" strokeWidth={2.25} />
               </button>

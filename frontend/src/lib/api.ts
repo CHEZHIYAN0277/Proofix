@@ -72,6 +72,8 @@ export const ENDPOINTS = {
     `/api/knowledge/${encodeURIComponent(runId)}/export/${encodeURIComponent(view)}?fmt=json&max_nodes=${maxNodes}`,
   knowledgeQuery: (runId: string, name: string, params: Record<string, string>) =>
     `/api/knowledge/${encodeURIComponent(runId)}/query/${encodeURIComponent(name)}?${new URLSearchParams(params).toString()}`,
+  /** Sarvam AI Speech-to-Text — accepts multipart/form-data with an `audio` field. */
+  speechToText: () => `/api/v1/speech-to-text`,
 } as const;
 
 export interface FetcherOptions extends RequestInit {

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.routes import knowledge, learning, runs, security, ui, ws
+from backend.api.routes import knowledge, learning, runs, security, speech, ui, ws
 from backend.config import Settings, get_settings
 from backend.state.redis_store import create_redis_client
 
@@ -41,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge.router)
     app.include_router(security.router)
     app.include_router(learning.router)
+    app.include_router(speech.router)
 
     @app.get("/health")
     async def health():
