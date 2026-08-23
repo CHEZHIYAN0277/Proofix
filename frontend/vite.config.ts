@@ -1,5 +1,6 @@
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
+import { nitro } from "nitro/vite";
 import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
@@ -27,6 +28,7 @@ export default defineConfig({
     // Redirect TanStack Start's bundled server entry to src/server.ts
     // (our SSR error wrapper). nitro/vite builds from this.
     tanstackStart({ server: { entry: "server" } }),
+    nitro(),
     viteReact(),
   ],
 });
