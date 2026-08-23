@@ -1,91 +1,126 @@
-# 🛠️ ProoFix
+<div align="center">
 
+# 🛠️ PROOFIX
 ### **Autonomous Multi-Agent Repository Analysis, Bug Investigation & Validated Fix Generation**
 
-![Status](https://img.shields.io/badge/Status-Active-43A047?style=flat-square)
-![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)
-![Frontend](https://img.shields.io/badge/Frontend-React-0088CC?style=flat-square&logo=react&logoColor=white)
-![Backend](https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
-![Orchestration](https://img.shields.io/badge/Orchestration-LangGraph-E65100?style=flat-square&logo=python&logoColor=white)
-![LLM](https://img.shields.io/badge/LLM-Claude%20%7C%20Codestral-D81B60?style=flat-square)
-![Database](https://img.shields.io/badge/Database-Redis-DC382D?style=flat-square&logo=redis&logoColor=white)
+```text
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 🔍 Analyze → 🧪 Reproduce → 🧠 Investigate → 🎯 Scope → 🔧 Fix → 🛡️ Validate │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+[![Status](https://img.shields.io/badge/Status-Active-43A047?style=flat-square)](#)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](#)
+[![Frontend](https://img.shields.io/badge/Frontend-React-0088CC?style=flat-square&logo=react&logoColor=white)](#)
+[![Backend](https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](#)
+[![Orchestration](https://img.shields.io/badge/Orchestration-LangGraph-E65100?style=flat-square&logo=python&logoColor=white)](#)
+[![LLM](https://img.shields.io/badge/LLM-Claude%20%7C%20Codestral-D81B60?style=flat-square)](#)
+[![Database](https://img.shields.io/badge/Database-Redis-DC382D?style=flat-square&logo=redis&logoColor=white)](#)
+[![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](#)
+
+[ 🚀 Quick Start ](#-quick-start) &nbsp;|&nbsp; [ 🏗️ Architecture ](#-multi-agent-architecture) &nbsp;|&nbsp; [ 🧪 Demo Scenario ](#-demo-scenario) &nbsp;|&nbsp; [ 📊 Benchmark ](#-numbers-that-matter)
+
+</div>
 
 ---
 
-## 📌 Overview
+## 💡 What is ProoFix?
 
-**ProoFix** is an AI-powered software engineering platform that provides automated codebase analysis, bug detection, root-cause investigation, blast-radius evaluation, candidate fix generation, patch mutation validation, and GitHub pull request creation.
+**ProoFix** is an autonomous multi-agent software engineering platform that analyzes code repositories, reproduces bugs, investigates root causes, measures blast radius, generates candidate fixes, and validates patches through mutation testing before proposing a GitHub Pull Request.
 
-The system combines a **React frontend**, **FastAPI backend**, **LangGraph multi-agent orchestration pipeline**, and **Redis async state engine**.
-
-Rather than relying on a single LLM to inspect a repository and directly modify code, ProoFix uses a structured pipeline of specialized agents. Each stage produces verifiable evidence and structured artifacts passed deterministically to subsequent agents.
+Rather than relying on a single LLM prompt to guess code changes, ProoFix orchestrates **11 specialized agents** in a deterministic pipeline where every fix is backed by empirical runtime evidence.
 
 ---
 
-## 🚀 Why ProoFix?
+## 🔄 High-Level Pipeline
 
-Traditional AI coding assistants generate code snippet fixes in isolation, but repository-level debugging requires rigorous verification. Without structural analysis and runtime validation, AI-generated code often suffers from:
+```mermaid
+flowchart LR
+    A[📦 Repository] --> B[🔍 Detection]
+    B --> C[🧪 Reproduction]
+    C --> D[🧠 Investigation]
+    D --> E[🎯 Blast Scope]
+    E --> F[📋 Fix Planning]
+    F --> G[🔧 Code Generation]
+    G --> H[🛡️ Mutation & Security Validation]
+    H --> I[🚀 Validated Fix / PR]
+```
 
-* **Misdiagnosed Root Causes** — Fixes applied to symptoms rather than root causes.
-* **Incorrect File Targets** — Changes made to wrong files or wrong library layers.
-* **Dependency & API Inconsistencies** — Code that breaks internal interfaces or type contracts.
-* **Lack of Reproduction** — Inability to prove that a bug actually existed before fixing it.
-* **Regressions** — Passing initial target checks while breaking peripheral features.
-* **Unverified Security** — Patching logic while introducing secondary security flaws.
+---
 
-ProoFix resolves these challenges through strict separation of concerns: **Detection → Reproduction → Investigation → Blast Scope → Fix Planning → Code Generation → Mutation & Security Validation**.
+## ⚡ Why ProoFix?
+
+| Feature / Capability | Traditional AI Coding | 🛠️ ProoFix Autonomous Pipeline |
+| :--- | :--- | :--- |
+| **Approach** | Single LLM prompt guessing | **11-Agent specialized pipeline** |
+| **Bug Reproduction** | None (assumes bug exists) | **10/10 stable deterministic reproduction gate** |
+| **File Target Selection** | Often modifies wrong files | **AST Semantic Intent Graph & call tree mapping** |
+| **Impact Radius** | Unchecked (causes regressions) | **Blast-radius analysis across dependent modules** |
+| **Fix Validation** | No post-fix verification | **MutMut mutation testing + regression test suite** |
+| **Security Assurance** | Code patched blindly | **Automated post-fix security rescan (Bandit/Ruff)** |
+| **Quality Gate** | Direct code edit | **Mutation Certification Index (MCI) trust gating** |
+
+---
+
+## 🤖 Multi-Agent Architecture
+
+```mermaid
+flowchart TD
+    A0[A0 / A0.5 Repository Intelligence] --> A07[A0.7 Environment Precheck]
+    A07 --> A1[A1 Semantic Intent Mapper]
+    A07 --> A2[A2 Dependency Graph Analyzer]
+    A07 --> A3[A3 Static Security Scanner]
+    
+    A1 & A2 & A3 --> A35[A3.5 Reproduction Gate]
+    A35 -->|10/10 Pass| A4[A4 Evidence Investigator]
+    
+    A4 --> A5[A5 Blast Radius Evaluator]
+    A5 --> A55[A5.5 Context Engineer]
+    A55 --> A6[A6 Fix DAG Planner]
+    A6 --> A7[A7 Patch Generator]
+    
+    A7 --> A8[A8 Mutation & Test Validator]
+    A8 -->|Failed Validation| A7
+    A8 -->|Pass Validation| A9[A9 Security Rescan]
+    
+    A9 -->|Failed Security| A7
+    A9 -->|Pass Security| A10[A10 Trust Gate & PR Router]
+    A10 --> PR[🚀 Automated GitHub Pull Request]
+```
+
+---
+
+## 📊 Numbers That Matter
+
+<div align="center">
+
+| Metric | Benchmark Value | Description |
+| :---: | :---: | :--- |
+| **10/10** | **Reproduction Stability** | Required test reproduction pass rate before declaring bug confirmed |
+| **11** | **Specialized Agents** | Independent pipeline agents with distinct domain boundaries |
+| **4+** | **Trust & Validation Gates** | Precheck, Reproduction, Mutation, and Security verification levels |
+| **100ms** | **AST Graph Indexing** | Incremental AST repository indexing & call-graph caching |
+| **100%** | **Evidence Provenance** | No fix generated without attached test & log trace evidence |
+
+</div>
+
+---
+
+## 🎬 Demo Scenario
+
+Suppose a target repository contains an authentication token expiration bypass:
 
 ```text
-                    Target Repository
-                            │
-                            ▼
-                  ┌──────────────────┐
-                  │ Repository Input │
-                  └────────┬─────────┘
-                           │
-                           ▼
-                    ┌────────────┐
-                    │ A0         │
-                    │ Orchestrator
-                    └─────┬──────┘
-                          │
-          ┌───────────────┼────────────────┐
-          ▼               ▼                ▼
-       A1 Mapper      A2 Dependency     A3 Static
-       Analysis       Analysis          Analysis
-          │               │                │
-          └───────────────┼────────────────┘
-                          ▼
-                    A3.5 Reproduction
-                          │
-                          ▼
-                   A4 Evidence
-                   Investigation
-                          │
-                          ▼
-                   A5 Blast Radius
-                   / Impact Analysis
-                          │
-                          ▼
-                   A6 Fix Planner
-                          │
-                          ▼
-                   A7 Code Generator
-                          │
-                          ▼
-                   A8 Mutation /
-                   Fix Validator
-                          │
-                          ▼
-                   A9 Security
-                   Re-scan
-                          │
-                          ▼
-                   A10 Final Decision
-                          │
-                          ▼
-                   Pull Request /
-                   Developer Review
+1. 📥 Repository Submission    ➜ User submits target repository path or Git URL.
+2. 🔍 Static Analysis          ➜ A3 identifies potential flaw in auth token validation logic.
+3. 🧪 Runtime Reproduction     ➜ A3.5 auto-generates pytest case (10/10 stable reproduction).
+4. 🧠 Root-Cause Investigation ➜ A4 correlates call-stack, AST citations, and error trace.
+5. 🎯 Blast Scope Analysis     ➜ A5 maps dependent API endpoints affected by auth modifications.
+6. 📋 Fix DAG Planning        ➜ A6 formulates file change dependencies and modification order.
+7. 🔧 Patch Generation         ➜ A7 generates targeted patch diff repairing the token check.
+8. 🛡️ Mutation Validation      ➜ A8 runs regression suite + MutMut mutation testing.
+9. 🔒 Post-Fix Security Rescan ➜ A9 verifies no new security vulnerabilities were introduced.
+10. 🚀 PR Creation             ➜ A10 calculates MCI score & opens automated GitHub Pull Request.
 ```
 
 ---
@@ -93,70 +128,48 @@ ProoFix resolves these challenges through strict separation of concerns: **Detec
 ## ✨ Key Features
 
 ### 🔍 Deep Repository Understanding
-Builds a comprehensive structural model of the repository before attempting any modification:
-* **Semantic Mapping (A1)** — Builds a Semantic Intent Graph (SIG) from AST analysis, functions, and docstrings.
-* **Dependency Graphing (A2)** — Maps cross-module imports, inter-function callability, and reachability.
-* **Source Roots Discovery** — Dynamically discovers source paths and module hierarchies.
+* **Semantic Intent Graph (A1)**: Maps AST structures, docstrings, and function semantics.
+* **Call Graph Analysis (A2)**: Traces inter-module reachability and caller/callee trees.
 
-### 🐛 Multi-Source Bug Detection
-Combines deterministic tooling and structured reasoning instead of single-prompt guessing:
-* **Static Analysis (A3)** — Linter, type checking, and pattern-based vulnerability scanning (Bandit/Ruff).
-* **Dependency Reachability** — Traces external vulnerability propagation across execution paths.
-* **Runtime Verification** — Verifies issues through real code execution.
+### 🧪 Deterministic Reproduction Gate (A3.5)
+* Executes candidate tests directly against the working tree.
+* Enforces **10/10 reproduction stability** to eliminate false positives and LLM hallucinations.
 
-### 🧪 Deterministic Reproduction (A3.5)
-Generates and executes targeted test cases against the codebase to establish hard baseline proof:
-* Captures exit codes, stdout, stderr, and pytest execution reports.
-* Enforces a hard **Reproduction Gate** — requires consistent reproduction (10/10 stability score) before declaring a bug confirmed.
-* Prevents spending LLM tokens on non-reproducible or hallucinated issues.
-
-### 🔬 Provenance-Gated Evidence Investigation (A4)
-Correlates evidence across scanner outputs, test logs, call graphs, and source code citations:
+### 🔬 Evidence Investigation (A4)
+Classifies evidence rigorously before attempting repairs:
 ```text
-Supporting Evidence
-        │
-        ├── Reproduction (Automated Pytest Runs)
-        ├── Scanners (Bandit / Static Linter)
-        ├── Source Code (AST Citations)
-        └── Dependency Graph (Call Trees)
-
-Contradicting Evidence
-        │
-        └── Flagged when evidence fails to validate findings
-
-Unavailable Evidence
-        │
-        ├── Tools uninstalled / inactive
-        └── Non-executable test suites
+Supporting Evidence ──► Reproduction Logs + Scanner Alerts + AST Citations
+Contradicting Evidence ──► Flagged if evidence conflicts with findings
+Unavailable Evidence ──► Tools inactive or test suite non-executable
 ```
 
-### 💥 Blast Radius & Impact Analysis (A5)
-Measures the blast radius of proposed code edits across the repository architecture:
-* Evaluates downstream caller impact.
-* Prevents fixing one component while breaking dependent modules.
-
-### 🧠 Structured Fix Planning & Code Generation (A6 & A7)
-* **A6 Fix Planner**: Formulates a detailed DAG fix plan outlining file-level change dependencies, modification order, and validation constraints.
-* **A7 Patch Engine**: Generates clean, minimal patch diffs based strictly on the approved fix plan and targeted context snippets.
+### 💥 Blast Radius & Context Engineering (A5 & A5.5)
+* Calculates downstream impact across dependent files before touching code.
+* Engineers targeted context snippets for optimal LLM fix generation.
 
 ### 🧬 Mutation & Security Validation (A8 & A9)
-* **A8 Mutation Validator**: Executes regression suites and mutation testing (`mutmut`) to guarantee that generated patches fix the bug without introducing regressions.
-* **A9 Security Rescan**: Re-scans modified files to guarantee no new security vulnerabilities were introduced by the patch.
-* **Automatic Retry Loop**: If validation fails, feeds exact failure tracebacks back to **A7** for iterative repair up to configured retry limits.
-
-### 📊 Trust Gating & MCI Certification (A10)
-Calculates a **Mutation Certification Index (MCI)** based on empirical metrics. Pull Requests are only submitted when all trust gates pass.
-
-### 💬 Workspace AI Chatbot & Voice Navigation
-Interactive developer dashboard featuring:
-* **Evidence-Based Q&A**: Ask natural language questions grounded strictly in captured run evidence.
-* **Voice Input**: Integrated voice navigation powered by server-side speech recognition.
+* **Mutation Validation**: Runs `mutmut` and test suites to verify fix efficacy.
+* **Security Rescan**: Re-scans updated files with `Bandit` and `Ruff`.
+* **Automatic Retry Loop**: Feeds validation errors back to **A7** for iterative repair.
 
 ---
 
-## 🏗️ Architecture & Agent Pipeline
+## 🛠️ Tech Stack & Architecture
 
-| Agent | Module Name | Core Responsibility |
+| Category | Technologies |
+| :--- | :--- |
+| 🖥️ **Frontend** | React 18, TypeScript, Vite, TanStack Router, Tailwind CSS |
+| ⚙️ **Backend** | Python 3.11+, FastAPI, Uvicorn, Pydantic v2 |
+| 🤖 **Agent Orchestration** | LangGraph, LangChain Core, State Graph Nodes |
+| 🧠 **LLM Providers** | Anthropic (`claude-3-5-sonnet`), Mistral (`codestral-latest`), Offline Stub Mode |
+| 🗄️ **State & Storage** | Redis (Async state engine, event streaming, WebSockets) |
+| 🔍 **Code Analysis & Testing** | Python AST, NetworkX, spaCy, Pytest, Bandit, Ruff, MutMut, PyGithub |
+
+---
+
+## 📋 Agent Pipeline Breakdown
+
+| Agent | Module | Role & Responsibility |
 | :--- | :--- | :--- |
 | **A0 / A0.5** | `repository_intelligence.py` | Orchestration, cross-run caching, knowledge graph indexing |
 | **A0.7** | `a0_7_environment.py` | Precheck environment & test runner readiness |
@@ -175,107 +188,7 @@ Interactive developer dashboard featuring:
 
 ---
 
-## 🔄 End-to-End Workflow
-
-```text
-1. Target Repository Input (Local path or Git URL)
-              │
-              ▼
-2. Environment Precheck (A0.7) & Repo Indexing (A0.5)
-              │
-              ▼
-3. Semantic Intent Graph (A1) & Dependency Mapping (A2)
-              │
-              ▼
-4. Static Security Scanning (A3)
-              │
-              ▼
-5. Reproduction Gating (A3.5)
-              │
-              ▼
-6. Root Cause Evidence Investigation (A4)
-              │
-              ▼
-7. Blast Radius Impact Analysis (A5)
-              │
-              ▼
-8. Fix DAG Planning (A6)
-              │
-              ▼
-9. Patch Generation & Application (A7)
-              │
-              ▼
-10. Mutation & Regression Validation (A8) ───(Fail / Retry)───► [Refine Patch]
-              │
-              ▼
-11. Post-Patch Security Rescan (A9) ─────────(Fail / Retry)───► [Refine Patch]
-              │
-              ▼
-12. MCI Trust Gating & PR Decision (A10)
-              │
-              ▼
-13. Automated GitHub Pull Request Creation & Developer Report
-```
-
----
-
-## 🧩 Technology Stack
-
-### Backend
-* **Language & Core**: Python 3.11+, FastAPI, Uvicorn, Pydantic v2
-* **Agent Orchestration**: LangGraph, LangChain Core
-* **LLM Engines**: Anthropic (`claude-3-5-sonnet`), Mistral (`codestral-latest`), Stub Mode
-* **State & Storage**: Redis (Async state engine & event streaming)
-* **Code Analysis**: Python AST, NetworkX, spaCy, PyGithub, GitPython
-* **Verification & Security**: Pytest, Bandit, Ruff, MutMut
-
-### Frontend
-* **Framework**: React 18, TypeScript, Vite
-* **Routing & Styling**: TanStack Router, Tailwind CSS, Lucide Icons
-* **Workspace Engine**: Real-time WebSocket streaming, live timeline, diff inspector
-
----
-
-## 📁 Project Structure
-
-```text
-Proofix/
-├── backend/
-│   ├── agents/               # Individual pipeline agents (A0.7 -> A10)
-│   ├── api/routes/           # REST API & WebSocket endpoints
-│   ├── models/               # Pydantic data schemas
-│   ├── orchestrator/         # LangGraph workflow, nodes, edges & trust gates
-│   ├── security/             # Security analysis & scanning modules
-│   ├── services/             # Git operations, UI projection, graph caching
-│   ├── state/                # Redis state store implementation
-│   ├── config.py             # System settings & configuration
-│   └── main.py               # FastAPI application entrypoint
-├── frontend/
-│   ├── src/
-│   │   ├── components/       # UI components (Journal, Patch View, Timeline)
-│   │   ├── hooks/            # Custom React hooks & WebSocket listeners
-│   │   ├── routes/           # TanStack router page definitions
-│   │   └── styles.css        # CSS styling rules
-│   ├── package.json
-│   └── vite.config.ts
-├── vulnapi/                  # Seeded benchmark target repository
-├── docs/                     # Architecture specifications & system design
-├── tests/                    # Backend unit & integration tests
-├── pyproject.toml            # Backend dependencies & tools config
-└── README.md
-```
-
----
-
-## ⚙️ Getting Started
-
-### Prerequisites
-* **Python 3.11+**
-* **Node.js 18+ & npm**
-* **Redis** (Local instance or Docker container)
-* **Git**
-
----
+## 🚀 Quick Start
 
 ### 1. Clone & Setup Backend
 
@@ -306,8 +219,6 @@ cp .env.example .env
 
 ### 2. Environment Configuration (`.env`)
 
-Edit your `.env` file with appropriate API keys and settings:
-
 ```env
 # Execution Mode
 STUB_MODE=false               # Set to true for offline testing without LLM keys
@@ -316,10 +227,6 @@ LLM_PROVIDER=anthropic        # Options: anthropic | mistral
 # API Keys
 ANTHROPIC_API_KEY=your_anthropic_api_key
 ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
-
-# Optional Mistral Config
-# MISTRAL_API_KEY=your_mistral_api_key
-# MISTRAL_MODEL=codestral-latest
 
 # Infrastructure
 REDIS_URL=redis://localhost:6379/0
@@ -331,51 +238,29 @@ SARVAM_API_KEY=your_sarvam_api_key
 
 ---
 
-### 3. Start Redis
+### 3. Start Redis & Servers
 
-Make sure Redis is running locally:
-
+**Terminal 1 (Backend)**:
 ```bash
-# macOS with Homebrew
-brew services start redis
+# Start Redis (macOS / Docker)
+brew services start redis  # OR: docker run -d -p 6379:6379 redis:alpine
 
-# Docker
-docker run -d -p 6379:6379 redis:alpine
-```
-
----
-
-### 4. Run the FastAPI Backend
-
-```bash
-# Activate virtual environment
+# Start FastAPI API
 source .venv/bin/activate
-
-# Start backend server
 uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
-* API documentation available at `http://127.0.0.1:8000/docs`
-* Health check: `http://127.0.0.1:8000/health`
 
----
-
-### 5. Run the React Frontend
-
-Open a second terminal window:
-
+**Terminal 2 (Frontend)**:
 ```bash
 cd frontend
 npm install
-cp .env.example .env      # Ensures VITE_DATA_SOURCE=api (or mock)
 npm run dev
 ```
-Open your browser at `http://localhost:5173`.
+Open `http://localhost:5173` to launch the ProoFix Workspace.
 
 ---
 
-## 🧪 Running a Pipeline Job
-
-You can initiate a repository repair job from the UI or via curl:
+### 4. Execute a Pipeline Run
 
 ```bash
 curl -X POST http://127.0.0.1:8000/runs \
@@ -385,55 +270,57 @@ curl -X POST http://127.0.0.1:8000/runs \
 
 ---
 
+## 📁 Project Structure
+
+```text
+Proofix/
+├── backend/
+│   ├── agents/               # Pipeline agents (A0.7 -> A10)
+│   ├── api/routes/           # REST API & WebSocket handlers
+│   ├── models/               # Data schemas & verification models
+│   ├── orchestrator/         # LangGraph workflow, nodes, edges & trust gates
+│   ├── security/             # Vulnerability scanning modules
+│   ├── services/             # Git operations & repository graph indexing
+│   ├── state/                # Redis state store
+│   ├── config.py             # System settings
+│   └── main.py               # FastAPI entrypoint
+├── frontend/
+│   ├── src/
+│   │   ├── components/       # Workspace UI components
+│   │   ├── hooks/            # Custom hooks & WebSockets
+│   │   ├── routes/           # Router views
+│   │   └── styles.css        # Stylesheet
+│   ├── package.json
+│   └── vite.config.ts
+├── vulnapi/                  # Seeded benchmark target codebase
+├── docs/                     # System specifications & design docs
+├── tests/                    # Unit & integration tests
+├── pyproject.toml            # Build & package configuration
+└── README.md
+```
+
+---
+
 ## 🔐 Security & Governance
 
-ProoFix enforces strict security boundaries:
-* **Server-Side API Key Isolation**: All LLM and third-party API credentials (such as Sarvam voice keys and GitHub tokens) remain strictly server-side.
-* **No Unsandboxed Installs**: The `A0.7` environment precheck checks existing environment state without executing arbitrary build hooks from cloned target repositories.
-* **Post-Fix Rescan**: All generated patches undergo automated security scanning (`A9`) before being considered safe for PR submission.
+ProoFix ensures zero unsandboxed execution risks:
+* **Server-Side Credentials**: All LLM keys, Sarvam voice keys, and GitHub tokens remain server-side.
+* **Non-Executing Environment Precheck**: `A0.7` probes dependency availability without executing un-sandboxed build scripts.
+* **Mandatory Post-Fix Security Rescan**: Patches are rescanned with `A9` before PR creation.
 
 ---
 
 ## 🧪 Testing
 
 Run backend tests:
-
 ```bash
-# Run unit and integration tests
 pytest tests/ -q
 ```
 
 Run frontend production build verification:
-
 ```bash
-cd frontend
-npm run build
+cd frontend && npm run build
 ```
-
----
-
-## 💡 What Makes ProoFix Different?
-
-Most AI coding tools operate as direct prompt-to-code generators:
-```text
-Prompt ──► LLM ──► Modified Code
-```
-
-ProoFix treats software repair as an **empirical, verifiable engineering process**:
-```text
-Repository ──► Map ──► Detect ──► Reproduce ──► Investigate ──► Blast Scope ──► Plan ──► Generate ──► Mutate ──► Rescan ──► PR
-```
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1. Fork the repository and create a feature branch (`git checkout -b feature/amazing-feature`).
-2. Commit your changes (`git commit -m 'Add amazing feature'`).
-3. Push to the branch (`git push origin feature/amazing-feature`).
-4. Open a Pull Request.
 
 ---
 
