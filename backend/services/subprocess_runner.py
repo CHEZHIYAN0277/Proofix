@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -25,19 +26,59 @@ from pathlib import Path
 PYTHON = sys.executable or "python3"
 
 
+# Target repository commands must not inherit ProoFix's service configuration.
+# Real example: a target repo using pydantic-settings crashed during pytest
+# collection because Railway's `CORS_ORIGINS` value from ProoFix was parsed by
+# the target app as its own setting. Secrets are also stripped for safety.
+_BLOCKED_ENV_KEYS = {
+    "ANTHROPIC_API_KEY",
+    "AUDIT_STORE_RAW_PROMPTS",
+    "CORS_ORIGINS",
+    "ENCRYPTION_KEY",
+    "ENCRYPTION_PREVIOUS_KEYS",
+    "GEMINI_API_KEY",
+    "GITHUB_DRY_RUN",
+    "GITHUB_REPO_NAME",
+    "GITHUB_REPO_OWNER",
+    "GITHUB_TOKEN",
+    "LLM_PROVIDER",
+    "MISTRAL_API_KEY",
+    "OPENAI_API_KEY",
+    "RAILWAY_ENVIRONMENT",
+    "RAILWAY_ENVIRONMENT_ID",
+    "RAILWAY_PROJECT_ID",
+    "RAILWAY_SERVICE_ID",
+    "RAILWAY_SERVICE_NAME",
+    "RAILWAY_STATIC_URL",
+    "RAILWAY_VOLUME_MOUNT_PATH",
+    "REDIS_URL",
+    "SARVAM_API_KEY",
+    "STUB_MODE",
+}
+
+
+def repository_subprocess_env(extra: dict | None = None) -> dict[str, str]:
+    """Environment for tools executed inside an arbitrary target repository."""
+    clean = {key: value for key, value in os.environ.items() if key not in _BLOCKED_ENV_KEYS}
+    if extra:
+        clean.update({str(key): str(value) for key, value in extra.items()})
+    return clean
+
+
 async def run_command(
     cmd: list[str],
     cwd: str | Path | None = None,
     timeout: int = 120,
     env: dict | None = None,
 ) -> tuple[int, str, str]:
+    process_env = repository_subprocess_env(env)
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(cwd) if cwd else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=env,
+            env=process_env,
         )
     except FileNotFoundError:
         return -1, "", f"command not found: {cmd[0]}"
