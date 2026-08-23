@@ -1177,132 +1177,132 @@ export function RepositoryIntelligencePanel({
           Repository structure
         </summary>
         <div className="space-y-3 border-t border-border p-3">
-      {/* Toolbar: view switch, search, filters. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex rounded-md border border-border p-0.5">
-          {(
-            [
-              ["graph", Network, "Graph"],
-              ["structure", FolderTree, "Structure"],
-              ["table", Table2, "Table"],
-            ] as const
-          ).map(([mode, Icon, label]) => (
-            <button
-              key={mode}
-              type="button"
-              onClick={() => setViewMode(mode)}
-              className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition-colors ${
-                viewMode === mode
-                  ? "bg-primary/10 text-primary"
-                  : "text-ink-soft hover:bg-surface-muted"
-              }`}
-            >
-              <Icon className="h-3 w-3" />
-              {label}
-            </button>
-          ))}
-        </div>
+          {/* Toolbar: view switch, search, filters. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-md border border-border p-0.5">
+              {(
+                [
+                  ["graph", Network, "Graph"],
+                  ["structure", FolderTree, "Structure"],
+                  ["table", Table2, "Table"],
+                ] as const
+              ).map(([mode, Icon, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setViewMode(mode)}
+                  className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                    viewMode === mode
+                      ? "bg-primary/10 text-primary"
+                      : "text-ink-soft hover:bg-surface-muted"
+                  }`}
+                >
+                  <Icon className="h-3 w-3" />
+                  {label}
+                </button>
+              ))}
+            </div>
 
-        <div className="relative flex-1 min-w-[160px]">
-          <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-ink-soft" />
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search files, functions, classes…"
-            aria-label="Search repository nodes"
-            className="w-full rounded-md border border-border bg-surface py-1 pl-7 pr-2 text-[11px] text-ink outline-none focus:border-primary/50"
-          />
-        </div>
+            <div className="relative flex-1 min-w-[160px]">
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-ink-soft" />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search files, functions, classes…"
+                aria-label="Search repository nodes"
+                className="w-full rounded-md border border-border bg-surface py-1 pl-7 pr-2 text-[11px] text-ink outline-none focus:border-primary/50"
+              />
+            </div>
 
-        {focusId && (
-          <button
-            type="button"
-            onClick={() => setFocusId(null)}
-            className="rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px] font-medium text-primary"
-          >
-            Clear focus
-          </button>
-        )}
-      </div>
-
-      {/* Step 11 — node-type filters, built only from types actually present. */}
-      {nodeTypes.length > 1 && (
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by node type">
-          {nodeTypes.map((t) => {
-            const on = activeTypes.has(t);
-            const color = graph.nodes.find((n) => n.type === t)?.color ?? "#999";
-            return (
+            {focusId && (
               <button
-                key={t}
                 type="button"
-                onClick={() =>
-                  setTypeFilter((prev) => {
-                    const base = prev ?? new Set(nodeTypes);
-                    const next = new Set(base);
-                    if (next.has(t)) next.delete(t);
-                    else next.add(t);
-                    return next;
-                  })
-                }
-                className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                  on ? "border-border text-ink" : "border-border/50 text-ink-soft opacity-50"
-                }`}
+                onClick={() => setFocusId(null)}
+                className="rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px] font-medium text-primary"
               >
-                <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
-                {t}
+                Clear focus
               </button>
-            );
-          })}
-        </div>
-      )}
+            )}
+          </div>
 
-      <div className="flex flex-col gap-3 lg:flex-row">
-        <div className="min-w-0 flex-1">
-          {viewMode === "graph" && (
-            <GraphCanvas
-              nodes={filteredNodes}
-              edges={filteredEdges}
-              selectedId={selectedId}
-              matchIds={matchIds}
-              focusId={focusId}
-              onSelect={setSelectedId}
-            />
+          {/* Step 11 — node-type filters, built only from types actually present. */}
+          {nodeTypes.length > 1 && (
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by node type">
+              {nodeTypes.map((t) => {
+                const on = activeTypes.has(t);
+                const color = graph.nodes.find((n) => n.type === t)?.color ?? "#999";
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() =>
+                      setTypeFilter((prev) => {
+                        const base = prev ?? new Set(nodeTypes);
+                        const next = new Set(base);
+                        if (next.has(t)) next.delete(t);
+                        else next.add(t);
+                        return next;
+                      })
+                    }
+                    className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                      on ? "border-border text-ink" : "border-border/50 text-ink-soft opacity-50"
+                    }`}
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
           )}
-          {viewMode === "structure" && (
-            <StructureTree
-              nodes={filteredNodes}
-              edges={filteredEdges}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-            />
-          )}
-          {viewMode === "table" && (
-            <NodesTable
-              nodes={filteredNodes}
-              edges={filteredEdges}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-            />
-          )}
-          {graph.truncated && (
-            <p className="mt-1.5 text-[10px] text-ink-soft">
-              Showing the {graph.nodes.length} most-connected of {graph.total_nodes} nodes — the
-              full graph is too large to render legibly.
-            </p>
-          )}
-        </div>
 
-        {selectedNode && (
-          <NodeInspector
-            node={selectedNode}
-            runId={runId}
-            connections={connections}
-            onClose={() => setSelectedId(null)}
-            onFocus={() => setFocusId(selectedNode.id)}
-          />
-        )}
-      </div>
+          <div className="flex flex-col gap-3 lg:flex-row">
+            <div className="min-w-0 flex-1">
+              {viewMode === "graph" && (
+                <GraphCanvas
+                  nodes={filteredNodes}
+                  edges={filteredEdges}
+                  selectedId={selectedId}
+                  matchIds={matchIds}
+                  focusId={focusId}
+                  onSelect={setSelectedId}
+                />
+              )}
+              {viewMode === "structure" && (
+                <StructureTree
+                  nodes={filteredNodes}
+                  edges={filteredEdges}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                />
+              )}
+              {viewMode === "table" && (
+                <NodesTable
+                  nodes={filteredNodes}
+                  edges={filteredEdges}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                />
+              )}
+              {graph.truncated && (
+                <p className="mt-1.5 text-[10px] text-ink-soft">
+                  Showing the {graph.nodes.length} most-connected of {graph.total_nodes} nodes — the
+                  full graph is too large to render legibly.
+                </p>
+              )}
+            </div>
+
+            {selectedNode && (
+              <NodeInspector
+                node={selectedNode}
+                runId={runId}
+                connections={connections}
+                onClose={() => setSelectedId(null)}
+                onFocus={() => setFocusId(selectedNode.id)}
+              />
+            )}
+          </div>
         </div>
       </details>
 
@@ -1311,9 +1311,10 @@ export function RepositoryIntelligencePanel({
       <div className="flex items-center gap-1.5 rounded-lg border border-status-completed/30 bg-status-completed-bg px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-status-completed">
         <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
         Index ready <span className="mx-0.5 opacity-60">·</span>
-        <span className="font-medium normal-case tracking-normal">Reusable by downstream agents</span>
+        <span className="font-medium normal-case tracking-normal">
+          Reusable by downstream agents
+        </span>
       </div>
-
     </section>
   );
 }

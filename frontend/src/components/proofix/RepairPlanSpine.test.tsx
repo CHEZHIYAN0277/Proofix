@@ -21,7 +21,13 @@ const THREE_STEP: RepairPlan = {
       dependsOn: [],
       incomingEdges: [],
       conflictsWith: [],
-      why: { kind: "cve", package: "pyjwt", severity: "HIGH", installedVersion: "1.0.0", reachPath: ["vulnapi/auth.py"] },
+      why: {
+        kind: "cve",
+        package: "pyjwt",
+        severity: "HIGH",
+        installedVersion: "1.0.0",
+        reachPath: ["vulnapi/auth.py"],
+      },
       isHandoffTarget: true,
     },
     {
@@ -30,9 +36,17 @@ const THREE_STEP: RepairPlan = {
       ordered: true,
       files: ["vulnapi/auth.py"],
       dependsOn: ["cve-CVE-1"],
-      incomingEdges: [{ fromIssue: "cve-CVE-1", reason: "cve_reachability:pyjwt->vulnapi/auth.py" }],
+      incomingEdges: [
+        { fromIssue: "cve-CVE-1", reason: "cve_reachability:pyjwt->vulnapi/auth.py" },
+      ],
       conflictsWith: ["finding-1"],
-      why: { kind: "static_finding", message: "hardcoded secret", severity: 0.9, severityMeasured: true, tools: ["bandit"] },
+      why: {
+        kind: "static_finding",
+        message: "hardcoded secret",
+        severity: 0.9,
+        severityMeasured: true,
+        tools: ["bandit"],
+      },
       isHandoffTarget: false,
     },
     {
@@ -43,7 +57,13 @@ const THREE_STEP: RepairPlan = {
       dependsOn: [],
       incomingEdges: [],
       conflictsWith: ["finding-0"],
-      why: { kind: "static_finding", message: "weak comparison", severity: 0.4, severityMeasured: false, tools: ["ruff"] },
+      why: {
+        kind: "static_finding",
+        message: "weak comparison",
+        severity: 0.4,
+        severityMeasured: false,
+        tools: ["ruff"],
+      },
       isHandoffTarget: false,
     },
   ],
@@ -105,8 +125,12 @@ describe("RepairImpactMap — multi-step spine (case 2)", () => {
     const boundary = screen.getByRole("separator", { name: /a7 execution boundary/i });
     const handoff = screen.getByText("cve-CVE-1");
     const finding0 = screen.getByText("finding-0");
-    expect(handoff.compareDocumentPosition(boundary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(boundary.compareDocumentPosition(finding0) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      handoff.compareDocumentPosition(boundary) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      boundary.compareDocumentPosition(finding0) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("keeps an unordered step off the spine entirely", () => {
@@ -216,7 +240,10 @@ describe("RepairImpactMap — model vs. graph order comparison", () => {
   it("counts and reports displaced positions when the model reorders steps", () => {
     const llm = clone(THREE_STEP);
     llm.orderingSource = "llm";
-    llm.steps = [llm.steps[0], llm.steps[2], llm.steps[1]].map((s, i) => ({ ...s, position: i + 1 }));
+    llm.steps = [llm.steps[0], llm.steps[2], llm.steps[1]].map((s, i) => ({
+      ...s,
+      position: i + 1,
+    }));
     render(<RepairImpactMap plan={llm} />);
     const cmp = screen.getByRole("group", { name: /order comparison/i });
     expect(within(cmp).getByText(/2 positions differ from dependency order/i)).toBeTruthy();

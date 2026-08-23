@@ -111,14 +111,12 @@ export const NEXT_ACTION: Record<string, string> = {
     "The reproduced test still fails against the patch. Re-run A7 → A8 with the retry brief.",
   regression_failed:
     "Inspect the tests A8's regression phase newly failed, then re-patch — the fix broke something that worked before.",
-  security_rejected:
-    "Resolve the findings A9 introduced after the patch, then re-run A9 → A10.",
+  security_rejected: "Resolve the findings A9 introduced after the patch, then re-run A9 → A10.",
   phantoms_detected:
     "Reconcile the PR description with the diff. A10's MCI check found claims the diff does not support.",
   correctness_low:
     "Raise correctness above its threshold with a stronger patch, or merge manually after review.",
-  security_low:
-    "Raise the security score above its threshold, or merge manually after review.",
+  security_low: "Raise the security score above its threshold, or merge manually after review.",
   axes_measured:
     "These scores were never produced. Check whether the tools that feed them ran at all, then re-run.",
   reproduction_confirmed:
@@ -203,7 +201,14 @@ function GateMark({ state, cx, cy }: { state: GateState; cx: number; cy: number 
   if (state === "blocker") {
     return (
       <>
-        <circle cx={cx} cy={cy} r={11} fill="var(--color-surface)" stroke="currentColor" strokeWidth={2.2} />
+        <circle
+          cx={cx}
+          cy={cy}
+          r={11}
+          fill="var(--color-surface)"
+          stroke="currentColor"
+          strokeWidth={2.2}
+        />
         <path
           d={`M ${cx - 3.6} ${cy - 3.6} l 7.2 7.2 M ${cx + 3.6} ${cy - 3.6} l -7.2 7.2`}
           stroke="currentColor"
@@ -290,7 +295,15 @@ function GateNode({
       <rect x={x - 24} y={RAIL_Y - 18} width={48} height={56} fill="transparent" />
 
       {selected && (
-        <circle cx={x} cy={RAIL_Y} r={14} fill="none" stroke="currentColor" strokeWidth={1} opacity={0.45} />
+        <circle
+          cx={x}
+          cy={RAIL_Y}
+          r={14}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1}
+          opacity={0.45}
+        />
       )}
 
       <GateMark state={state} cx={x} cy={RAIL_Y} />
@@ -354,7 +367,9 @@ function GridNode({
       }`}
     >
       <GateGlyph state={state} />
-      <span className={`font-mono text-[8.5px] ${state === "not_evaluated" ? "text-ink-soft" : "text-ink"}`}>
+      <span
+        className={`font-mono text-[8.5px] ${state === "not_evaluated" ? "text-ink-soft" : "text-ink"}`}
+      >
         {circledDigit(index)}
       </span>
     </button>
@@ -406,7 +421,13 @@ function GridRow({
 function RowConnector({ live }: { live: boolean }) {
   return (
     <div className="flex pl-[15px]" aria-hidden>
-      <span className={live ? "h-3 w-0.5 rounded-full bg-status-completed" : "h-3 w-0 border-l border-dashed border-ink-soft/40"} />
+      <span
+        className={
+          live
+            ? "h-3 w-0.5 rounded-full bg-status-completed"
+            : "h-3 w-0 border-l border-dashed border-ink-soft/40"
+        }
+      />
     </div>
   );
 }
@@ -484,101 +505,101 @@ export function MergeCircuit({ gates }: { gates: HardGate[] }) {
         <TwoRowGrid gates={gates} selected={shown} onSelect={setSelected} />
 
         <div className="hidden @sm:block">
-        <svg
-          viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-          className="h-auto w-full"
-          role="img"
-          aria-label={
-            blocker
-              ? `Routing stopped at gate ${blockerIndex + 1} of ${gates.length}. ${notEvaluated} gates were never evaluated.`
-              : `All ${gates.length} hard gates cleared.`
-          }
-        >
-          {/* Dead rail: drawn first, full width, so the live rail overlays it. */}
-          <line
-            x1={RAIL_START}
-            y1={RAIL_Y}
-            x2={RAIL_END}
-            y2={RAIL_Y}
-            className="stroke-ink-soft"
-            strokeWidth={1.5}
-            strokeDasharray="3 4"
-            opacity={0.4}
-          />
-
-          {/* Live rail: current reaches exactly as far as the first blocker. */}
-          <line
-            x1={RAIL_START}
-            y1={RAIL_Y}
-            x2={breakX}
-            y2={RAIL_Y}
-            pathLength={1}
-            className="animate-circuit-draw stroke-status-completed"
-            strokeWidth={2.5}
-            strokeLinecap="round"
-          />
-
-          {/* Source cap. */}
-          <circle cx={RAIL_START} cy={RAIL_Y} r={3} className="fill-status-completed" />
-          <text x={RAIL_START} y={RAIL_Y - 20} className="fill-ink-soft font-sans text-[9px]">
-            Evidence
-          </text>
-
-          {gates.map((gate, i) => (
-            <GateNode
-              key={gate.code}
-              gate={gate}
-              index={i}
-              x={nodeX(i, gates.length)}
-              selected={shown === i}
-              onSelect={() => setSelected(i)}
+          <svg
+            viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+            className="h-auto w-full"
+            role="img"
+            aria-label={
+              blocker
+                ? `Routing stopped at gate ${blockerIndex + 1} of ${gates.length}. ${notEvaluated} gates were never evaluated.`
+                : `All ${gates.length} hard gates cleared.`
+            }
+          >
+            {/* Dead rail: drawn first, full width, so the live rail overlays it. */}
+            <line
+              x1={RAIL_START}
+              y1={RAIL_Y}
+              x2={RAIL_END}
+              y2={RAIL_Y}
+              className="stroke-ink-soft"
+              strokeWidth={1.5}
+              strokeDasharray="3 4"
+              opacity={0.4}
             />
-          ))}
 
-          {/* The break: a hard stop marker and the count behind it. */}
-          {blocker && (
-            <g className="text-status-failed">
-              <line
-                x1={breakX}
-                y1={RAIL_Y - 26}
-                x2={breakX}
-                y2={RAIL_Y + 26}
-                stroke="currentColor"
-                strokeWidth={1}
-                opacity={0.35}
+            {/* Live rail: current reaches exactly as far as the first blocker. */}
+            <line
+              x1={RAIL_START}
+              y1={RAIL_Y}
+              x2={breakX}
+              y2={RAIL_Y}
+              pathLength={1}
+              className="animate-circuit-draw stroke-status-completed"
+              strokeWidth={2.5}
+              strokeLinecap="round"
+            />
+
+            {/* Source cap. */}
+            <circle cx={RAIL_START} cy={RAIL_Y} r={3} className="fill-status-completed" />
+            <text x={RAIL_START} y={RAIL_Y - 20} className="fill-ink-soft font-sans text-[9px]">
+              Evidence
+            </text>
+
+            {gates.map((gate, i) => (
+              <GateNode
+                key={gate.code}
+                gate={gate}
+                index={i}
+                x={nodeX(i, gates.length)}
+                selected={shown === i}
+                onSelect={() => setSelected(i)}
               />
+            ))}
+
+            {/* The break: a hard stop marker and the count behind it. */}
+            {blocker && (
+              <g className="text-status-failed">
+                <line
+                  x1={breakX}
+                  y1={RAIL_Y - 26}
+                  x2={breakX}
+                  y2={RAIL_Y + 26}
+                  stroke="currentColor"
+                  strokeWidth={1}
+                  opacity={0.35}
+                />
+                <text
+                  x={Math.min(breakX + 14, VIEW_W - 8)}
+                  y={RAIL_Y - 30}
+                  className="fill-status-failed font-sans text-[10px] font-semibold"
+                >
+                  Routing stopped
+                </text>
+              </g>
+            )}
+
+            {notEvaluated > 0 && (
               <text
-                x={Math.min(breakX + 14, VIEW_W - 8)}
-                y={RAIL_Y - 30}
-                className="fill-status-failed font-sans text-[10px] font-semibold"
+                x={RAIL_END}
+                y={RAIL_Y - 20}
+                textAnchor="end"
+                className="fill-ink-soft font-sans text-[9.5px]"
               >
-                Routing stopped
+                {notEvaluated} never evaluated
               </text>
-            </g>
-          )}
+            )}
 
-          {notEvaluated > 0 && (
-            <text
-              x={RAIL_END}
-              y={RAIL_Y - 20}
-              textAnchor="end"
-              className="fill-ink-soft font-sans text-[9.5px]"
-            >
-              {notEvaluated} never evaluated
-            </text>
-          )}
-
-          {blockerIndex === -1 && (
-            <text
-              x={RAIL_END}
-              y={RAIL_Y - 20}
-              textAnchor="end"
-              className="fill-status-completed font-sans text-[9.5px] font-medium"
-            >
-              All {gates.length} cleared
-            </text>
-          )}
-        </svg>
+            {blockerIndex === -1 && (
+              <text
+                x={RAIL_END}
+                y={RAIL_Y - 20}
+                textAnchor="end"
+                className="fill-status-completed font-sans text-[9.5px] font-medium"
+              >
+                All {gates.length} cleared
+              </text>
+            )}
+          </svg>
         </div>
       </div>
 

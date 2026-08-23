@@ -1,10 +1,45 @@
-import { Download, Copy, GitPullRequest, ShieldCheck, FileCode } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Download, Copy, Check, GitPullRequest, ShieldCheck, FileCode } from "lucide-react";
 import type { LiveAgent } from "./useExecutionRun";
 import { StatusBadge } from "./StatusBadge";
 import { StatusIcon } from "./StatusIcon";
 import { ProgressRing } from "./ProgressRing";
 import { AnimatedNumber } from "./AnimatedNumber";
 import { type RunReportModel } from "@/mocks";
+
+/**
+ * Formats and sanitizes a download filename for a run report.
+ * Format: `<repository-name>-run-report-<run-id>.json`
+ */
+export function getRunReportFilename(report: RunReportModel): string {
+  const sanitize = (str: string) =>
+    str
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
+  const repo = sanitize(report.repository || "");
+  const runId = sanitize(report.shortRunId || report.runId || "");
+
+  if (repo && runId) {
+    return `${repo}-run-report-${runId}.json`;
+  }
+  if (repo) {
+    return `${repo}-run-report.json`;
+  }
+  if (runId) {
+    return `run-report-${runId}.json`;
+  }
+  return "run-report.json";
+}
+
+/**
+ * Serializes the complete RunReportModel to formatted JSON.
+ */
+export function serializeRunReport(report: RunReportModel): string {
+  return JSON.stringify(report, null, 2);
+}
 
 export function RunReport({
   done,
@@ -30,16 +65,63 @@ export function RunReport({
   const decisionBadge = decision === "merge" ? "completed" : decision;
   const current = !done && agents && activeIndex !== undefined ? agents[activeIndex] : null;
 
-  const copyJson = () => {
-    const payload = {
-      run: report.shortRunId,
-      decision: report.decisionLabel,
-      rootCause: report.rootCause.summary,
-      trust: report.trust,
-      files: report.files,
-      proofBundle: report.proofBundle,
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
     };
-    void navigator.clipboard?.writeText(JSON.stringify(payload, null, 2));
+  }, []);
+
+  const handleCopyJson = async () => {
+    if (!report) return;
+    const json = serializeRunReport(report);
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(json);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = json;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      setCopied(true);
+      if (copyTimeoutRef.current) {
+        window.clearTimeout(copyTimeoutRef.current);
+      }
+      copyTimeoutRef.current = window.setTimeout(() => {
+        setCopied(false);
+      }, 1800);
+    } catch (err) {
+      console.error("Failed to copy report JSON to clipboard:", err);
+    }
+  };
+
+  const handleDownloadJson = () => {
+    if (!report) return;
+    try {
+      const json = serializeRunReport(report);
+      const blob = new Blob([json], { type: "application/json" });
+      const filename = getRunReportFilename(report);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to download report JSON:", err);
+    }
   };
 
   return (
@@ -296,16 +378,25 @@ export function RunReport({
             <div className="flex gap-2">
               <button
                 type="button"
+                onClick={handleDownloadJson}
                 className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-xs font-medium text-ink transition-all duration-150 hover:border-primary/40 hover:bg-surface-muted/60 active:scale-[0.98]"
               >
                 <Download className="h-3.5 w-3.5" /> Download
               </button>
               <button
                 type="button"
-                onClick={copyJson}
+                onClick={handleCopyJson}
                 className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 py-2 text-xs font-medium text-ink transition-all duration-150 hover:border-primary/40 hover:bg-surface-muted/60 active:scale-[0.98]"
               >
-                <Copy className="h-3.5 w-3.5" /> Copy JSON
+                {copied ? (
+                  <>
+                    <Check className="h-3.5 w-3.5 text-emerald-500" /> Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3.5 w-3.5" /> Copy JSON
+                  </>
+                )}
               </button>
             </div>
             <button

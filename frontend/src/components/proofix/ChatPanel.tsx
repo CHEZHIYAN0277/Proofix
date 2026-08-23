@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, type RefObject } from "react";
-import { scrollBehavior } from "@/hooks/useCountUp";
-import { ArrowUp, AudioLines, ChevronDown } from "lucide-react";
+import { ArrowUp, AudioLines } from "lucide-react";
 import { MOCK_CHAT_SUGGESTIONS, mockAnswerer } from "@/mocks";
 import { DATA_SOURCE } from "@/lib/api";
 
@@ -8,10 +7,6 @@ const isLive = DATA_SOURCE === "api";
 
 /**
  * Suggestion chips for a real run.
- *
- * The mock set is written against the fixture's story — "Why Draft PR?"
- * presumes an outcome the pipeline may never reach — so live mode gets prompts
- * that hold for any run regardless of how it ends.
  */
 const LIVE_CHAT_SUGGESTIONS = [
   "What did the agents find?",
@@ -20,12 +15,7 @@ const LIVE_CHAT_SUGGESTIONS = [
   "How was the fix validated?",
 ];
 
-interface Msg {
-  role: "user" | "assistant";
-  text: string;
-}
-
-type Mode = "idle" | "hover" | "open";
+type Mode = "idle" | "hover";
 
 export function ChatPanel({
   suggestions = isLive ? LIVE_CHAT_SUGGESTIONS : MOCK_CHAT_SUGGESTIONS,
@@ -44,16 +34,9 @@ export function ChatPanel({
    */
   anchorRef?: RefObject<HTMLDivElement | null>;
 } = {}) {
-  const [messages, setMessages] = useState<Msg[]>([
-    {
-      role: "assistant",
-      text: "I'm reading the current evidence for this run. Ask me anything about what the agents found.",
-    },
-  ]);
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<Mode>("idle");
   const [bounds, setBounds] = useState<{ left: number; width: number } | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -73,92 +56,55 @@ export function ChatPanel({
     };
   }, [anchorRef]);
 
-  useEffect(() => {
-    if (mode === "open") {
-      scrollRef.current?.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: scrollBehavior(),
-      });
-    }
-  }, [messages, mode]);
-
   const send = async (text: string) => {
     const q = text.trim();
     if (!q) return;
-    setMessages((prev) => [...prev, { role: "user", text: q }]);
     setInput("");
-    setMode("open");
-    const reply = await Promise.resolve(answerer(q));
-    setTimeout(() => {
-      setMessages((prev) => [...prev, { role: "assistant", text: reply }]);
-    }, 350);
+    setMode("idle");
+    await Promise.resolve(answerer(q));
   };
 
-  const expanded = mode !== "idle";
-  const showFullChat = mode === "open";
+  const expanded = mode === "hover";
 
   return (
     <div
+      data-chat-panel="true"
       className={`pointer-events-none fixed bottom-0 z-30 px-4 pb-4 sm:px-6 ${
         bounds ? "" : "left-0 right-0"
       }`}
       style={bounds ? { left: bounds.left, width: bounds.width } : undefined}
     >
       <section
-        onMouseEnter={() => setMode((m) => (m === "idle" ? "hover" : m))}
-        onMouseLeave={() => setMode((m) => (m === "hover" ? "idle" : m))}
+        onMouseEnter={() => setMode("hover")}
+        onMouseLeave={() => setMode("idle")}
         className="pointer-events-auto mx-auto w-full max-w-2xl overflow-hidden rounded-[18px] border border-border bg-surface/95 backdrop-blur shadow-[0_16px_40px_-16px_rgba(15,23,42,0.28)] transition-all duration-[250ms]"
       >
-        {/* Expanded content (hover/open) */}
+        {/* Expanded content (hover: initial greeting & suggestion chips) */}
         <div
           className={`grid transition-all duration-[250ms] ease-out ${
             expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
           }`}
         >
           <div className="min-h-0 overflow-hidden">
-            {showFullChat ? (
-              <div
-                ref={scrollRef}
-                className="max-h-[180px] space-y-2 overflow-y-auto px-4 pt-3 pb-2"
-              >
-                {messages.map((m, i) => (
-                  <div key={i} className="flex gap-2 text-[14px]">
-                    <div
-                      className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded font-mono text-[9px] font-semibold ${
-                        m.role === "user"
-                          ? "bg-ink text-surface"
-                          : "bg-accent text-accent-foreground"
-                      }`}
-                    >
-                      {m.role === "user" ? "U" : "AI"}
-                    </div>
-                    <div className="min-w-0 flex-1 whitespace-pre-wrap leading-snug text-ink">
-                      {m.text}
-                    </div>
-                  </div>
+            <div className="px-4 pt-3 pb-2">
+              <p className="mb-2 text-[13px] text-ink-soft">
+                I'm reading the current evidence for this run. Ask me anything about what the agents
+                found.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {suggestions.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => void send(s)}
+                    className="rounded-full border border-border bg-surface px-2.5 py-1 text-[12px] text-ink-soft transition hover:border-primary/30 hover:text-ink"
+                  >
+                    {s}
+                  </button>
                 ))}
               </div>
-            ) : (
-              <div className="px-4 pt-3 pb-2">
-                <p className="mb-2 text-[13px] text-ink-soft">
-                  I'm reading the current evidence for this run. Ask me anything about what the
-                  agents found.
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {suggestions.map((s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => void send(s)}
-                      className="rounded-full border border-border bg-surface px-2.5 py-1 text-[12px] text-ink-soft transition hover:border-primary/30 hover:text-ink"
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+            </div>
           </div>
         </div>
 
@@ -171,7 +117,6 @@ export function ChatPanel({
             }}
             className="flex min-h-[36px] flex-1 items-center gap-1.5 rounded-full bg-surface-muted/60 pl-3.5 pr-1 transition"
             onClick={() => {
-              setMode("open");
               inputRef.current?.focus();
             }}
           >
@@ -179,7 +124,6 @@ export function ChatPanel({
               ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onFocus={() => setMode("open")}
               placeholder="Ask about this run..."
               className="min-w-0 flex-1 bg-transparent text-[13px] text-ink placeholder:text-ink-soft focus:outline-none"
             />
@@ -202,16 +146,6 @@ export function ChatPanel({
               </button>
             )}
           </form>
-          {showFullChat && (
-            <button
-              type="button"
-              onClick={() => setMode("idle")}
-              className="mb-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-surface-muted hover:text-ink"
-              aria-label="Collapse chat"
-            >
-              <ChevronDown className="h-4 w-4" />
-            </button>
-          )}
         </div>
       </section>
     </div>

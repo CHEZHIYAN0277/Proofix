@@ -37,9 +37,22 @@ import {
 import type { PatchFileProvenance } from "@/components/proofix/visualizationTypes";
 
 import { ProgressRing } from "@/components/proofix/ProgressRing";
-import { GitBranch, Hash, Clock, RefreshCcw, Sparkles, GitPullRequest } from "lucide-react";
+import {
+  GitBranch,
+  Hash,
+  Clock,
+  RefreshCcw,
+  Sparkles,
+  GitPullRequest,
+  MessageSquare,
+} from "lucide-react";
+import { useChatConversations } from "@/components/proofix/run-chat/useChatConversations";
+import { LatestChatExchange } from "@/components/proofix/run-chat/LatestChatExchange";
+import { ChatHistoryDrawer } from "@/components/proofix/run-chat/ChatHistoryDrawer";
+import { VsCodeSidebarRightIcon } from "@/components/proofix/run-chat/VsCodeSidebarRightIcon";
 import {
   RUN_NAME_POOL,
+  mockAnswerer,
   type WorkspaceHeaderModel,
   type ExecutiveSummaryModel,
   type RunReportModel,
@@ -222,6 +235,8 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
   const pendingRunIdRef = useRef<Promise<string | null> | null>(null);
   const executiveSummaryRef = useRef<HTMLDivElement | null>(null);
   const chatAnchorRef = useRef<HTMLDivElement | null>(null);
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
+  const chatConversations = useChatConversations();
   const activeScrollGenerationRef = useRef(0);
   const anchoredAgentRef = useRef<number | null>(null);
   const primaryAlignUntilRef = useRef(0);
@@ -477,7 +492,13 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
                   onRetry={runData.retry}
                 />
               )}
-              <WorkspaceHeader done={done} header={runData.header} lifecycle={lifecycle} />
+              <WorkspaceHeader
+                done={done}
+                header={runData.header}
+                lifecycle={lifecycle}
+                onOpenChatHistory={() => setChatHistoryOpen((prev) => !prev)}
+                chatOpen={chatHistoryOpen}
+              />
               <div ref={executiveSummaryRef} className="scroll-mt-6 space-y-3">
                 {runData.status.summary.error && (
                   <PanelError
@@ -696,7 +717,28 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
               </footer>
             </div>
 
-            {done &&
+            {chatHistoryOpen ? (
+              <aside className="w-[380px] shrink-0 self-start sticky top-3 animate-panel-in-right">
+                <ChatHistoryDrawer
+                  open={chatHistoryOpen}
+                  onClose={() => setChatHistoryOpen(false)}
+                  conversations={chatConversations.conversations}
+                  activeConversationId={chatConversations.activeConversationId}
+                  onSelectConversation={chatConversations.selectConversation}
+                  onNewChat={chatConversations.newChat}
+                  onSendMessage={(q) =>
+                    chatConversations.sendMessage(
+                      q,
+                      isLive ? (question) => askChat(runId, question) : mockAnswerer,
+                      { updateLatestExchange: false },
+                    )
+                  }
+                  isAnswering={chatConversations.isAnswering}
+                  embedded={true}
+                />
+              </aside>
+            ) : (
+              done &&
               showRunReport &&
               // A report that never loaded must not render as an empty one —
               // "0 files changed, no trust score" is a claim, and we do not
@@ -726,16 +768,46 @@ export function Workspace({ runId: routeRunId }: WorkspaceProps = {}) {
                     report={runData.report}
                   />
                 </div>
-              ))}
+              ))
+            )}
           </div>
         )}
       </main>
 
-      {view === "execution" && done && (
-        <ChatPanel
-          answerer={isLive ? (q) => askChat(runId, q) : undefined}
-          anchorRef={chatAnchorRef}
-        />
+      {view === "execution" && (
+        <>
+          {done && (
+            <>
+              {/* LatestChatExchange only appears above the bottom ChatPanel when
+                  the side chat bar is NOT open, and only for questions submitted
+                  directly into the bottom prompt bar. */}
+              {!chatHistoryOpen && (
+                <LatestChatExchange
+                  latestUserMsg={chatConversations.latestUserMsg}
+                  latestAIMsg={chatConversations.latestAIMsg}
+                  isAnswering={chatConversations.isAnswering}
+                  anchorRef={chatAnchorRef}
+                />
+              )}
+
+              {/* ChatPanel is 100% unchanged. We only intercept its `answerer` prop
+                  to also store each exchange in the conversation history state.
+                  sendMessage() returns the reply string so ChatPanel's internal
+                  display stays in sync. In mock mode mockAnswerer is passed through
+                  just as ChatPanel's own default would have used it. */}
+              <ChatPanel
+                answerer={(q) =>
+                  chatConversations.sendMessage(
+                    q,
+                    isLive ? (question) => askChat(runId, question) : mockAnswerer,
+                    { updateLatestExchange: true },
+                  )
+                }
+                anchorRef={chatAnchorRef}
+              />
+            </>
+          )}
+        </>
       )}
     </div>
   );
@@ -1148,12 +1220,18 @@ function WorkspaceHeader({
   done,
   header,
   lifecycle,
+  onOpenChatHistory,
+  chatOpen = false,
 }: {
   done: boolean;
   /** Always supplied by `useRunData` — blank in live mode until the backend answers. */
   header: WorkspaceHeaderModel;
   /** How the backend says this run ended. Drives every label in this header. */
   lifecycle: RunLifecycleView;
+  /** When supplied, a Chat / History button is rendered in the top-right of the header. */
+  onOpenChatHistory?: () => void;
+  /** Whether the chat sidebar is currently open. */
+  chatOpen?: boolean;
 }) {
   // Mock mode has no backend status, so `done` alone settles it as completed.
   const state = lifecycle.terminal ? lifecycle.state : done ? "completed" : "running";
@@ -1226,6 +1304,21 @@ function WorkspaceHeader({
             status={state === "failed" || state === "blocked" ? state : "draft"}
             label={`Decision · ${lifecycle.terminal ? lifecycle.decisionLabel : header.decisionLabel}`}
           />
+          {onOpenChatHistory && (
+            <button
+              type="button"
+              onClick={onOpenChatHistory}
+              className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border transition ${
+                chatOpen
+                  ? "border-white/30 bg-[#1e2330] text-white shadow-xs"
+                  : "border-white/10 bg-[#0d0f14] text-gray-400 hover:border-white/25 hover:bg-[#141720] hover:text-white"
+              }`}
+              aria-label={chatOpen ? "Close side chat" : "Open side chat"}
+              title={chatOpen ? "Close side chat" : "Toggle side chat (VS Code layout)"}
+            >
+              <VsCodeSidebarRightIcon active={chatOpen} className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
 

@@ -136,8 +136,8 @@ function ModelRationale({ plan }: { plan: RepairPlan }) {
   if (plan.orderingSource !== "llm") {
     return (
       <p className="text-[11px] text-ink-soft">
-        Not applicable — this plan&apos;s order came from the deterministic topological sort, not
-        a model call.
+        Not applicable — this plan&apos;s order came from the deterministic topological sort, not a
+        model call.
       </p>
     );
   }
@@ -242,11 +242,13 @@ export function RepairPlanPanel({ runId, status }: { runId: string; status?: Age
           <h3 className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
             Repair Planner
           </h3>
-          <p className="mt-0.5 text-[11px] text-ink-soft">Create a dependency-aware repair order.</p>
+          <p className="mt-0.5 text-[11px] text-ink-soft">
+            Create a dependency-aware repair order.
+          </p>
         </div>
         <div className="font-mono text-[11px] text-ink-soft">
-          {plan.steps.length} step{plan.steps.length === 1 ? "" : "s"} ·{" "}
-          {plan.totalDependencyEdges} dependency edge{plan.totalDependencyEdges === 1 ? "" : "s"}
+          {plan.steps.length} step{plan.steps.length === 1 ? "" : "s"} · {plan.totalDependencyEdges}{" "}
+          dependency edge{plan.totalDependencyEdges === 1 ? "" : "s"}
         </div>
       </div>
 
@@ -265,10 +267,16 @@ export function RepairPlanPanel({ runId, status }: { runId: string; status?: Age
 
       {plan.steps.length > 0 && (
         <div className="space-y-1.5">
-          <Collapsible title="Acceptance criteria" count={plan.carriedForward?.acceptanceCriteria.length}>
+          <Collapsible
+            title="Acceptance criteria"
+            count={plan.carriedForward?.acceptanceCriteria.length}
+          >
             <AcceptanceCriteria plan={plan} />
           </Collapsible>
-          <Collapsible title="Patch constraints" count={plan.carriedForward?.patchConstraints.length}>
+          <Collapsible
+            title="Patch constraints"
+            count={plan.carriedForward?.patchConstraints.length}
+          >
             <PatchConstraints plan={plan} />
           </Collapsible>
           <Collapsible title="Model rationale">

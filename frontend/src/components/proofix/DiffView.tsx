@@ -169,13 +169,67 @@ const MARKER: Record<DiffLineKind, string> = {
  * than being mis-tokenized.
  */
 const KEYWORDS = new Set([
-  "def", "return", "if", "elif", "else", "for", "while", "import", "from", "as",
-  "class", "try", "except", "finally", "with", "raise", "pass", "break", "continue",
-  "in", "is", "not", "and", "or", "None", "True", "False", "self", "async", "await",
-  "yield", "lambda", "global", "nonlocal", "assert", "del",
-  "const", "let", "var", "function", "new", "export", "default", "interface", "type",
-  "extends", "implements", "public", "private", "static", "void", "this", "typeof",
-  "instanceof", "null", "undefined", "true", "false", "case", "switch", "throw",
+  "def",
+  "return",
+  "if",
+  "elif",
+  "else",
+  "for",
+  "while",
+  "import",
+  "from",
+  "as",
+  "class",
+  "try",
+  "except",
+  "finally",
+  "with",
+  "raise",
+  "pass",
+  "break",
+  "continue",
+  "in",
+  "is",
+  "not",
+  "and",
+  "or",
+  "None",
+  "True",
+  "False",
+  "self",
+  "async",
+  "await",
+  "yield",
+  "lambda",
+  "global",
+  "nonlocal",
+  "assert",
+  "del",
+  "const",
+  "let",
+  "var",
+  "function",
+  "new",
+  "export",
+  "default",
+  "interface",
+  "type",
+  "extends",
+  "implements",
+  "public",
+  "private",
+  "static",
+  "void",
+  "this",
+  "typeof",
+  "instanceof",
+  "null",
+  "undefined",
+  "true",
+  "false",
+  "case",
+  "switch",
+  "throw",
 ]);
 
 const TOKEN_RE =
@@ -200,7 +254,8 @@ function highlight(text: string): { text: string; cls: string | null }[] {
     else if (m[2] !== undefined) out.push({ text: m[2], cls: "string" });
     else if (m[3] !== undefined) out.push({ text: m[3], cls: "number" });
     else if (m[4] !== undefined) out.push({ text: m[4], cls: "func" });
-    else if (m[5] !== undefined) out.push({ text: m[5], cls: KEYWORDS.has(m[5]) ? "keyword" : null });
+    else if (m[5] !== undefined)
+      out.push({ text: m[5], cls: KEYWORDS.has(m[5]) ? "keyword" : null });
     last = TOKEN_RE.lastIndex;
   }
   if (last < text.length) out.push({ text: text.slice(last), cls: null });
@@ -260,7 +315,9 @@ export function DiffView({ diff }: { diff: string }) {
       <td className="w-10 select-none px-1.5 text-right align-top text-[10px] text-[#6e7681]">
         {line.newNumber ?? ""}
       </td>
-      <td className={`w-4 select-none px-1 text-center align-top font-semibold ${MARKER_CLASS[line.kind]}`}>
+      <td
+        className={`w-4 select-none px-1 text-center align-top font-semibold ${MARKER_CLASS[line.kind]}`}
+      >
         {MARKER[line.kind]}
       </td>
       <td className="whitespace-pre px-2 align-top">

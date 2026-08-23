@@ -63,7 +63,12 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, GitPullRequest } from "lucide-react";
-import type { MergeabilityAxis, MergeabilityDecision, PRType, RepositoryEvidence } from "./mergeabilityTypes";
+import type {
+  MergeabilityAxis,
+  MergeabilityDecision,
+  PRType,
+  RepositoryEvidence,
+} from "./mergeabilityTypes";
 import { GATE_TOPIC, MergeCircuit, NEXT_ACTION, deriveCircuit } from "./MergeCircuit";
 import { getMergeabilityDecision } from "@/lib/runService";
 import type { AgentStatus } from "./data";
@@ -236,7 +241,10 @@ const OUTLETS: PRType[] = ["auto_mergeable", "diff_only", "draft"];
 function MergeOutcome({ decision }: { decision: MergeabilityDecision }) {
   return (
     <div className="space-y-2">
-      <div role="status" className={`rounded-xl border px-4 py-3 ${VERDICT_STYLE[decision.prType]}`}>
+      <div
+        role="status"
+        className={`rounded-xl border px-4 py-3 ${VERDICT_STYLE[decision.prType]}`}
+      >
         <div className="text-sm font-semibold uppercase tracking-wide">
           {VERDICT_LABEL[decision.prType]}
         </div>
@@ -350,10 +358,7 @@ function BlockerEvidenceConnector({ decision }: { decision: MergeabilityDecision
       </div>
       <ul className="mt-1 space-y-0.5 pl-3 font-mono text-[11px]">
         {axes.map((axis, i) => (
-          <li
-            key={axis.name}
-            className={axis.measured ? "text-ink" : "text-status-retry"}
-          >
+          <li key={axis.name} className={axis.measured ? "text-ink" : "text-status-retry"}>
             <span className="text-ink-soft">{i === axes.length - 1 ? "└──" : "├──"}</span>{" "}
             {axis.label} —{" "}
             {axis.measured
@@ -385,7 +390,7 @@ function WhyItStopped({ decision }: { decision: MergeabilityDecision }) {
     headline =
       unmeasured.length > 0
         ? `${joinWithAnd(unmeasured)} ${unmeasured.length === 1 ? "was" : "were"} not measured. A10 cannot establish merge readiness without ${unmeasured.length === 1 ? "that input" : "those inputs"}.`
-        : blocker.detail ?? decision.reviewNote ?? "";
+        : (blocker.detail ?? decision.reviewNote ?? "");
   } else {
     headline = blocker.detail ?? decision.reviewNote ?? "";
   }
@@ -592,7 +597,8 @@ function AffectedFilesDrilldown({ evidence }: { evidence: RepositoryEvidence }) 
               onClick={() => setVisibleModules((v) => v + MODULE_PAGE)}
               className="w-full rounded-md border border-border py-1.5 text-[10.5px] font-medium text-ink-soft transition-colors hover:bg-surface-muted hover:text-ink"
             >
-              Show {Math.min(MODULE_PAGE, remainingModules)} more modules ({remainingModules} remaining)
+              Show {Math.min(MODULE_PAGE, remainingModules)} more modules ({remainingModules}{" "}
+              remaining)
             </button>
           )}
         </div>
@@ -632,14 +638,20 @@ function RepositoryEvidenceStrip({ decision }: { decision: MergeabilityDecision 
 
   const changedCount = evidence.changedFiles.length;
   const moduleCount = evidence.affectedModules.length;
-  const affectedFiles = Array.from(new Set([...evidence.changedFiles, ...evidence.blastScopeFiles])).sort();
+  const affectedFiles = Array.from(
+    new Set([...evidence.changedFiles, ...evidence.blastScopeFiles]),
+  ).sort();
   const proof = decision.proofBundle;
 
   return (
     <div className="space-y-2">
       {heading}
 
-      <div className="flex flex-wrap items-center gap-1.5" role="list" aria-label="Repository evidence counts">
+      <div
+        className="flex flex-wrap items-center gap-1.5"
+        role="list"
+        aria-label="Repository evidence counts"
+      >
         <Chip>
           {evidence.filesAnalyzed === null
             ? "files analyzed — not measured"

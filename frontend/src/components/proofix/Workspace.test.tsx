@@ -28,8 +28,7 @@ import type { PatchFileProvenance } from "./visualizationTypes";
  * directly instead of the (empty) `content` argument RTL passes in.
  */
 function diffLine(text: string) {
-  return (_content: string, element: Element | null) =>
-    element?.textContent?.trim() === text;
+  return (_content: string, element: Element | null) => element?.textContent?.trim() === text;
 }
 
 const navigate = vi.fn();
@@ -572,7 +571,9 @@ describe("Patch panel", () => {
 
     expect(await screen.findByText("pkg/broken.py")).toBeTruthy();
     expect(
-      screen.getByText(/Rejected — no semantic diff — output identical to original after 2 retries/),
+      screen.getByText(
+        /Rejected — no semantic diff — output identical to original after 2 retries/,
+      ),
     ).toBeTruthy();
     // The written file's real diff is still on screen — the reject pile is
     // additive, not a replacement for the successful patch.
@@ -604,7 +605,11 @@ describe("Patch panel", () => {
       "-old tail line\n+new tail line marker\n";
     backendReturns({
       agents: PATCH_AGENTS,
-      patch: { ...BUNDLE, patches: [{ ...BUNDLE.patches[0], file: "pkg/big.py" }], diff_text: longDiff },
+      patch: {
+        ...BUNDLE,
+        patches: [{ ...BUNDLE.patches[0], file: "pkg/big.py" }],
+        diff_text: longDiff,
+      },
     });
 
     render(<Workspace runId="run-patch-long-diff" />);

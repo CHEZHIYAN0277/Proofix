@@ -9,7 +9,7 @@
  *   behaviour that replaced it — an unmeasured report says so.
  * - **B-F05** — a blocked run's decision badge used to borrow the draft tone.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { RunReport } from "./RunReport";
 import { EMPTY_RUN_REPORT } from "./emptyModels";
@@ -125,5 +125,126 @@ describe("Draft reasons", () => {
     render(<RunReport done report={EMPTY_RUN_REPORT} />);
 
     expect(screen.queryByText(/Why this is a draft/)).toBeNull();
+  });
+});
+
+describe("RunReport export and download functionality", () => {
+  it("getRunReportFilename formats and sanitizes repository and runId", async () => {
+    const { getRunReportFilename } = await import("./RunReport");
+
+    expect(
+      getRunReportFilename({
+        ...EMPTY_RUN_REPORT,
+        repository: "demo-vln",
+        shortRunId: "4e55-4457",
+      }),
+    ).toBe("demo-vln-run-report-4e55-4457.json");
+
+    expect(
+      getRunReportFilename({
+        ...EMPTY_RUN_REPORT,
+        repository: "org/repo:name",
+        shortRunId: "run#123",
+      }),
+    ).toBe("org-repo-name-run-report-run-123.json");
+
+    expect(
+      getRunReportFilename({
+        ...EMPTY_RUN_REPORT,
+        repository: "",
+        shortRunId: "",
+        runId: "",
+      }),
+    ).toBe("run-report.json");
+  });
+
+  it("serializeRunReport exports the full report object preserving nested fields", async () => {
+    const { serializeRunReport } = await import("./RunReport");
+    const testReport = {
+      ...EMPTY_RUN_REPORT,
+      repository: "DemoRepo",
+      decision: "draft" as const,
+      rootCause: {
+        summary: "Full analysis summary",
+        statement: "Defect statement",
+        location: "backend/main.py:10",
+        claim: "Claim text",
+        verified: true,
+      },
+      files: ["backend/main.py", "frontend/src/App.tsx"],
+    };
+
+    const json = serializeRunReport(testReport);
+    const parsed = JSON.parse(json);
+
+    expect(parsed.repository).toBe("DemoRepo");
+    expect(parsed.rootCause.summary).toBe("Full analysis summary");
+    expect(parsed.rootCause.verified).toBe(true);
+    expect(parsed.files).toEqual(["backend/main.py", "frontend/src/App.tsx"]);
+  });
+
+  it("copies complete JSON to clipboard and updates button to Copied", async () => {
+    const { fireEvent, act } = await import("@testing-library/react");
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: writeTextMock,
+      },
+    });
+
+    const testReport = {
+      ...EMPTY_RUN_REPORT,
+      repository: "test-repo",
+      shortRunId: "abc-123",
+    };
+
+    render(<RunReport done report={testReport} />);
+
+    const copyBtn = screen.getByRole("button", { name: /Copy JSON/i });
+    expect(copyBtn).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(copyBtn);
+    });
+
+    expect(writeTextMock).toHaveBeenCalledTimes(1);
+    const copiedText = writeTextMock.mock.calls[0][0];
+    const parsed = JSON.parse(copiedText);
+    expect(parsed.repository).toBe("test-repo");
+    expect(parsed.shortRunId).toBe("abc-123");
+
+    // UI should show "Copied"
+    expect(screen.getByText("Copied")).toBeTruthy();
+  });
+
+  it("triggers browser download with sanitized filename and cleans up object URL", async () => {
+    const { fireEvent, act } = await import("@testing-library/react");
+    const createObjectURLMock = vi.fn().mockReturnValue("blob:http://localhost/test-blob");
+    const revokeObjectURLMock = vi.fn();
+    global.URL.createObjectURL = createObjectURLMock;
+    global.URL.revokeObjectURL = revokeObjectURLMock;
+
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    const testReport = {
+      ...EMPTY_RUN_REPORT,
+      repository: "my-app",
+      shortRunId: "xyz-789",
+    };
+
+    render(<RunReport done report={testReport} />);
+
+    const downloadBtn = screen.getByRole("button", { name: /Download/i });
+    expect(downloadBtn).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(downloadBtn);
+    });
+
+    expect(createObjectURLMock).toHaveBeenCalledTimes(1);
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURLMock).toHaveBeenCalledWith("blob:http://localhost/test-blob");
+
+    clickSpy.mockRestore();
   });
 });

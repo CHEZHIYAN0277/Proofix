@@ -274,7 +274,9 @@ describe("MergeabilityDecisionPanel", () => {
     await screen.findByRole("status");
     // Several "Security" labels exist now (the circuit's gate captions, the
     // axis card) — anchor on the axis meter's own accessible name instead.
-    const securityRow = screen.getByLabelText("Security 85, threshold 80").closest("div")!.parentElement!;
+    const securityRow = screen
+      .getByLabelText("Security 85, threshold 80")
+      .closest("div")!.parentElement!;
     expect(within(securityRow).getByText(/≥ 90 for auto-merge ✕/)).toBeTruthy();
     expect(within(securityRow).getByText(/≥ 80 ✓/)).toBeTruthy();
   });
@@ -303,7 +305,9 @@ describe("MergeabilityDecisionPanel", () => {
     expect(screen.getByText(/1 never evaluated/i)).toBeTruthy();
     // Concise, decision-oriented copy — states the fact, never claims a
     // later gate passes or fails.
-    expect(screen.getByText(/never evaluated — not claimed to pass, not claimed to fail/i)).toBeTruthy();
+    expect(
+      screen.getByText(/never evaluated — not claimed to pass, not claimed to fail/i),
+    ).toBeTruthy();
   });
 
   it("shows the two outlets this run did not take alongside the one it did, greyed rather than hidden", async () => {

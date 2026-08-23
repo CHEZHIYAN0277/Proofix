@@ -1393,7 +1393,11 @@ function MergeViz({
           {metrics.map((m, i) => {
             const v = animated[i] ?? 0;
             const reveal = progress > 0.05 + i * 0.16;
-            const tone = !m.measured ? "text-ink-soft" : m.ok ? "text-status-completed" : "text-status-retry";
+            const tone = !m.measured
+              ? "text-ink-soft"
+              : m.ok
+                ? "text-status-completed"
+                : "text-status-retry";
             const display = !m.measured
               ? "Not measured"
               : m.scopeLabel && m.value !== null && v >= m.value - 1

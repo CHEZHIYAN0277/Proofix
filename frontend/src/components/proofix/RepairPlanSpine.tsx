@@ -32,7 +32,8 @@ function basename(path: string): string {
 
 function whyText(step: RepairStep): { label: string; severity: string; measured: boolean } {
   const why = step.why;
-  if (why === null) return { label: "No matching A3 finding or A2 CVE record", severity: "", measured: false };
+  if (why === null)
+    return { label: "No matching A3 finding or A2 CVE record", severity: "", measured: false };
   if (why.kind === "cve") {
     return {
       label: `${why.package ?? "dependency"} — reachable via ${why.reachPath?.join(", ") ?? "an unrecorded path"}`,
@@ -118,7 +119,12 @@ function SeverityMark({ measured, severity }: { measured: boolean; severity: str
   );
 }
 
-function StepDetail({ step, plan, graphPos, modelPos }: {
+function StepDetail({
+  step,
+  plan,
+  graphPos,
+  modelPos,
+}: {
   step: RepairStep;
   plan: RepairPlan;
   graphPos: Map<string, number> | null;
@@ -169,7 +175,9 @@ function StepDetail({ step, plan, graphPos, modelPos }: {
             {graphPos && (
               <>
                 {" · "}Graph position:{" "}
-                <span className="font-mono text-ink">{graphPos.get(step.issueId) ?? "not in overlap"}</span>
+                <span className="font-mono text-ink">
+                  {graphPos.get(step.issueId) ?? "not in overlap"}
+                </span>
               </>
             )}
           </div>
@@ -178,7 +186,9 @@ function StepDetail({ step, plan, graphPos, modelPos }: {
       {showEvidence ? (
         <div className="mt-2 grid grid-cols-1 gap-2 border-t border-border/50 pt-2 sm:grid-cols-2">
           <div>
-            <div className="text-[8px] uppercase tracking-wider text-ink-soft">Acceptance criteria (A5.5)</div>
+            <div className="text-[8px] uppercase tracking-wider text-ink-soft">
+              Acceptance criteria (A5.5)
+            </div>
             {plan.carriedForward!.acceptanceCriteria.length ? (
               <ul className="list-disc pl-3 text-ink">
                 {plan.carriedForward!.acceptanceCriteria.map((c) => (
@@ -190,7 +200,9 @@ function StepDetail({ step, plan, graphPos, modelPos }: {
             )}
           </div>
           <div>
-            <div className="text-[8px] uppercase tracking-wider text-ink-soft">Patch constraints (A5.5)</div>
+            <div className="text-[8px] uppercase tracking-wider text-ink-soft">
+              Patch constraints (A5.5)
+            </div>
             {plan.carriedForward!.patchConstraints.length ? (
               <ul className="list-disc pl-3 text-ink">
                 {plan.carriedForward!.patchConstraints.map((c) => (
@@ -220,7 +232,11 @@ function RepairFocus({ plan }: { plan: RepairPlan }) {
   const consumed = step.isHandoffTarget;
 
   return (
-    <div role="group" aria-label="Repair impact map" className="rounded-md border border-border bg-surface p-4">
+    <div
+      role="group"
+      aria-label="Repair impact map"
+      className="rounded-md border border-border bg-surface p-4"
+    >
       <div className="mx-auto flex max-w-sm flex-col items-center text-center">
         <div className="text-[9px] uppercase tracking-widest text-ink-soft">A6 proposal</div>
         <div className="my-1 h-4 w-px bg-border" aria-hidden />
@@ -231,7 +247,9 @@ function RepairFocus({ plan }: { plan: RepairPlan }) {
             </span>
             {step.issueId}
           </div>
-          <div className="mt-1.5 font-mono text-[10px] text-ink-soft">{step.files.join(", ") || "—"}</div>
+          <div className="mt-1.5 font-mono text-[10px] text-ink-soft">
+            {step.files.join(", ") || "—"}
+          </div>
           <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-ink">
             <span>{why.label}</span>
             <SeverityMark measured={why.measured} severity={why.severity} />
@@ -299,7 +317,11 @@ function RepairSpine({ plan, derived }: { plan: RepairPlan; derived: PlanDerived
   }, [hoveredStep, onSpine]);
 
   return (
-    <div role="group" aria-label="Repair impact map" className="rounded-md border border-border bg-surface p-3">
+    <div
+      role="group"
+      aria-label="Repair impact map"
+      className="rounded-md border border-border bg-surface p-3"
+    >
       <div className="overflow-x-auto">
         <div className="min-w-max">
           {/* file-track header */}
@@ -344,7 +366,10 @@ function RepairSpine({ plan, derived }: { plan: RepairPlan; derived: PlanDerived
               {sharedFiles.map((file) => {
                 const steps = fileToSteps.get(file) ?? [];
                 return (
-                  <div key={file} className="flex flex-wrap items-center gap-1 text-[9px] text-status-retry">
+                  <div
+                    key={file}
+                    className="flex flex-wrap items-center gap-1 text-[9px] text-status-retry"
+                  >
                     <span aria-hidden>⋈</span>
                     <span className="font-semibold uppercase tracking-wider">Shared file</span>
                     <span className="font-mono text-ink">{file}</span>
@@ -363,7 +388,8 @@ function RepairSpine({ plan, derived }: { plan: RepairPlan; derived: PlanDerived
             {onSpine.map((step, i) => {
               const executed = boundaryIdx >= 0 && i <= boundaryIdx;
               const isHovered = hoveredStep === step.issueId;
-              const dimmedByStep = hoveredStep !== null && !isHovered && !hoveredRelated.has(step.issueId);
+              const dimmedByStep =
+                hoveredStep !== null && !isHovered && !hoveredRelated.has(step.issueId);
               const dimmedByFile = hoveredFile !== null && !step.files.includes(hoveredFile);
               const dimmed = dimmedByStep || dimmedByFile;
               const cve = isCveOrigin(step);
@@ -418,7 +444,9 @@ function RepairSpine({ plan, derived }: { plan: RepairPlan; derived: PlanDerived
                       onMouseLeave={() => setHoveredStep(null)}
                       onFocus={() => setHoveredStep(step.issueId)}
                       onBlur={() => setHoveredStep(null)}
-                      onClick={() => setSelectedStep((cur) => (cur === step.issueId ? null : step.issueId))}
+                      onClick={() =>
+                        setSelectedStep((cur) => (cur === step.issueId ? null : step.issueId))
+                      }
                       aria-expanded={selectedStep === step.issueId}
                     >
                       <span
@@ -439,7 +467,9 @@ function RepairSpine({ plan, derived }: { plan: RepairPlan; derived: PlanDerived
                         <span
                           className="shrink-0 text-[9px] text-status-running"
                           title={otherIncoming
-                            .map((e) => `depends on ${e.fromIssue}${e.reason ? ` (${e.reason})` : ""}`)
+                            .map(
+                              (e) => `depends on ${e.fromIssue}${e.reason ? ` (${e.reason})` : ""}`,
+                            )
                             .join("; ")}
                           aria-hidden
                         >
@@ -452,7 +482,10 @@ function RepairSpine({ plan, derived }: { plan: RepairPlan; derived: PlanDerived
                       const active = step.files.includes(file);
                       const shared = sharedFiles.includes(file);
                       return (
-                        <div key={file} className="relative flex h-full items-center justify-center">
+                        <div
+                          key={file}
+                          className="relative flex h-full items-center justify-center"
+                        >
                           <span
                             className="absolute inset-y-0 left-1/2 -translate-x-1/2"
                             style={{
@@ -503,7 +536,9 @@ function RepairSpine({ plan, derived }: { plan: RepairPlan; derived: PlanDerived
                         <span className="text-[8px] font-semibold uppercase tracking-widest text-status-completed">
                           A7 execution boundary — only step {step.position} is consumed
                         </span>
-                        <div className="text-[8px] text-ink-soft/80">{plan.executionAuthority.note}</div>
+                        <div className="text-[8px] text-ink-soft/80">
+                          {plan.executionAuthority.note}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -519,7 +554,7 @@ function RepairSpine({ plan, derived }: { plan: RepairPlan; derived: PlanDerived
         {hoveredFile && (
           <span>
             <span className="font-mono text-ink">{hoveredFile}</span> —{" "}
-            {(fileToSteps.get(hoveredFile)?.length ?? 0)} repair
+            {fileToSteps.get(hoveredFile)?.length ?? 0} repair
             {(fileToSteps.get(hoveredFile)?.length ?? 0) === 1 ? "" : "s"} touch this file
           </span>
         )}
@@ -531,7 +566,10 @@ function RepairSpine({ plan, derived }: { plan: RepairPlan; derived: PlanDerived
           consumed by A7
         </span>
         <span className="flex items-center gap-1">
-          <span className="h-2 w-2 rounded-full border-[1.5px] border-dashed border-ink-soft bg-surface" aria-hidden />
+          <span
+            className="h-2 w-2 rounded-full border-[1.5px] border-dashed border-ink-soft bg-surface"
+            aria-hidden
+          />
           proposed, not executed
         </span>
         <span className="flex items-center gap-1 text-status-running">⤴ dependency</span>
@@ -540,8 +578,11 @@ function RepairSpine({ plan, derived }: { plan: RepairPlan; derived: PlanDerived
 
       {plan.totalDependencyEdges === 0 && onSpine.length > 0 && (
         <p className="mt-2 rounded border border-border/70 bg-surface-muted/20 px-2 py-1.5 text-[9px] text-ink-soft">
-          <span className="font-semibold uppercase tracking-wider text-ink">No dependency edges</span> — the
-          current repair candidates have no dependency edges. This does not mean they carry no risk.
+          <span className="font-semibold uppercase tracking-wider text-ink">
+            No dependency edges
+          </span>{" "}
+          — the current repair candidates have no dependency edges. This does not mean they carry no
+          risk.
         </p>
       )}
 
@@ -606,7 +647,11 @@ function OrderComparison({ plan, derived }: { plan: RepairPlan; derived: PlanDer
   const maxIdx = Math.max(1, rows.length - 1);
 
   return (
-    <div role="group" aria-label="Order comparison" className="rounded-md border border-border bg-surface p-3">
+    <div
+      role="group"
+      aria-label="Order comparison"
+      className="rounded-md border border-border bg-surface p-3"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[9px] font-semibold uppercase tracking-wider text-ink-soft">
           Model order vs. dependency order
@@ -618,8 +663,8 @@ function OrderComparison({ plan, derived }: { plan: RepairPlan; derived: PlanDer
         </div>
       </div>
       <p className="mt-0.5 text-[9px] text-ink-soft">
-        Dependency order is A6&apos;s own <code className="font-mono">topological_execution_order</code> —
-        not recomputed here.
+        Dependency order is A6&apos;s own{" "}
+        <code className="font-mono">topological_execution_order</code> — not recomputed here.
       </p>
 
       <div className="mt-2" style={{ height: Math.max(90, rows.length * 22) }}>
@@ -649,28 +694,42 @@ function OrderComparison({ plan, derived }: { plan: RepairPlan; derived: PlanDer
             })}
           </svg>
           <div className="absolute left-0 top-0 flex h-full w-[38%] flex-col justify-between py-1">
-            <div className="mb-0.5 text-[8px] uppercase tracking-widest text-ink-soft/70">Model order</div>
+            <div className="mb-0.5 text-[8px] uppercase tracking-widest text-ink-soft/70">
+              Model order
+            </div>
             {rows.map((r) => (
               <div
                 key={`ml-${r.issueId}`}
                 className="truncate rounded border border-border bg-surface px-1 font-mono text-[9px] text-ink"
-                style={{ position: "absolute", top: `${ribbonY(r.modelIndex, maxIdx)}%`, transform: "translateY(-50%)" }}
+                style={{
+                  position: "absolute",
+                  top: `${ribbonY(r.modelIndex, maxIdx)}%`,
+                  transform: "translateY(-50%)",
+                }}
               >
                 {r.modelIndex + 1}. {r.issueId}
               </div>
             ))}
           </div>
           <div className="absolute right-0 top-0 flex h-full w-[38%] flex-col items-end justify-between py-1 text-right">
-            <div className="mb-0.5 text-[8px] uppercase tracking-widest text-ink-soft/70">Graph order</div>
+            <div className="mb-0.5 text-[8px] uppercase tracking-widest text-ink-soft/70">
+              Graph order
+            </div>
             {rows.map((r) => {
               const agrees = r.modelIndex === r.graphIndex;
               return (
                 <div
                   key={`gr-${r.issueId}`}
                   className={`truncate rounded border px-1 font-mono text-[9px] ${
-                    agrees ? "border-border bg-surface text-ink" : "border-status-retry/40 bg-status-retry-bg/40 text-status-retry"
+                    agrees
+                      ? "border-border bg-surface text-ink"
+                      : "border-status-retry/40 bg-status-retry-bg/40 text-status-retry"
                   }`}
-                  style={{ position: "absolute", top: `${ribbonY(r.graphIndex, maxIdx)}%`, transform: "translateY(-50%)" }}
+                  style={{
+                    position: "absolute",
+                    top: `${ribbonY(r.graphIndex, maxIdx)}%`,
+                    transform: "translateY(-50%)",
+                  }}
                 >
                   {r.graphIndex + 1}. {r.issueId}
                 </div>
@@ -708,7 +767,9 @@ export function PlanTruthPanel({ plan, derived }: { plan: RepairPlan; derived: P
       aria-label="Plan truth"
       className="w-full shrink-0 rounded-md border border-border bg-surface p-3 sm:w-56"
     >
-      <div className="text-[9px] font-semibold uppercase tracking-wider text-ink-soft">Plan truth</div>
+      <div className="text-[9px] font-semibold uppercase tracking-wider text-ink-soft">
+        Plan truth
+      </div>
       <dl className="mt-2 space-y-1.5 text-[11px]">
         {rows.map(([label, value]) => (
           <div key={label} className="flex items-center justify-between gap-2">

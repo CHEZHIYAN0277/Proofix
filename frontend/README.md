@@ -44,7 +44,7 @@ In dev, Vite proxies `/api` and `/ws` to the FastAPI backend, so the browser see
 
 This project runs a FastAPI backend and a Vite frontend. The frontend can run standalone (mock data) or connect to the backend (`VITE_DATA_SOURCE=api`). Follow these steps to run both locally.
 
-1) Backend (Python)
+1. Backend (Python)
 
 ```bash
 # create a virtual environment and activate it
@@ -68,7 +68,7 @@ docker compose up -d
 .venv/bin/uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-2) Frontend (Node)
+2. Frontend (Node)
 
 ```bash
 cd frontend
@@ -92,7 +92,7 @@ curl -X POST http://127.0.0.1:8000/runs \
   -d '{"repo_path": "vulnapi"}'
 ```
 
-If you want, I can also add a short consolidated run section to the root `README.md` — say if you'd like a single place with the exact commands. 
+If you want, I can also add a short consolidated run section to the root `README.md` — say if you'd like a single place with the exact commands.
 
 ## Architecture
 

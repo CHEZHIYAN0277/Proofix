@@ -47,7 +47,10 @@ const BAND_TOP = 10;
 const BAND_HEIGHT = 80;
 
 // Midpoint between the hop-2 and hop-3 columns — see module doc for the decay math this marks.
-const CONTAINMENT_X = { backward: (HOP_X.backward[2] + HOP_X.backward[3]) / 2, forward: (HOP_X.forward[2] + HOP_X.forward[3]) / 2 };
+const CONTAINMENT_X = {
+  backward: (HOP_X.backward[2] + HOP_X.backward[3]) / 2,
+  forward: (HOP_X.forward[2] + HOP_X.forward[3]) / 2,
+};
 
 const REAL_EDGE = "var(--color-status-completed)";
 const RISKY_EDGE = "var(--color-status-retry)";
@@ -119,12 +122,19 @@ function placeColumn(group: ColumnGroup): Placed[] {
   return files.map((file, i) => {
     const slot = Math.min(i, slots - 1);
     const y = BAND_TOP + ((slot + 0.5) / slots) * BAND_HEIGHT;
-    return { file, x: group.x, y, collapsed: i >= MAX_VISIBLE_PER_COLUMN - 1 && files.length > MAX_VISIBLE_PER_COLUMN };
+    return {
+      file,
+      x: group.x,
+      y,
+      collapsed: i >= MAX_VISIBLE_PER_COLUMN - 1 && files.length > MAX_VISIBLE_PER_COLUMN,
+    };
   });
 }
 
 function directionLabel(direction: "backward" | "forward"): string {
-  return direction === "backward" ? "upstream — the origin reads this" : "downstream — reads the origin";
+  return direction === "backward"
+    ? "upstream — the origin reads this"
+    : "downstream — reads the origin";
 }
 
 export function BlastRadiusMap({
@@ -179,11 +189,19 @@ export function BlastRadiusMap({
   );
 
   return (
-    <div role="group" aria-label="Blast radius corridor map" className="rounded-xl border border-border bg-surface-muted/20 p-3">
+    <div
+      role="group"
+      aria-label="Blast radius corridor map"
+      className="rounded-xl border border-border bg-surface-muted/20 p-3"
+    >
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-3 text-[9px] uppercase tracking-wider text-ink-soft">
           <span className="flex items-center gap-1.5">
-            <span className="h-[2px] w-3 rounded-full" style={{ backgroundColor: REAL_EDGE }} aria-hidden />
+            <span
+              className="h-[2px] w-3 rounded-full"
+              style={{ backgroundColor: REAL_EDGE }}
+              aria-hidden
+            />
             precise import edge
           </span>
           <span className="flex items-center gap-1.5">
@@ -208,7 +226,12 @@ export function BlastRadiusMap({
       </div>
 
       <div className="relative min-h-[13rem] lg:min-h-[15rem]">
-        <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
+        <svg
+          className="absolute inset-0 h-full w-full"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          aria-hidden
+        >
           {/* containment line — see module doc for the 0.85^hop math this marks */}
           {hasBackward && (
             <line
@@ -238,10 +261,15 @@ export function BlastRadiusMap({
           {/* propagation edges: origin → hop 1 → hop 2 → hop 3, exactly the recorded path */}
           {edges.map((p) => {
             const parent =
-              p.file.reachedVia === impact.origin?.resolvedPath || p.file.reachedVia === impact.origin?.normalizedPath
+              p.file.reachedVia === impact.origin?.resolvedPath ||
+              p.file.reachedVia === impact.origin?.normalizedPath
                 ? ORIGIN_XY
-                : (p.file.reachedVia ? placedByPath.get(p.file.reachedVia) : undefined) ?? ORIGIN_XY;
-            const dimmed = hoveredPath !== null && hoveredPath !== p.file.path && hoveredPath !== p.file.reachedVia;
+                : ((p.file.reachedVia ? placedByPath.get(p.file.reachedVia) : undefined) ??
+                  ORIGIN_XY);
+            const dimmed =
+              hoveredPath !== null &&
+              hoveredPath !== p.file.path &&
+              hoveredPath !== p.file.reachedVia;
             const risky = p.file.edgeBasis === "name_contains";
             return (
               <path
@@ -300,12 +328,23 @@ export function BlastRadiusMap({
         {/* origin node */}
         <div
           className="absolute -translate-x-1/2 -translate-y-1/2 rounded-md border px-2 py-1 shadow-sm"
-          style={{ left: `${ORIGIN_XY.x}%`, top: `${ORIGIN_XY.y}%`, borderColor: ORIGIN_COLOR, backgroundColor: "var(--color-surface)" }}
+          style={{
+            left: `${ORIGIN_XY.x}%`,
+            top: `${ORIGIN_XY.y}%`,
+            borderColor: ORIGIN_COLOR,
+            backgroundColor: "var(--color-surface)",
+          }}
         >
-          <div className="whitespace-nowrap text-center text-[8px] font-semibold uppercase tracking-wider" style={{ color: ORIGIN_COLOR }}>
+          <div
+            className="whitespace-nowrap text-center text-[8px] font-semibold uppercase tracking-wider"
+            style={{ color: ORIGIN_COLOR }}
+          >
             origin
           </div>
-          <div className="max-w-[7rem] truncate font-mono text-[9px] font-semibold text-ink" title={impact.origin?.resolvedPath ?? ""}>
+          <div
+            className="max-w-[7rem] truncate font-mono text-[9px] font-semibold text-ink"
+            title={impact.origin?.resolvedPath ?? ""}
+          >
             {(impact.origin?.resolvedPath ?? impact.origin?.normalizedPath ?? "").split("/").pop()}
           </div>
         </div>
@@ -339,11 +378,19 @@ export function BlastRadiusMap({
                 opacity: dimmed ? 0.35 : 1,
               }}
               aria-label={`${p.file.path}, hop ${p.file.hopCount}, ${directionLabel(direction)}, ${
-                p.file.propagationConfidence !== null ? `${Math.round(p.file.propagationConfidence * 100)}% confidence` : "confidence not measured"
+                p.file.propagationConfidence !== null
+                  ? `${Math.round(p.file.propagationConfidence * 100)}% confidence`
+                  : "confidence not measured"
               }${pinned ? ", pinned into auto-patch scope" : ""}`}
             >
               <span className="flex items-center gap-1">
-                {pinned && <Pin className="h-2.5 w-2.5 shrink-0" style={{ color: "var(--color-status-retry)" }} aria-hidden />}
+                {pinned && (
+                  <Pin
+                    className="h-2.5 w-2.5 shrink-0"
+                    style={{ color: "var(--color-status-retry)" }}
+                    aria-hidden
+                  />
+                )}
                 <span className="max-w-[6rem] truncate font-mono text-[9px] text-ink">
                   {p.file.path.split("/").pop()}
                 </span>
@@ -357,7 +404,12 @@ export function BlastRadiusMap({
           <div
             key={chip.key}
             className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-dashed px-1.5 py-0.5 text-center"
-            style={{ left: `${chip.x}%`, top: `${chip.y}%`, borderColor: "var(--color-border)", backgroundColor: "var(--color-surface-muted)" }}
+            style={{
+              left: `${chip.x}%`,
+              top: `${chip.y}%`,
+              borderColor: "var(--color-border)",
+              backgroundColor: "var(--color-surface-muted)",
+            }}
             title={`${chip.count} more file${chip.count === 1 ? "" : "s"} at this hop — see the scope ledger below`}
           >
             <span className="font-mono text-[9px] text-ink-soft">+{chip.count}</span>

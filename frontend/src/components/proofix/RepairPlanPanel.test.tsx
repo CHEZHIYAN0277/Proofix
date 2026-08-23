@@ -109,7 +109,12 @@ describe("RepairPlanPanel", () => {
   });
 
   it("shows an honest empty state instead of an empty DAG", async () => {
-    const empty: RepairPlan = { ...clone(PLAN), steps: [], conflictBatches: [], totalDependencyEdges: 0 };
+    const empty: RepairPlan = {
+      ...clone(PLAN),
+      steps: [],
+      conflictBatches: [],
+      totalDependencyEdges: 0,
+    };
     getRepairPlan.mockResolvedValue(empty);
     render(<RepairPlanPanel runId="run-1" />);
     expect(await screen.findByText(/no repair plan/i)).toBeTruthy();
@@ -118,7 +123,12 @@ describe("RepairPlanPanel", () => {
   });
 
   it("does not render secondary sections when there are no steps", async () => {
-    const empty: RepairPlan = { ...clone(PLAN), steps: [], conflictBatches: [], totalDependencyEdges: 0 };
+    const empty: RepairPlan = {
+      ...clone(PLAN),
+      steps: [],
+      conflictBatches: [],
+      totalDependencyEdges: 0,
+    };
     getRepairPlan.mockResolvedValue(empty);
     render(<RepairPlanPanel runId="run-1" />);
     await screen.findByText(/no repair plan/i);
