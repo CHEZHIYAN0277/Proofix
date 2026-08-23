@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,16 +8,23 @@ from backend.api.routes import knowledge, learning, runs, security, speech, ui, 
 from backend.config import Settings, get_settings
 from backend.state.redis_store import create_redis_client
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.settings = settings
-    app.state.redis = await create_redis_client(settings)
+    try:
+        app.state.redis = await create_redis_client(settings)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("redis_connect_failed_at_startup", extra={"error": str(exc)})
+        app.state.redis = None
     try:
         yield
     finally:
-        await app.state.redis.aclose()
+        if app.state.redis is not None:
+            await app.state.redis.aclose()
 
 
 def create_app() -> FastAPI:
