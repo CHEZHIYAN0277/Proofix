@@ -152,3 +152,27 @@ async def test_a2_reports_no_manifest_when_requirements_txt_is_absent(redis_stor
     assert state.cve_report["ecosystem"] is None
     assert state.cve_report["total_dependencies"] == 0
     assert state.cve_report["findings"] == []
+
+
+@pytest.mark.asyncio
+async def test_a2_falls_back_to_pyproject_when_requirements_txt_is_absent(redis_store, tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        """
+[project]
+name = "demo"
+dependencies = [
+  "urllib3==1.26.5",
+  "requests>=2.31.0",
+]
+"""
+    )
+    agent = A2DependencyAnalyzerAgent(redis_store, Settings(stub_mode=True))
+    state = RunStateModel(run_id="a2-6", repo_path=str(tmp_path), repo_clone_path=str(tmp_path))
+
+    with patch("backend.agents.a2_dependency_analyzer.query_osv", side_effect=_osv):
+        await agent.run(state)
+
+    assert state.cve_report["manifest"] == "pyproject.toml"
+    assert state.cve_report["ecosystem"] == "PyPI"
+    assert state.cve_report["total_dependencies"] == 2
+    assert len(state.cve_report["findings"]) == 1

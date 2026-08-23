@@ -2,7 +2,11 @@ from pathlib import Path
 
 from backend.agents.base import AgentBase
 from backend.models.cve import CVERecord, CVEReachabilityReport
-from backend.services.osv_client import parse_requirements, query_osv
+from backend.services.osv_client import (
+    parse_pyproject_dependencies,
+    parse_requirements,
+    query_osv,
+)
 from backend.services.sig_helpers import (
     get_sig_or_defaults,
     is_module_reachable,
@@ -22,8 +26,7 @@ class A2DependencyAnalyzerAgent(AgentBase):
         sig_data = await self.store.get_json(state.run_id, "sig")
         sig, _ = get_sig_or_defaults(sig_data)
 
-        requirements = repo / "requirements.txt"
-        packages = parse_requirements(requirements)
+        manifest_name, ecosystem, packages = self._resolve_packages(repo)
         findings: list[CVERecord] = []
         critical_queue: list[str] = []
 
@@ -63,8 +66,8 @@ class A2DependencyAnalyzerAgent(AgentBase):
             findings=findings,
             critical_queue=critical_queue,
             total_dependencies=len(packages),
-            manifest="requirements.txt" if requirements.exists() else None,
-            ecosystem="PyPI" if requirements.exists() else None,
+            manifest=manifest_name,
+            ecosystem=ecosystem,
         )
         report_dict = report.model_dump(mode="json")
         await self.store.set_json(state.run_id, "cve", report_dict)
@@ -80,3 +83,15 @@ class A2DependencyAnalyzerAgent(AgentBase):
             },
         )
         return state
+
+    @staticmethod
+    def _resolve_packages(repo: Path) -> tuple[str | None, str | None, list[tuple[str, str]]]:
+        requirements = repo / "requirements.txt"
+        if requirements.exists():
+            return "requirements.txt", "PyPI", parse_requirements(requirements)
+
+        pyproject = repo / "pyproject.toml"
+        if pyproject.exists():
+            return "pyproject.toml", "PyPI", parse_pyproject_dependencies(pyproject)
+
+        return None, None, []
