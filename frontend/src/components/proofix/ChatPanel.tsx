@@ -97,7 +97,8 @@ export function ChatPanel({
     mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
     mediaStreamRef.current = null;
     mediaRecorderRef.current = null;
-    audioChunksRef.current = [];
+    // NOTE: audioChunksRef is NOT cleared here — onstop reads it after this runs.
+    // Chunks are cleared at the start of each new recording session instead.
   }, []);
 
   // ── Cleanup on unmount ───────────────────────────────────────────────
@@ -107,14 +108,17 @@ export function ChatPanel({
     };
   }, [stopMicrophone]);
 
-  // ── Existing send (unchanged) ────────────────────────────────────────
-  const send = async (text: string) => {
-    const q = text.trim();
-    if (!q) return;
-    setInput("");
-    setMode("idle");
-    await Promise.resolve(answerer(q));
-  };
+  // ── Existing send (unchanged logic, stable ref via useCallback) ──────
+  const send = useCallback(
+    async (text: string) => {
+      const q = text.trim();
+      if (!q) return;
+      setInput("");
+      setMode("idle");
+      await Promise.resolve(answerer(q));
+    },
+    [answerer],
+  );
 
   // ── Submit transcript through the existing send() path ───────────────
   const submitTranscript = useCallback(
@@ -131,10 +135,10 @@ export function ChatPanel({
         console.error("[ChatPanel] STT error:", err);
       } finally {
         setVoiceState("idle");
+        audioChunksRef.current = [];
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [answerer],
+    [send],
   );
 
   // ── Mic button handler ───────────────────────────────────────────────
@@ -188,8 +192,9 @@ export function ChatPanel({
     };
 
     recorder.onstop = () => {
+      // Snapshot chunks into a local variable FIRST, then clean up the stream.
+      const chunks = [...audioChunksRef.current];
       stopMicrophone();
-      const chunks = audioChunksRef.current;
       const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
       if (blob.size === 0) {
         setVoiceError("No audio was recorded. Please try again.");
