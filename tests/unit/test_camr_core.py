@@ -1,6 +1,7 @@
 """Unit tests for CAMR core strengthening (A4/A5/A6 services)."""
 
 from backend.models.cve import CVERecord
+from backend.models.fix_dag import DependencyEdge, FixNode
 from backend.models.sig import FileNode, SemanticIntentGraph
 from backend.services.blast_traversal import resolve_origins, traverse_multi_origin
 from backend.services.fix_dag_builder import (
@@ -141,3 +142,18 @@ def test_detect_conflict_batches():
     )
     batches = detect_conflict_batches(nodes)
     assert batches == [["f1", "f2"]]
+
+
+def test_topological_execution_order_falls_back_when_dependencies_cycle():
+    nodes = [
+        FixNode(issue_id="f-auth", files=["app/auth.py"]),
+        FixNode(issue_id="cve-CVE-9", files=["app/config.py"]),
+    ]
+    edges = [
+        DependencyEdge(from_issue="f-auth", to_issue="cve-CVE-9", reason="import_graph:a"),
+        DependencyEdge(from_issue="cve-CVE-9", to_issue="f-auth", reason="cve_reachability:b"),
+    ]
+
+    order = topological_execution_order(nodes, edges)
+
+    assert order == ["cve-CVE-9", "f-auth"]

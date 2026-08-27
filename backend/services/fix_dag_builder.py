@@ -127,7 +127,10 @@ def topological_execution_order(nodes: list[FixNode], edges: list[DependencyEdge
 
     try:
         return list(nx.topological_sort(graph))
-    except nx.NetworkXError:
+    except nx.NetworkXUnfeasible:
+        # Import-derived dependencies can legitimately cycle. A6 still needs a
+        # stable execution order for the rest of the pipeline, so degrade to
+        # the documented CVE-first fallback instead of failing the whole run.
         cve_first = [n.issue_id for n in nodes if n.issue_id.startswith("cve-")]
         rest = [n.issue_id for n in nodes if not n.issue_id.startswith("cve-")]
         return cve_first + rest
