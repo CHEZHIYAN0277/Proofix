@@ -183,6 +183,14 @@ describe("BlastRadiusPanel", () => {
     expect(within(direct).queryByText("vulnapi/tests/test_routes.py")).toBeNull();
   });
 
+  it("draws every recorded traversal edge, including origin to hop-1 edges", async () => {
+    getBlastImpact.mockResolvedValue(clone(IMPACT));
+    render(<BlastRadiusPanel runId="run-1" />);
+
+    await screen.findByRole("group", { name: /blast radius corridor map/i });
+    expect(screen.getByTestId("blast-corridor-edges").querySelectorAll("path")).toHaveLength(3);
+  });
+
   it("keeps transitive impact separate and collapsed by default", async () => {
     getBlastImpact.mockResolvedValue(clone(IMPACT));
     render(<BlastRadiusPanel runId="run-1" />);
@@ -262,6 +270,19 @@ describe("BlastRadiusPanel", () => {
     const inspector = screen.getByRole("group", { name: /details for vulnapi\/middleware\.py/i });
     expect(within(inspector).getByText("vulnapi/auth.py")).toBeTruthy(); // reached via
     expect(within(inspector).getByText(/precise match/i)).toBeTruthy();
+  });
+
+  it("shows a readable propagation path for the selected focus file", async () => {
+    getBlastImpact.mockResolvedValue(clone(IMPACT));
+    render(<BlastRadiusPanel runId="run-1" />);
+
+    const direct = await screen.findByRole("group", { name: /direct impact/i });
+    await userEvent.click(within(direct).getByText("vulnapi/routes.py"));
+
+    const readout = screen.getByRole("group", { name: /current propagation path/i });
+    expect(within(readout).getByText(/reached in the downstream lane/i)).toBeTruthy();
+    expect(within(readout).getByText("auth.py")).toBeTruthy();
+    expect(within(readout).getByText("routes.py")).toBeTruthy();
   });
 
   it("filters the ledger to A3-flagged files only", async () => {

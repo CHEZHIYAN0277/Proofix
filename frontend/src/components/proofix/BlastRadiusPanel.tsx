@@ -67,6 +67,68 @@ function directoryOf(path: string): string {
   return idx === -1 ? "(root)" : path.slice(0, idx);
 }
 
+function fileName(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx === -1 ? path : path.slice(idx + 1);
+}
+
+function originPathOf(impact: BlastImpact): string | null {
+  return impact.origin?.resolvedPath ?? impact.origin?.normalizedPath ?? impact.origins[0] ?? null;
+}
+
+function rankByPriorityThenConfidence(a: BlastScopeFile, b: BlastScopeFile): number {
+  const priority = (b.priorityScore ?? -1) - (a.priorityScore ?? -1);
+  if (priority !== 0) return priority;
+  const confidence = (b.propagationConfidence ?? -1) - (a.propagationConfidence ?? -1);
+  if (confidence !== 0) return confidence;
+  return (a.hopCount ?? 99) - (b.hopCount ?? 99);
+}
+
+function topFile(files: BlastScopeFile[]): BlastScopeFile | null {
+  if (files.length === 0) return null;
+  return [...files].sort(rankByPriorityThenConfidence)[0] ?? null;
+}
+
+function buildPathChain(
+  file: BlastScopeFile,
+  scopeByPath: Map<string, BlastScopeFile>,
+  originPath: string | null,
+): string[] {
+  const chain: string[] = [];
+  let cursor: BlastScopeFile | undefined = file;
+
+  while (cursor) {
+    chain.unshift(cursor.path);
+    if (!cursor.reachedVia) break;
+    cursor = scopeByPath.get(cursor.reachedVia);
+  }
+
+  if (originPath && chain[0] !== originPath) chain.unshift(originPath);
+  return chain;
+}
+
+function directionSummary(file: BlastScopeFile): string {
+  const up = file.directions.includes("backward");
+  const down = file.directions.includes("forward");
+  if (up && down) return "reached from both upstream and downstream lanes";
+  if (up) return "reached in the upstream lane";
+  if (down) return "reached in the downstream lane";
+  return "direction not measured";
+}
+
+function containmentSummary(file: BlastScopeFile): string {
+  if (file.hopCount === null) return "containment not measured";
+  if (file.hopCount >= 3) return "past the containment line";
+  return "inside the containment line";
+}
+
+type FocusPreset = {
+  id: string;
+  label: string;
+  detail: string;
+  file: BlastScopeFile;
+};
+
 // ------------------------------------------------------------------ chrome
 
 function ErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
@@ -100,6 +162,114 @@ function Flow() {
   return (
     <div className="flex justify-center" aria-hidden>
       <ArrowDown className="h-3.5 w-3.5 text-ink-soft/60" />
+    </div>
+  );
+}
+
+function OverviewTile({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-surface-muted/20 p-3">
+      <div className="text-[10px] uppercase tracking-[0.22em] text-ink-soft">{label}</div>
+      <div className="mt-1 font-mono text-lg font-semibold text-ink">{value}</div>
+      <p className="mt-1 text-[10px] text-ink-soft">{detail}</p>
+    </div>
+  );
+}
+
+function CorridorOverview({
+  directCount,
+  transitiveCount,
+  beyondContainmentCount,
+  flaggedCount,
+  denseMode,
+}: {
+  directCount: number;
+  transitiveCount: number;
+  beyondContainmentCount: number;
+  flaggedCount: number;
+  denseMode: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+      <OverviewTile
+        label="Immediate Reach"
+        value={String(directCount)}
+        detail="Hop 1 files directly connected to the origin."
+      />
+      <OverviewTile
+        label="Outer Spread"
+        value={String(transitiveCount)}
+        detail="Hop 2-3 files that extend consequence farther from the origin."
+      />
+      <OverviewTile
+        label="Past Containment"
+        value={String(beyondContainmentCount)}
+        detail="Files beyond the visual containment line; these need more care to reason about."
+      />
+      <OverviewTile
+        label="Correlated Warnings"
+        value={String(flaggedCount)}
+        detail={
+          denseMode
+            ? "A3 findings inside a dense corridor; use the picks below to inspect the sharpest branches."
+            : "A3 findings inside the current corridor; these correlate with the propagation path."
+        }
+      />
+    </div>
+  );
+}
+
+function FocusPresets({
+  options,
+  selectedPath,
+  onSelect,
+}: {
+  options: FocusPreset[];
+  selectedPath: string | null;
+  onSelect: (file: BlastScopeFile) => void;
+}) {
+  if (options.length === 0) return null;
+
+  return (
+    <div
+      role="group"
+      aria-label="Corridor focus picks"
+      className="rounded-xl border border-border bg-surface-muted/20 p-3"
+    >
+      <SectionLabel>Guided picks</SectionLabel>
+      <div className="flex flex-wrap gap-2">
+        {options.map((option) => {
+          const active = selectedPath === option.file.path;
+          return (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => onSelect(option.file)}
+              className="rounded-full border px-3 py-1.5 text-left transition-colors hover:bg-surface"
+              style={{
+                borderColor: active ? "var(--color-status-running)" : "var(--color-border)",
+                backgroundColor: active ? "var(--color-status-running-bg)" : "var(--color-surface)",
+              }}
+            >
+              <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-soft">
+                {option.label}
+              </span>
+              <span className="mt-0.5 block font-mono text-[11px] text-ink">
+                {fileName(option.file.path)}
+              </span>
+              <span className="mt-0.5 block text-[10px] text-ink-soft">{option.detail}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -435,6 +605,94 @@ function PatchAuthorityStrip({ impact }: { impact: BlastImpact }) {
   );
 }
 
+function PropagationReadout({
+  impact,
+  focus,
+}: {
+  impact: BlastImpact;
+  focus: BlastScopeFile | null;
+}) {
+  const scopeByPath = useMemo(() => {
+    const index = new Map<string, BlastScopeFile>();
+    for (const file of impact.scope) index.set(file.path, file);
+    return index;
+  }, [impact.scope]);
+
+  const originPath = originPathOf(impact);
+  if (!focus) {
+    return (
+      <div
+        role="group"
+        aria-label="Current propagation path"
+        className="rounded-xl border border-border bg-surface-muted/20 p-3"
+      >
+        <SectionLabel>Current propagation path</SectionLabel>
+        <p className="text-[11px] text-ink-soft">
+          Select a file in the corridor or ledger to inspect the exact path A5 used to reach it.
+        </p>
+      </div>
+    );
+  }
+
+  const chain = buildPathChain(focus, scopeByPath, originPath);
+
+  return (
+    <div
+      role="group"
+      aria-label="Current propagation path"
+      className="rounded-xl border border-border bg-surface-muted/20 p-3"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <SectionLabel>Current propagation path</SectionLabel>
+        <div className="font-mono text-[10px] text-ink-soft">
+          hop {focus.hopCount ?? "?"} · {focus.propagationConfidence !== null ? pct(focus.propagationConfidence) : "confidence not measured"}
+        </div>
+      </div>
+
+      <p className="text-[11px] text-ink-soft">
+        <span className="font-mono text-ink">{focus.path}</span> was {directionSummary(focus)} and
+        sits {containmentSummary(focus)}.
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {chain.map((path, index) => (
+          <div key={`${path}:${index}`} className="flex items-center gap-2">
+            <span className="rounded-lg border border-border bg-surface px-2.5 py-1 font-mono text-[11px] text-ink">
+              {fileName(path)}
+            </span>
+            {index < chain.length - 1 && <ArrowRight className="h-3 w-3 text-ink-soft" aria-hidden />}
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2 text-[10px]">
+        <span className="rounded-full border border-border bg-surface px-2 py-1 text-ink-soft">
+          {focus.edgeBasis === "name_contains"
+            ? "Edge basis: name-matched only"
+            : focus.edgeBasis === "resolved_suffix"
+              ? "Edge basis: precise import match"
+              : "Edge basis: origin"}
+        </span>
+        {focus.hasStaticFinding && (
+          <span className="rounded-full border border-status-retry/40 bg-status-retry-bg px-2 py-1 text-status-retry">
+            A3 independently flagged this file
+          </span>
+        )}
+        {focus.autoPatchable && (
+          <span className="rounded-full border border-status-running/40 bg-status-running-bg px-2 py-1 text-status-running">
+            inside auto-patch scope
+          </span>
+        )}
+        {focus.humanReviewRequired && (
+          <span className="rounded-full border border-status-blocked/40 bg-status-blocked-bg px-2 py-1 text-status-blocked">
+            human review required
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // -------------------------------------------------------------- inspector
 
 function Inspector({ file, onClose }: { file: BlastScopeFile; onClose: () => void }) {
@@ -609,11 +867,79 @@ export function BlastRadiusPanel({ runId, status }: { runId: string; status?: Ag
     };
   }, [runId, attempt, status]);
 
+  useEffect(() => {
+    if (!impact) {
+      setSelected(null);
+      return;
+    }
+    if (selected && !impact.scope.some((file) => file.path === selected.path)) {
+      setSelected(null);
+    }
+  }, [impact, selected]);
+
   const direct = useMemo(() => (impact?.scope ?? []).filter((f) => f.hopCount === 1), [impact]);
   const transitive = useMemo(
     () => (impact?.scope ?? []).filter((f) => (f.hopCount ?? 0) >= 2),
     [impact],
   );
+  const denseMode = useMemo(
+    () => (impact?.scope ?? []).filter((f) => (f.hopCount ?? 0) >= 1).length > 12,
+    [impact],
+  );
+  const beyondContainmentCount = useMemo(
+    () => (impact?.scope ?? []).filter((f) => (f.hopCount ?? 0) >= 3).length,
+    [impact],
+  );
+  const flaggedCount = useMemo(
+    () => (impact?.scope ?? []).filter((f) => f.hasStaticFinding).length,
+    [impact],
+  );
+  const focusPresets = useMemo(() => {
+    if (!impact) return [];
+
+    const candidates = (impact.scope ?? []).filter((file) => (file.hopCount ?? 0) >= 1);
+    const options: FocusPreset[] = [];
+    const seen = new Set<string>();
+    const add = (id: string, label: string, detail: string, file: BlastScopeFile | null) => {
+      if (!file || seen.has(file.path)) return;
+      seen.add(file.path);
+      options.push({ id, label, detail, file });
+    };
+
+    add(
+      "most-exposed",
+      "Most exposed",
+      "Highest priority branch in the current scope.",
+      topFile(candidates),
+    );
+    add(
+      "upstream",
+      "Upstream anchor",
+      "Best entry point into possible cause surface.",
+      topFile(candidates.filter((file) => file.directions.includes("backward"))),
+    );
+    add(
+      "downstream",
+      "Downstream fallout",
+      "Best entry point into possible consumer fallout.",
+      topFile(candidates.filter((file) => file.directions.includes("forward"))),
+    );
+    add(
+      "farthest",
+      "Farthest reach",
+      "Longest propagation chain in the measured corridor.",
+      topFile(
+        [...candidates].sort((a, b) => {
+          const hop = (b.hopCount ?? -1) - (a.hopCount ?? -1);
+          return hop !== 0 ? hop : rankByPriorityThenConfidence(a, b);
+        }),
+      ),
+    );
+
+    return options;
+  }, [impact]);
+  const defaultFocus = useMemo(() => focusPresets[0]?.file ?? null, [focusPresets]);
+  const focusFile = selected ?? defaultFocus;
 
   if (loading) {
     return (
@@ -671,7 +997,27 @@ export function BlastRadiusPanel({ runId, status }: { runId: string; status?: Ag
 
       {impact.scope.length > 0 && (
         <>
-          <BlastRadiusMap impact={impact} onSelect={setSelected} />
+          <CorridorOverview
+            directCount={direct.length}
+            transitiveCount={transitive.length}
+            beyondContainmentCount={beyondContainmentCount}
+            flaggedCount={flaggedCount}
+            denseMode={denseMode}
+          />
+
+          <FocusPresets
+            options={focusPresets}
+            selectedPath={focusFile?.path ?? null}
+            onSelect={setSelected}
+          />
+
+          <BlastRadiusMap
+            impact={impact}
+            onSelect={setSelected}
+            selectedPath={focusFile?.path ?? null}
+          />
+
+          <PropagationReadout impact={impact} focus={focusFile} />
 
           <Flow />
           <DirectImpact files={direct} onSelect={setSelected} />

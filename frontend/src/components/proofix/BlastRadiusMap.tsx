@@ -1,33 +1,12 @@
 /**
  * A5 — Blast Radius corridor map.
  *
- * The signature element for this panel, sitting alongside `EvidenceInvestigationBoard`'s
- * convergence map as A5's answer to the same question A4 asks with beams: don't summarise
- * the graph into a stat, draw the actual traversal. A4's beams flow IN toward one point
- * because root-cause is about things agreeing; A5's flow OUT from one point in two opposite,
- * non-interchangeable directions, because blast radius is about consequence, not agreement —
- * "upstream" (backward — code the origin reads, i.e. possible cause) and "downstream"
- * (forward — code that reads the origin, i.e. possible fallout) are never the same kind of
- * fact and must never share one visual bucket.
- *
- * Every edge drawn is a real `BlastEdge`-derived fact: `file.reachedVia` → `file.path`, styled
- * by `file.edgeBasis` — solid for `resolved_suffix` (the import string names the end of a real
- * path), dashed for `name_contains` (plain substring containment, the exact branch that lets
- * `import os` reach `services/oslo.py`). Nothing here draws an edge stronger than the backend's
- * own account of how sure it is.
- *
- * The containment line is `blast_traversal.CONFIDENCE_THRESHOLD` (0.7) made geometric: at
- * `HOP_DECAY = 0.85`, hop 2 (0.7225) clears it and hop 3 (0.614125) does not, so the line falls
- * between those two columns on both sides. A file past the line and still auto-patchable only
- * got there because A5 pinned it — drawn with a pin bracket, never silently moved.
- *
- * Adaptive by construction, not by breakpoint: node position is index-based —
- * `(i + 0.5) / slots` of a fixed column — exactly `ConvergenceMap`'s technique, so a 3-file
- * run and a 300-file run both lay out correctly with zero measurement. Density is bounded by
- * capping each column at `MAX_VISIBLE_PER_COLUMN` individually-drawn nodes; anything past that
- * collapses into one density chip sized by count, and every edge that would have pointed at a
- * collapsed file points at that chip instead — so the picture never lies about where a path
- * went, it just stops naming every file on a large one.
+ * This panel's job is not to draw "a graph"; it is to explain how consequence
+ * spreads from one candidate change. The corridor therefore stays directional
+ * and distance-preserving: upstream on the left, downstream on the right, hop
+ * 1 nearest the origin, farther hops pushed outward. Large repositories do not
+ * get a different picture — dense columns collapse into count chips, but the
+ * traversal shape stays the same.
  */
 import { useMemo, useState } from "react";
 import { Pin } from "lucide-react";
@@ -35,18 +14,14 @@ import type { BlastEdge, BlastImpact, BlastScopeFile } from "./blastTypes";
 
 const MAX_VISIBLE_PER_COLUMN = 5;
 
-// Column x-positions, fixed regardless of which hops are actually populated — hop 1 is always
-// adjacent to the origin and hop 3 is always at the edge, so distance-from-origin is legible at
-// a glance instead of being relative to whatever this particular run happened to reach.
 const HOP_X: Record<"backward" | "forward", Record<number, number>> = {
   backward: { 1: 38, 2: 24, 3: 10 },
   forward: { 1: 62, 2: 76, 3: 90 },
 };
 const ORIGIN_XY = { x: 50, y: 50 };
-const BAND_TOP = 10;
-const BAND_HEIGHT = 80;
+const BAND_TOP = 12;
+const BAND_HEIGHT = 76;
 
-// Midpoint between the hop-2 and hop-3 columns — see module doc for the decay math this marks.
 const CONTAINMENT_X = {
   backward: (HOP_X.backward[2] + HOP_X.backward[3]) / 2,
   forward: (HOP_X.forward[2] + HOP_X.forward[3]) / 2,
@@ -62,6 +37,7 @@ interface Placed {
   x: number;
   y: number;
   collapsed: boolean;
+  columnKey: string;
 }
 
 interface ColumnGroup {
@@ -71,14 +47,16 @@ interface ColumnGroup {
   files: BlastScopeFile[];
 }
 
-/**
- * `BlastScopeFile` only carries every direction a file was reached from
- * (`directions`), not which one its winning hop/confidence belongs to — that
- * pairing exists only in `BlastEdge` (`to` + `hopCount` + `direction`). A file
- * reached one way has an unambiguous column; a file reached both ways is
- * placed under whichever direction actually produced its recorded hop count,
- * looked up from the real edge rather than guessed from array order.
- */
+interface DensityChip {
+  key: string;
+  direction: "backward" | "forward";
+  hop: number;
+  x: number;
+  y: number;
+  count: number;
+  files: BlastScopeFile[];
+}
+
 function primaryDirection(
   file: BlastScopeFile,
   edgeByDestinationAndHop: Map<string, "backward" | "forward">,
@@ -94,108 +72,216 @@ function buildColumns(scope: BlastScopeFile[], edges: BlastEdge[]): ColumnGroup[
   for (const e of edges) edgeByDestinationAndHop.set(`${e.to}:${e.hopCount}`, e.direction);
 
   const groups = new Map<string, ColumnGroup>();
-  for (const f of scope) {
-    if (f.hopCount === null || f.hopCount < 1 || f.hopCount > 3) continue;
-    const direction = primaryDirection(f, edgeByDestinationAndHop);
+  for (const file of scope) {
+    if (file.hopCount === null || file.hopCount < 1 || file.hopCount > 3) continue;
+    const direction = primaryDirection(file, edgeByDestinationAndHop);
     if (direction === null) continue;
-    const x = HOP_X[direction][f.hopCount];
+    const x = HOP_X[direction][file.hopCount];
     if (x === undefined) continue;
-    const key = `${direction}:${f.hopCount}`;
+    const key = `${direction}:${file.hopCount}`;
     const existing = groups.get(key);
     if (existing) {
-      existing.files.push(f);
+      existing.files.push(file);
     } else {
-      groups.set(key, { direction, hop: f.hopCount, x, files: [f] });
+      groups.set(key, { direction, hop: file.hopCount, x, files: [file] });
     }
   }
   return [...groups.values()];
 }
 
-/** Index-based placement within a column, `ConvergenceMap`-style: the first
- * `MAX_VISIBLE_PER_COLUMN - 1` files get their own evenly-spaced slot; everything after that
- * shares the final slot, which is where the density chip is drawn. */
 function placeColumn(group: ColumnGroup): Placed[] {
   const files = [...group.files].sort(
     (a, b) => (b.propagationConfidence ?? -1) - (a.propagationConfidence ?? -1),
   );
   const slots = Math.min(files.length, MAX_VISIBLE_PER_COLUMN);
-  return files.map((file, i) => {
-    const slot = Math.min(i, slots - 1);
+  return files.map((file, index) => {
+    const slot = Math.min(index, slots - 1);
     const y = BAND_TOP + ((slot + 0.5) / slots) * BAND_HEIGHT;
     return {
       file,
       x: group.x,
       y,
-      collapsed: i >= MAX_VISIBLE_PER_COLUMN - 1 && files.length > MAX_VISIBLE_PER_COLUMN,
+      collapsed: index >= MAX_VISIBLE_PER_COLUMN - 1 && files.length > MAX_VISIBLE_PER_COLUMN,
+      columnKey: `${group.direction}:${group.hop}`,
     };
   });
 }
 
 function directionLabel(direction: "backward" | "forward"): string {
   return direction === "backward"
-    ? "upstream — the origin reads this"
-    : "downstream — reads the origin";
+    ? "upstream lane"
+    : "downstream lane";
+}
+
+function isOriginPath(path: string | null | undefined, impact: BlastImpact): boolean {
+  if (!path) return false;
+  return (
+    path === impact.origin?.resolvedPath ||
+    path === impact.origin?.normalizedPath ||
+    impact.origins.includes(path)
+  );
+}
+
+function buildFocusSet(path: string | null, scopeByPath: Map<string, BlastScopeFile>): Set<string> {
+  const focused = new Set<string>();
+  let cursor = path;
+  while (cursor) {
+    if (focused.has(cursor)) break;
+    focused.add(cursor);
+    cursor = scopeByPath.get(cursor)?.reachedVia ?? null;
+  }
+  return focused;
+}
+
+function isBeyondContainment(x: number, direction: "backward" | "forward"): boolean {
+  return direction === "backward" ? x < CONTAINMENT_X.backward : x > CONTAINMENT_X.forward;
+}
+
+function confidenceLabel(file: BlastScopeFile): string {
+  return file.propagationConfidence !== null
+    ? `${Math.round(file.propagationConfidence * 100)}% confidence`
+    : "confidence not measured";
 }
 
 export function BlastRadiusMap({
   impact,
   onSelect,
+  selectedPath,
 }: {
   impact: BlastImpact;
   onSelect: (file: BlastScopeFile) => void;
+  selectedPath?: string | null;
 }) {
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
 
-  const { placedByPath, columns, hasBackward, hasForward } = useMemo(() => {
-    const columns = buildColumns(impact.scope, impact.edges);
-    const placedByPath = new Map<string, Placed>();
-    for (const col of columns) {
-      for (const p of placeColumn(col)) {
-        // A collapsed file still needs a position so edges reaching *through* it land on the
-        // density chip rather than pointing nowhere — but only the first placement per column
-        // slot should be treated as "the" position for downstream edge lookups.
-        if (!placedByPath.has(p.file.path)) placedByPath.set(p.file.path, p);
+  const { columns, placedByPath, densityChips, scopeByPath, hasBackward, hasForward, denseMode } =
+    useMemo(() => {
+      const nextColumns = buildColumns(impact.scope, impact.edges);
+      const nextPlacedByPath = new Map<string, Placed>();
+      const nextDensityChips: DensityChip[] = [];
+      const nextScopeByPath = new Map<string, BlastScopeFile>();
+
+      for (const file of impact.scope) nextScopeByPath.set(file.path, file);
+
+      for (const column of nextColumns) {
+        const placed = placeColumn(column);
+        for (const point of placed) {
+          nextPlacedByPath.set(point.file.path, point);
+        }
+
+        const hidden = placed.filter((point) => point.collapsed).map((point) => point.file);
+        if (hidden.length > 0) {
+          const anchor = placed.find((point) => point.collapsed);
+          if (anchor) {
+            nextDensityChips.push({
+              key: `${column.direction}:${column.hop}`,
+              direction: column.direction,
+              hop: column.hop,
+              x: anchor.x,
+              y: anchor.y,
+              count: hidden.length,
+              files: hidden,
+            });
+          }
+        }
       }
-    }
-    return {
-      placedByPath,
-      columns,
-      hasBackward: columns.some((c) => c.direction === "backward"),
-      hasForward: columns.some((c) => c.direction === "forward"),
-    };
-  }, [impact.scope]);
+
+      return {
+        columns: nextColumns,
+        placedByPath: nextPlacedByPath,
+        densityChips: nextDensityChips,
+        scopeByPath: nextScopeByPath,
+        hasBackward: nextColumns.some((column) => column.direction === "backward"),
+        hasForward: nextColumns.some((column) => column.direction === "forward"),
+        denseMode: nextColumns.some((column) => column.files.length > MAX_VISIBLE_PER_COLUMN),
+      };
+    }, [impact.edges, impact.scope]);
 
   const visibleNodes = useMemo(
-    () => [...placedByPath.values()].filter((p) => !p.collapsed),
+    () => [...placedByPath.values()].filter((point) => !point.collapsed),
     [placedByPath],
   );
 
-  const densityChips = useMemo(() => {
-    return columns
-      .map((col) => {
-        const overflow = col.files.length - (MAX_VISIBLE_PER_COLUMN - 1);
-        if (overflow <= 1) return null;
-        const last = placeColumn(col).find((p) => p.collapsed);
-        if (!last) return null;
-        return { key: `${col.direction}:${col.hop}`, x: col.x, y: last.y, count: overflow };
+  const chipByColumn = useMemo(() => {
+    const byColumn = new Map<string, DensityChip>();
+    for (const chip of densityChips) byColumn.set(chip.key, chip);
+    return byColumn;
+  }, [densityChips]);
+
+  const focusPath = hoveredPath ?? selectedPath ?? null;
+  const focusSet = useMemo(() => buildFocusSet(focusPath, scopeByPath), [focusPath, scopeByPath]);
+
+  const edgeLines = useMemo(() => {
+    return impact.edges
+      .map((edge) => {
+        const target = placedByPath.get(edge.to);
+        if (!target) return null;
+
+        const source = isOriginPath(edge.from, impact)
+          ? { x: ORIGIN_XY.x, y: ORIGIN_XY.y, columnKey: null }
+          : placedByPath.get(edge.from);
+        if (!source) return null;
+
+        const targetChip = target.collapsed ? chipByColumn.get(target.columnKey) : null;
+        const sourceChip =
+          "columnKey" in source && source.columnKey && placedByPath.get(edge.from)?.collapsed
+            ? chipByColumn.get(source.columnKey)
+            : null;
+
+        const fromPoint = sourceChip ?? source;
+        const toPoint = targetChip ?? target;
+
+        const inFocus =
+          focusSet.size === 0 ||
+          (focusSet.has(edge.to) && (isOriginPath(edge.from, impact) || focusSet.has(edge.from)));
+
+        return {
+          key: `${edge.from}->${edge.to}:${edge.direction}:${edge.hopCount}`,
+          edge,
+          fromPoint,
+          toPoint,
+          dimmed: !inFocus,
+        };
       })
-      .filter((c): c is { key: string; x: number; y: number; count: number } => c !== null);
-  }, [columns]);
+      .filter(
+        (
+          line,
+        ): line is {
+          key: string;
+          edge: BlastEdge;
+          fromPoint: { x: number; y: number };
+          toPoint: { x: number; y: number };
+          dimmed: boolean;
+        } => line !== null,
+      );
+  }, [chipByColumn, focusSet, impact, placedByPath]);
 
   if (!hasBackward && !hasForward) return null;
-
-  const edges = [...placedByPath.values()].filter(
-    (p) => !p.collapsed && p.file.reachedVia && placedByPath.has(p.file.reachedVia),
-  );
 
   return (
     <div
       role="group"
       aria-label="Blast radius corridor map"
-      className="rounded-xl border border-border bg-surface-muted/20 p-3"
+      className="overflow-hidden rounded-2xl border border-border bg-surface-muted/20"
     >
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-3 text-[9px] uppercase tracking-wider text-ink-soft">
+      <div className="border-b border-border/70 px-3 py-2.5">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-ink-soft">
+              Causal Corridor
+            </div>
+            <p className="mt-1 max-w-2xl text-[11px] text-ink-soft">
+              Read outward from the change origin. Left is possible cause surface, right is
+              possible fallout. Distance is preserved by hop count, and dense lanes collapse
+              instead of reflowing.
+            </p>
+          </div>
+          <div className="rounded-full border border-border bg-surface px-2.5 py-1 text-[10px] text-ink-soft">
+            {denseMode ? "Dense repo mode" : "Sparse repo mode"}
+          </div>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-3 text-[9px] uppercase tracking-wider text-ink-soft">
           <span className="flex items-center gap-1.5">
             <span
               className="h-[2px] w-3 rounded-full"
@@ -217,7 +303,7 @@ export function BlastRadiusMap({
           <span className="flex items-center gap-1.5">
             <span
               className="h-2.5 w-2.5 rounded-full border"
-              style={{ borderColor: REVIEW_COLOR, backgroundColor: "transparent" }}
+              style={{ borderColor: REVIEW_COLOR }}
               aria-hidden
             />
             past containment line
@@ -225,14 +311,23 @@ export function BlastRadiusMap({
         </div>
       </div>
 
-      <div className="relative min-h-[13rem] lg:min-h-[15rem]">
+      <div className="relative min-h-[18rem] px-3 py-3 lg:min-h-[20rem]">
+        <div
+          className="absolute inset-x-0 top-0 h-28 opacity-60"
+          style={{
+            background:
+              "radial-gradient(circle at center, rgba(59,130,246,0.10), transparent 45%), linear-gradient(90deg, rgba(244,114,182,0.06), transparent 32%, rgba(59,130,246,0.08) 50%, transparent 68%, rgba(52,211,153,0.06))",
+          }}
+          aria-hidden
+        />
+
         <svg
+          data-testid="blast-corridor-edges"
           className="absolute inset-0 h-full w-full"
           viewBox="0 0 100 100"
           preserveAspectRatio="none"
           aria-hidden
         >
-          {/* containment line — see module doc for the 0.85^hop math this marks */}
           {hasBackward && (
             <line
               x1={CONTAINMENT_X.backward}
@@ -258,132 +353,102 @@ export function BlastRadiusMap({
             />
           )}
 
-          {/* propagation edges: origin → hop 1 → hop 2 → hop 3, exactly the recorded path */}
-          {edges.map((p) => {
-            const parent =
-              p.file.reachedVia === impact.origin?.resolvedPath ||
-              p.file.reachedVia === impact.origin?.normalizedPath
-                ? ORIGIN_XY
-                : ((p.file.reachedVia ? placedByPath.get(p.file.reachedVia) : undefined) ??
-                  ORIGIN_XY);
-            const dimmed =
-              hoveredPath !== null &&
-              hoveredPath !== p.file.path &&
-              hoveredPath !== p.file.reachedVia;
-            const risky = p.file.edgeBasis === "name_contains";
-            return (
-              <path
-                key={p.file.path}
-                d={`M${parent.x},${parent.y} C ${(parent.x + p.x) / 2},${parent.y} ${(parent.x + p.x) / 2},${p.y} ${p.x},${p.y}`}
-                fill="none"
-                stroke={risky ? RISKY_EDGE : REAL_EDGE}
-                strokeWidth={0.5}
-                strokeDasharray={risky ? "2 1.5" : undefined}
-                strokeLinecap="round"
-                vectorEffect="non-scaling-stroke"
-                style={{ opacity: dimmed ? 0.15 : 0.7, transition: "opacity 150ms ease-out" }}
-              />
-            );
-          })}
-
-          {/* origin, radial beams to every hop-1 node it directly reaches */}
-          {visibleNodes
-            .filter((p) => p.file.hopCount === 1 && !p.file.reachedVia)
-            .map((p) => (
-              <path
-                key={`origin-${p.file.path}`}
-                d={`M${ORIGIN_XY.x},${ORIGIN_XY.y} C ${(ORIGIN_XY.x + p.x) / 2},${ORIGIN_XY.y} ${(ORIGIN_XY.x + p.x) / 2},${p.y} ${p.x},${p.y}`}
-                fill="none"
-                stroke={p.file.edgeBasis === "name_contains" ? RISKY_EDGE : REAL_EDGE}
-                strokeWidth={0.5}
-                strokeDasharray={p.file.edgeBasis === "name_contains" ? "2 1.5" : undefined}
-                strokeLinecap="round"
-                vectorEffect="non-scaling-stroke"
-                style={{ opacity: 0.7 }}
-              />
-            ))}
+          {edgeLines.map((line) => (
+            <path
+              key={line.key}
+              d={`M${line.fromPoint.x},${line.fromPoint.y} C ${(line.fromPoint.x + line.toPoint.x) / 2},${line.fromPoint.y} ${(line.fromPoint.x + line.toPoint.x) / 2},${line.toPoint.y} ${line.toPoint.x},${line.toPoint.y}`}
+              fill="none"
+              stroke={line.edge.basis === "name_contains" ? RISKY_EDGE : REAL_EDGE}
+              strokeWidth={focusSet.size > 0 && !line.dimmed ? 0.75 : 0.5}
+              strokeDasharray={line.edge.basis === "name_contains" ? "2 1.5" : undefined}
+              strokeLinecap="round"
+              vectorEffect="non-scaling-stroke"
+              style={{ opacity: line.dimmed ? 0.12 : 0.75, transition: "opacity 150ms ease-out" }}
+            />
+          ))}
         </svg>
 
-        {/* column headers */}
-        {columns.map((col) => (
+        {columns.map((column) => (
           <div
-            key={`${col.direction}:${col.hop}`}
+            key={`${column.direction}:${column.hop}`}
             className="absolute -translate-x-1/2 text-center text-[8px] font-medium uppercase tracking-wider text-ink-soft"
-            style={{ left: `${col.x}%`, top: 0 }}
+            style={{ left: `${column.x}%`, top: 0 }}
           >
-            hop {col.hop}
+            hop {column.hop}
           </div>
         ))}
+
         {hasBackward && (
-          <div className="absolute left-[10%] top-3 -translate-x-1/2 text-[8px] uppercase tracking-widest text-ink-soft/70">
-            ← upstream
+          <div className="absolute left-[10%] top-3 -translate-x-1/2 text-[8px] uppercase tracking-[0.28em] text-ink-soft/70">
+            possible cause
           </div>
         )}
         {hasForward && (
-          <div className="absolute right-[10%] top-3 translate-x-1/2 text-[8px] uppercase tracking-widest text-ink-soft/70">
-            downstream →
+          <div className="absolute right-[10%] top-3 translate-x-1/2 text-[8px] uppercase tracking-[0.28em] text-ink-soft/70">
+            possible fallout
           </div>
         )}
 
-        {/* origin node */}
         <div
-          className="absolute -translate-x-1/2 -translate-y-1/2 rounded-md border px-2 py-1 shadow-sm"
+          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-xl border px-3 py-2 shadow-sm"
           style={{
-            left: `${ORIGIN_XY.x}%`,
-            top: `${ORIGIN_XY.y}%`,
             borderColor: ORIGIN_COLOR,
-            backgroundColor: "var(--color-surface)",
+            background:
+              "linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 88%, transparent), var(--color-surface))",
+            boxShadow: "0 0 0 1px color-mix(in srgb, var(--color-status-running) 12%, transparent)",
           }}
         >
           <div
-            className="whitespace-nowrap text-center text-[8px] font-semibold uppercase tracking-wider"
+            className="whitespace-nowrap text-center text-[8px] font-semibold uppercase tracking-[0.28em]"
             style={{ color: ORIGIN_COLOR }}
           >
             origin
           </div>
           <div
-            className="max-w-[7rem] truncate font-mono text-[9px] font-semibold text-ink"
-            title={impact.origin?.resolvedPath ?? ""}
+            className="max-w-[8rem] truncate font-mono text-[10px] font-semibold text-ink"
+            title={impact.origin?.resolvedPath ?? impact.origin?.normalizedPath ?? ""}
           >
             {(impact.origin?.resolvedPath ?? impact.origin?.normalizedPath ?? "").split("/").pop()}
           </div>
         </div>
 
-        {/* file nodes */}
-        {visibleNodes.map((p) => {
-          // Placement is the source of truth for which side a node reads as: a node's x is
-          // only ever set from `HOP_X[direction][hop]`, so comparing against the origin's x is
-          // equivalent to re-deriving direction and never disagrees with the column it's drawn in.
-          const direction: "backward" | "forward" = p.x < ORIGIN_XY.x ? "backward" : "forward";
-          const beyond =
-            (direction === "backward" && p.x < CONTAINMENT_X.backward) ||
-            (direction === "forward" && p.x > CONTAINMENT_X.forward);
-          const pinned = impact.patchAuthorityOverlap.includes(p.file.path);
-          const dimmed = hoveredPath !== null && hoveredPath !== p.file.path;
+        {visibleNodes.map((point) => {
+          const direction: "backward" | "forward" =
+            point.x < ORIGIN_XY.x ? "backward" : "forward";
+          const beyond = isBeyondContainment(point.x, direction);
+          const pinned = impact.patchAuthorityOverlap.includes(point.file.path);
+          const inFocus = focusSet.size === 0 || focusSet.has(point.file.path);
+
           return (
             <button
-              key={p.file.path}
+              key={point.file.path}
               type="button"
-              onClick={() => onSelect(p.file)}
-              onMouseEnter={() => setHoveredPath(p.file.path)}
+              onClick={() => onSelect(point.file)}
+              onMouseEnter={() => setHoveredPath(point.file.path)}
               onMouseLeave={() => setHoveredPath(null)}
-              onFocus={() => setHoveredPath(p.file.path)}
+              onFocus={() => setHoveredPath(point.file.path)}
               onBlur={() => setHoveredPath(null)}
-              className="absolute -translate-x-1/2 -translate-y-1/2 rounded-md border bg-surface px-1.5 py-0.5 text-left transition-[opacity,transform] duration-150 ease-out hover:z-10 hover:-translate-y-[calc(50%+1px)]"
+              className="absolute -translate-x-1/2 -translate-y-1/2 rounded-xl border px-2 py-1 text-left transition-[opacity,transform,border-color] duration-150 ease-out hover:z-10 hover:-translate-y-[calc(50%+1px)]"
               style={{
-                left: `${p.x}%`,
-                top: `${p.y}%`,
-                borderColor: beyond ? REVIEW_COLOR : "var(--color-border)",
-                borderStyle: beyond && !p.file.autoPatchable ? "dashed" : "solid",
-                opacity: dimmed ? 0.35 : 1,
+                left: `${point.x}%`,
+                top: `${point.y}%`,
+                borderColor:
+                  selectedPath === point.file.path
+                    ? ORIGIN_COLOR
+                    : beyond
+                      ? REVIEW_COLOR
+                      : "var(--color-border)",
+                borderStyle: beyond && !point.file.autoPatchable ? "dashed" : "solid",
+                backgroundColor: "var(--color-surface)",
+                boxShadow:
+                  selectedPath === point.file.path
+                    ? "0 0 0 1px color-mix(in srgb, var(--color-status-running) 22%, transparent)"
+                    : undefined,
+                opacity: inFocus ? 1 : 0.28,
               }}
-              aria-label={`${p.file.path}, hop ${p.file.hopCount}, ${directionLabel(direction)}, ${
-                p.file.propagationConfidence !== null
-                  ? `${Math.round(p.file.propagationConfidence * 100)}% confidence`
-                  : "confidence not measured"
-              }${pinned ? ", pinned into auto-patch scope" : ""}`}
+              aria-label={`${point.file.path}, hop ${point.file.hopCount}, ${directionLabel(direction)}, ${confidenceLabel(point.file)}${pinned ? ", pinned into auto-patch scope" : ""}`}
             >
-              <span className="flex items-center gap-1">
+              <span className="flex items-center gap-1.5">
                 {pinned && (
                   <Pin
                     className="h-2.5 w-2.5 shrink-0"
@@ -391,30 +456,35 @@ export function BlastRadiusMap({
                     aria-hidden
                   />
                 )}
-                <span className="max-w-[6rem] truncate font-mono text-[9px] text-ink">
-                  {p.file.path.split("/").pop()}
+                <span className="max-w-[7rem] truncate font-mono text-[9px] text-ink">
+                  {point.file.path.split("/").pop()}
                 </span>
               </span>
             </button>
           );
         })}
 
-        {/* density chips — collapsed tail of an oversized column */}
-        {densityChips.map((chip) => (
-          <div
-            key={chip.key}
-            className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-dashed px-1.5 py-0.5 text-center"
-            style={{
-              left: `${chip.x}%`,
-              top: `${chip.y}%`,
-              borderColor: "var(--color-border)",
-              backgroundColor: "var(--color-surface-muted)",
-            }}
-            title={`${chip.count} more file${chip.count === 1 ? "" : "s"} at this hop — see the scope ledger below`}
-          >
-            <span className="font-mono text-[9px] text-ink-soft">+{chip.count}</span>
-          </div>
-        ))}
+        {densityChips.map((chip) => {
+          const inFocus =
+            focusSet.size === 0 || chip.files.some((file) => focusSet.has(file.path));
+
+          return (
+            <div
+              key={chip.key}
+              className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-dashed px-2 py-1 text-center"
+              style={{
+                left: `${chip.x}%`,
+                top: `${chip.y}%`,
+                borderColor: "var(--color-border)",
+                backgroundColor: "var(--color-surface-muted)",
+                opacity: inFocus ? 1 : 0.28,
+              }}
+              title={`${chip.count} more file${chip.count === 1 ? "" : "s"} in ${directionLabel(chip.direction)}, hop ${chip.hop}`}
+            >
+              <span className="font-mono text-[9px] text-ink-soft">+{chip.count}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
