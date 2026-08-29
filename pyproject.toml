@@ -29,6 +29,7 @@ dependencies = [
     "semgrep>=1.91.0",
     "flask>=3.0.0",
     "passlib>=1.7.4",
+    "bcrypt>=4.2.0",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +42,7 @@ dev = [
     "email-validator>=2.0.0",
     "flask>=3.0.0",
     "passlib>=1.7.4",
+    "bcrypt>=4.2.0",
     "mutmut>=2.5.0",
     "fakeredis>=2.26.0",
 ]
