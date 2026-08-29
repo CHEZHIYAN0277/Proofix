@@ -475,3 +475,26 @@ class TestScannersRunBackwardCompatibility:
         result = SecurityRescanResult.model_validate(legacy)
         assert result.scanners_run == []
         assert result.security_score == 100.0
+
+
+class TestScannerSeverityMapping:
+    def test_bandit_severity_mapping(self):
+        from backend.agents.a9_security_rescan import _bandit_severity
+
+        assert _bandit_severity({"issue_severity": "HIGH"}) == 0.9
+        assert _bandit_severity({"issue_severity": "MEDIUM"}) == 0.6
+        assert _bandit_severity({"issue_severity": "LOW"}) == 0.3
+        assert _bandit_severity({"issue_severity": "high"}) == 0.9
+        assert _bandit_severity({"issue_severity": "unknown"}) is None
+        assert _bandit_severity({}) is None
+
+    def test_semgrep_severity_mapping(self):
+        from backend.agents.a9_security_rescan import _semgrep_severity
+
+        assert _semgrep_severity({"extra": {"severity": "ERROR"}}) == 0.9
+        assert _semgrep_severity({"extra": {"severity": "WARNING"}}) == 0.6
+        assert _semgrep_severity({"extra": {"severity": "INFO"}}) == 0.3
+        assert _semgrep_severity({"extra": {"severity": "error"}}) == 0.9
+        assert _semgrep_severity({"extra": {"severity": "NOTE"}}) is None
+        assert _semgrep_severity({}) is None
+

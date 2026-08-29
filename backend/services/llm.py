@@ -10,8 +10,12 @@ import json
 from typing import TypeVar
 
 from anthropic import AsyncAnthropic
-from mistralai import Mistral
 from pydantic import BaseModel
+
+try:
+    from mistralai import Mistral
+except ImportError:  # installed version may not export this name
+    Mistral = None  # type: ignore[assignment,misc]
 
 from backend.config import Settings, get_settings
 from backend.services.llm_gateway import LLMCallMetrics, LLMGateway

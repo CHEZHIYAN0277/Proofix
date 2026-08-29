@@ -21,9 +21,12 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from anthropic import AsyncAnthropic
-from mistralai import Mistral
 from pydantic import BaseModel, Field
 
+try:
+    from mistralai import Mistral
+except ImportError:  # installed version may not export this name
+    Mistral = None  # type: ignore[assignment,misc]
 from backend.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -78,6 +81,14 @@ _RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 class LLMTimeoutError(RuntimeError):
     """Raised when a call exceeds the configured timeout on every attempt."""
+
+
+class LLMConfigurationError(RuntimeError):
+    """Raised when STUB_MODE is false but no LLM provider is configured.
+
+    Distinguished from a transient provider error so the caller can tell a
+    deployment problem from a service outage.
+    """
 
 
 class SecurityRejection(RuntimeError):
@@ -208,8 +219,32 @@ class LLMGateway:
         return self.settings.anthropic_model
 
     def ensure_available(self) -> None:
-        if self.settings.stub_mode or not self.settings.llm_configured():
+        """Guard: the provider must be configured for real work.
+
+        Raises `LLMConfigurationError` with an actionable message when
+        `STUB_MODE=false` but the selected provider has no key/endpoint,
+        so a misconfigured production deployment fails loudly at the first
+        LLM call rather than silently returning stub patches.
+        """
+        if self.settings.stub_mode:
             raise RuntimeError("LLM unavailable in stub mode — use agent stub paths")
+        if not self.settings.llm_configured():
+            provider = self.settings.llm_provider
+            env_hint = {
+                "anthropic": "ANTHROPIC_API_KEY",
+                "mistral": "MISTRAL_API_KEY",
+                "openai": "OPENAI_API_KEY",
+                "gemini": "GEMINI_API_KEY",
+                "ollama": "OLLAMA_BASE_URL",
+                "lmstudio": "LMSTUDIO_BASE_URL",
+                "vllm": "VLLM_BASE_URL",
+                "tgi": "TGI_BASE_URL",
+            }.get(provider, f"{provider.upper()}_API_KEY")
+            raise LLMConfigurationError(
+                f"STUB_MODE is false but LLM provider '{provider}' is not configured. "
+                f"Set {env_hint} in your environment or .env file, "
+                f"or set STUB_MODE=true for development."
+            )
 
     # -- transport -------------------------------------------------------
 

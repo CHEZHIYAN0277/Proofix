@@ -272,7 +272,7 @@ async def test_gateway_refuses_to_run_in_stub_mode():
 @pytest.mark.asyncio
 async def test_gateway_refuses_when_provider_unconfigured():
     gateway = LLMGateway(Settings(stub_mode=False, llm_provider="anthropic", anthropic_api_key=""))
-    with pytest.raises(RuntimeError, match="stub mode"):
+    with pytest.raises(RuntimeError, match="not configured|stub mode"):
         await gateway.complete("prompt", "system")
 
 

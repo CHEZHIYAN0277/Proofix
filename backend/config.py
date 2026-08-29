@@ -3,7 +3,10 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-LLMProvider = Literal["anthropic", "mistral"]
+LLMProvider = Literal[
+    "anthropic", "mistral", "openai", "gemini",
+    "ollama", "lmstudio", "vllm", "tgi",
+]
 
 
 class Settings(BaseSettings):
@@ -150,8 +153,28 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     def llm_configured(self) -> bool:
-        if self.llm_provider == "mistral":
+        """Whether the active LLM provider has a usable credential or endpoint.
+
+        Cloud providers require an API key. Local providers (Ollama, LM Studio,
+        vLLM, TGI) require a base URL — the key is optional and defaults to the
+        empty string, which their SDKs accept.
+        """
+        provider = self.llm_provider
+        if provider == "mistral":
             return bool(self.mistral_api_key)
+        if provider == "openai":
+            return bool(self.openai_api_key)
+        if provider == "gemini":
+            return bool(self.gemini_api_key)
+        if provider == "ollama":
+            return bool(self.ollama_base_url)
+        if provider == "lmstudio":
+            return bool(self.lmstudio_base_url)
+        if provider == "vllm":
+            return bool(self.vllm_base_url)
+        if provider == "tgi":
+            return bool(self.tgi_base_url)
+        # Default: anthropic
         return bool(self.anthropic_api_key)
 
 

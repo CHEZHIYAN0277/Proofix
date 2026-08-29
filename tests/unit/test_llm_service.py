@@ -39,6 +39,32 @@ def test_llm_configured_respects_provider():
     assert Settings(llm_provider="anthropic", anthropic_api_key="").llm_configured() is False
     assert Settings(llm_provider="mistral", mistral_api_key="x").llm_configured() is True
     assert Settings(llm_provider="mistral", mistral_api_key="").llm_configured() is False
+    assert Settings(llm_provider="openai", openai_api_key="sk-test").llm_configured() is True
+    assert Settings(llm_provider="openai", openai_api_key="").llm_configured() is False
+    assert Settings(llm_provider="gemini", gemini_api_key="gem-test").llm_configured() is True
+    assert Settings(llm_provider="gemini", gemini_api_key="").llm_configured() is False
+    assert Settings(llm_provider="ollama", ollama_base_url="http://localhost:11434").llm_configured() is True
+    assert Settings(llm_provider="ollama", ollama_base_url="").llm_configured() is False
+    assert Settings(llm_provider="lmstudio", lmstudio_base_url="http://localhost:1234").llm_configured() is True
+    assert Settings(llm_provider="lmstudio", lmstudio_base_url="").llm_configured() is False
+    assert Settings(llm_provider="vllm", vllm_base_url="http://localhost:8000").llm_configured() is True
+    assert Settings(llm_provider="vllm", vllm_base_url="").llm_configured() is False
+    assert Settings(llm_provider="tgi", tgi_base_url="http://localhost:8080").llm_configured() is True
+    assert Settings(llm_provider="tgi", tgi_base_url="").llm_configured() is False
+
+
+@pytest.mark.asyncio
+async def test_ensure_available_raises_configuration_error_when_unconfigured():
+    from backend.services.llm_gateway import LLMConfigurationError
+
+    service = LLMService(Settings(stub_mode=False, llm_provider="anthropic", anthropic_api_key=""))
+    with pytest.raises(LLMConfigurationError, match="ANTHROPIC_API_KEY"):
+        await service.structured("prompt", SampleOutput)
+
+    service_mistral = LLMService(Settings(stub_mode=False, llm_provider="mistral", mistral_api_key=""))
+    with pytest.raises(LLMConfigurationError, match="MISTRAL_API_KEY"):
+        await service_mistral.structured("prompt", SampleOutput)
+
 
 
 @pytest.mark.asyncio

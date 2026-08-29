@@ -93,7 +93,7 @@ def get_churn_weights(repo_path: Path, days: int = 90) -> dict[str, float]:
 def get_head_sha(repo_path: Path) -> str:
     """Return full HEAD commit SHA for the repo clone."""
     try:
-        repo = Repo(repo_path)
+        repo = Repo(repo_path, search_parent_directories=True)
         return repo.head.commit.hexsha
     except Exception:
         return ""
@@ -102,7 +102,7 @@ def get_head_sha(repo_path: Path) -> str:
 def get_worktree_diff_hash(repo_path: Path) -> str:
     """Hash of unstaged + staged changes for cache invalidation on uncommitted edits."""
     try:
-        repo = Repo(repo_path)
+        repo = Repo(repo_path, search_parent_directories=True)
         unstaged = repo.git.diff("HEAD") or ""
         staged = repo.git.diff("--cached") or ""
         combined = f"{unstaged}\n{staged}"
@@ -114,7 +114,7 @@ def get_worktree_diff_hash(repo_path: Path) -> str:
 def get_style_exemplar(repo_path: Path, file_path: str, max_commits: int = 3) -> tuple[str | None, str]:
     """Get recent commit hash and diff for style exemplar."""
     try:
-        repo = Repo(repo_path)
+        repo = Repo(repo_path, search_parent_directories=True)
         commits = list(repo.iter_commits(paths=file_path, max_count=max_commits))
         if not commits:
             return None, ""

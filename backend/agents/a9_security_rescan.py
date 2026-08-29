@@ -40,6 +40,37 @@ NEW_FINDING_PENALTY = 25.0
 
 _WHITESPACE = re.compile(r"\s+")
 
+#: Bandit reports `issue_severity` as HIGH / MEDIUM / LOW.
+_BANDIT_SEVERITY: dict[str, float] = {
+    "HIGH": 0.9,
+    "MEDIUM": 0.6,
+    "LOW": 0.3,
+}
+
+#: Semgrep reports `extra.severity` as ERROR / WARNING / INFO.
+_SEMGREP_SEVERITY: dict[str, float] = {
+    "ERROR": 0.9,
+    "WARNING": 0.6,
+    "INFO": 0.3,
+}
+
+
+def _bandit_severity(result: dict) -> float | None:
+    """Normalised severity from bandit's own `issue_severity`, or `None`.
+
+    Bandit always populates this field; `None` is the honest fallback for a
+    result whose structure does not match expectations rather than a fabricated
+    middle value.
+    """
+    raw = str(result.get("issue_severity", "")).strip().upper()
+    return _BANDIT_SEVERITY.get(raw)
+
+
+def _semgrep_severity(result: dict) -> float | None:
+    """Normalised severity from semgrep's own `extra.severity`, or `None`."""
+    raw = str(result.get("extra", {}).get("severity", "")).strip().upper()
+    return _SEMGREP_SEVERITY.get(raw)
+
 #: A finding's identity for differential comparison: which tool said it, in
 #: which file, about what. **Not the line** — that is what moves under a patch.
 FindingKey = tuple[str, str, str]
@@ -271,7 +302,8 @@ class A9SecurityRescanAgent(AgentBase):
                 line=f.get("line", 0),
                 message=f.get("message", ""),
                 tools=[f.get("tool", "")],
-                severity=f.get("severity", 0.7),
+                severity=f.get("severity") if f.get("severity") is not None else 0.0,
+                severity_measured=f.get("severity") is not None,
             )
             for index, f in enumerate(introduced_from_reconciliation(reconciliations))
         ]
@@ -382,7 +414,7 @@ class A9SecurityRescanAgent(AgentBase):
                 "file": r.get("filename", "").replace(str(repo) + "/", ""),
                 "line": r.get("line_number", 0),
                 "message": r.get("issue_text", ""),
-                "severity": 0.7,
+                "severity": _bandit_severity(r),
             }
             for r in data.get("results", [])
         ]
@@ -404,7 +436,7 @@ class A9SecurityRescanAgent(AgentBase):
                 "file": r.get("path", "").replace(str(repo) + "/", ""),
                 "line": r.get("start", {}).get("line", 0),
                 "message": r.get("extra", {}).get("message", ""),
-                "severity": 0.7,
+                "severity": _semgrep_severity(r),
             }
             for r in data.get("results", [])
         ]

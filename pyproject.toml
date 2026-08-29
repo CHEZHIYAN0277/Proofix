@@ -27,6 +27,7 @@ dependencies = [
     "bandit>=1.8.0",
     "ruff>=0.8.0",
     "semgrep>=1.91.0",
+    "mutmut>=2.5.0",
     "flask>=3.0.0",
     "passlib>=1.7.4",
     "bcrypt>=4.2.0",

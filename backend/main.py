@@ -15,6 +15,23 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.settings = settings
+
+    # Surface a production misconfiguration immediately in startup logs,
+    # not at the first pipeline run minutes later.
+    if not settings.stub_mode and not settings.llm_configured():
+        logger.warning(
+            "production_llm_not_configured",
+            extra={
+                "stub_mode": False,
+                "llm_provider": settings.llm_provider,
+                "hint": (
+                    f"STUB_MODE is false but no credential is set for provider "
+                    f"'{settings.llm_provider}'. Patch generation will fail. "
+                    f"Set the appropriate API key / base URL or set STUB_MODE=true."
+                ),
+            },
+        )
+
     try:
         app.state.redis = await create_redis_client(settings)
     except Exception as exc:  # noqa: BLE001
@@ -65,6 +82,7 @@ def create_app() -> FastAPI:
             "stub_mode": settings.stub_mode,
             "llm_provider": settings.llm_provider,
             "llm_configured": settings.llm_configured(),
+            "llm_ready": not settings.stub_mode and settings.llm_configured(),
         }
 
     return app
